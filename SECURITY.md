@@ -38,6 +38,13 @@ Do not open a public issue for a suspected vulnerability. Use GitHub's private v
 - The fixture backend is deterministic test code, not a security sandbox or a decision model.
 - State and criteria are untrusted data and are never instructions to execute tools.
 - Pydantic contracts reject unknown fields and bound questions and criteria.
+- The optional Phase 2B acquisition lane is operator-triggered only. It accepts
+  reviewed candidate IDs from the bundled registry, uses immutable revisions and
+  safetensors hashes, and never accepts model URLs, paths, file lists, or
+  credentials as acquisition input. Redirect hosts, file types, size, free
+  space, hashes, and atomic promotion are checked before a snapshot is readable.
+- The optional loader is local-only, uses `trust_remote_code=False` and
+  `use_safetensors=True`, and is not registered as a Saracura decision backend.
 
 Future model integrations must pin immutable revisions and hashes, use safe weight formats, keep `trust_remote_code=False`, and review tokenizer code, dataset loaders, and plugins independently. Safetensors alone does not make the rest of the supply chain safe.
 

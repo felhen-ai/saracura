@@ -93,6 +93,30 @@ uv run python -m benchmarks.run \
 
 The result schema is `phase2a.v1`. Percentiles use nearest-rank semantics (`sorted[ceil(p*n)-1]`), and each sample records the answer digest and the single state-encoding observation. This fixture is a research instrument only: its timing is not learned-model performance, does not establish quality, and does not authorize automation or production decisions. The runner is not part of the installed wheel and does not download models, tokenizers, datasets, or ML runtimes.
 
+## Optional encoder research gate
+
+Phase 2B is an explicit, local research lane. It does not select a model,
+train, calibrate, measure quality, or authorize automation. The default
+environment remains lightweight and offline. After the default validation has
+passed, an operator may install the isolated extra and acquire one reviewed
+candidate at its immutable revision:
+
+```bash
+uv sync --locked --dev --extra encoder-eval
+uv run python -m benchmarks.encoder_gate validate-registry
+uv run python -m benchmarks.encoder_gate acquire \
+  --candidate multilingual-minilm-l12 --allow-network
+uv run python -m benchmarks.encoder_gate probe \
+  --candidate multilingual-minilm-l12 --device cpu --output-dir .artifacts/encoders
+```
+
+Acquisition is never request-triggered. It accepts only a bundled candidate
+identifier, verifies every byte against the registry, and refuses to replace
+an immutable snapshot. `mmbert-base` is deliberately blocked because the
+reviewed revision publishes `pytorch_model.bin` without a safetensors weight.
+Probe reports are encoder-only observations and do not measure decision quality,
+trained heads, calibration, end-to-end latency, or automation readiness.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

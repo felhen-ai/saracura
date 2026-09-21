@@ -92,3 +92,26 @@ uv run python -m benchmarks.run \
 ```
 
 O schema do resultado é `phase2a.v1`. Os percentis usam nearest-rank (`sorted[ceil(p*n)-1]`) e cada amostra registra o digest das respostas e a observação de uma única codificação do estado. Esta fixture é apenas um instrumento de pesquisa: seu tempo não é performance de modelo treinado, não prova qualidade e não autoriza automação ou decisões de produção. O runner não faz parte do wheel instalado e não baixa modelos, tokenizers, datasets nem runtimes pesados de ML.
+
+## Gate opcional de pesquisa de encoders
+
+A Fase 2B é uma trilha local e explícita de pesquisa. Ela não escolhe modelo,
+treina, calibra, mede qualidade nem autoriza automação. O ambiente padrão
+continua leve e offline. Depois da validação padrão, o operador pode instalar o
+extra isolado e adquirir um candidato revisado em revisão imutável:
+
+```bash
+uv sync --locked --dev --extra encoder-eval
+uv run python -m benchmarks.encoder_gate validate-registry
+uv run python -m benchmarks.encoder_gate acquire \
+  --candidate multilingual-minilm-l12 --allow-network
+uv run python -m benchmarks.encoder_gate probe \
+  --candidate multilingual-minilm-l12 --device cpu --output-dir .artifacts/encoders
+```
+
+A aquisição nunca é disparada por uma requisição. Ela aceita somente um ID do
+registry, verifica cada byte contra o manifesto e não substitui um snapshot
+imutável. O `mmbert-base` fica bloqueado porque a revisão analisada publica
+`pytorch_model.bin` sem peso safetensors. Os relatórios são observações somente
+do encoder: não medem qualidade da decisão, head treinado, calibração, latência
+ponta a ponta ou prontidão para automação.

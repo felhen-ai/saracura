@@ -38,3 +38,8 @@ uv build
 Pull requests should include focused tests and explain contract compatibility. Keep optional backends isolated from the default dependency group. Never add private traces, customer data, secrets, locally identifying paths, external datasets without a license manifest, or generated labels without provenance and usage rights.
 
 The fixture backend and its examples are contract tests. They must not be presented as evidence of model quality, calibration quality, or readiness for automation.
+
+The encoder-eval extra is an opt-in research lane. Run the default suite first;
+CI must not acquire models or datasets. Candidate acquisition is a local,
+operator-triggered action restricted to the reviewed registry. Do not weaken
+the safetensors-only boundary or add request-triggered downloads.

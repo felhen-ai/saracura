@@ -1,0 +1,61 @@
+{
+  "schema_version": "encoder-candidates.v1",
+  "candidates": [
+    {
+      "id": "mmbert-base",
+      "repository": "jhu-clsp/mmBERT-base",
+      "revision": "c5955035435e2bf121cde7f3c8863ef52ff35d82",
+      "license": "MIT",
+      "role": "architectural-candidate",
+      "disposition": "blocked",
+      "reason": "Reviewed revision publishes pytorch_model.bin and no safetensors weights.",
+      "reviewed_at": "2026-09-21",
+      "files": []
+    },
+    {
+      "id": "xlm-roberta-base",
+      "repository": "FacebookAI/xlm-roberta-base",
+      "revision": "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+      "license": "MIT",
+      "role": "multilingual-control",
+      "disposition": "eligible",
+      "reason": "Reviewed safetensors-only snapshot.",
+      "reviewed_at": "2026-09-21",
+      "model_type": "xlm-roberta",
+      "architecture": "XLMRobertaModel",
+      "hidden_width": 768,
+      "loader": "xlm-roberta",
+      "tokenizer": "XLMRobertaTokenizerFast",
+      "files": [
+        {"path": "config.json", "bytes": 615, "sha256": "d66ed8cd4f2a93b358c245e50736fa389ed4f35c0bae7aad0b32abb20c62b579"},
+        {"path": "model.safetensors", "bytes": 1115567652, "sha256": "6fd4797bc397c3b8b55d6bb5740366b57e6a3ce91c04c77f22aafc0c128e6feb"},
+        {"path": "sentencepiece.bpe.model", "bytes": 5069051, "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"},
+        {"path": "tokenizer.json", "bytes": 9096718, "sha256": "a898ea75433890f6610f4e470b8ebeb0c21dce5c8dd61f892eb09eb5919d2e2c"},
+        {"path": "tokenizer_config.json", "bytes": 25, "sha256": "994f46754c5bf4014f1aa92d34b1374319c3a6b3f702105cd5b742beaecd18ce"}
+      ]
+    },
+    {
+      "id": "multilingual-minilm-l12",
+      "repository": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+      "license": "Apache-2.0",
+      "role": "speed-control",
+      "disposition": "eligible",
+      "reason": "Reviewed safetensors-only snapshot.",
+      "reviewed_at": "2026-09-21",
+      "model_type": "bert",
+      "architecture": "BertModel",
+      "hidden_width": 384,
+      "loader": "bert",
+      "tokenizer": "PreTrainedTokenizerFast",
+      "files": [
+        {"path": "config.json", "bytes": 645, "sha256": "6300193cb75e01cf80c96decef7187dfb33094d97cc1490b7ead6ff134476e4e"},
+        {"path": "model.safetensors", "bytes": 470641600, "sha256": "eaa086f0ffee582aeb45b36e34cdd1fe2d6de2bef61f8a559a1bbc9bd955917b"},
+        {"path": "sentencepiece.bpe.model", "bytes": 5069051, "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"},
+        {"path": "special_tokens_map.json", "bytes": 239, "sha256": "378eb3bf733eb16e65792d7e3fda5b8a4631387ca04d2015199c4d4f22ae554d"},
+        {"path": "tokenizer.json", "bytes": 9081518, "sha256": "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8"},
+        {"path": "tokenizer_config.json", "bytes": 526, "sha256": "5036ea374ffedd706e3bef33e2e0d6953cb868ef8a490e76e32ba0faa37a6b9b"}
+      ]
+    }
+  ]
+}
