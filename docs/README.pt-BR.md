@@ -115,3 +115,23 @@ imutável. O `mmbert-base` fica bloqueado porque a revisão analisada publica
 `pytorch_model.bin` sem peso safetensors. Os relatórios são observações somente
 do encoder: não medem qualidade da decisão, head treinado, calibração, latência
 ponta a ponta ou prontidão para automação.
+
+## Gate de dados, licença e privacidade da Fase 2C
+
+Antes de criar qualquer pacote de treino, o repositório valida o registry de
+políticas de origem, que contém apenas metadata:
+
+```bash
+uv run python -m benchmarks.data_policy_gate validate-registry
+```
+
+O registry tem exatamente oito categorias e não aprova nenhum byte de dataset.
+Somente casos futuros, originalmente escritos por humanos, e derivados
+determinísticos poderão ser considerados para treino PT-BR, sempre sob um
+manifesto de artefato separado e revisão humana de privacidade e direitos. O
+Amazon MASSIVE oficial em `pt-PT` fica restrito a um controle externo separado;
+ele não pode virar evidência PT-BR. Fontes assistidas por modelo, privadas, de
+clientes e públicas sem procedência permanecem em quarentena ou bloqueadas.
+Este é um gate de engenharia, não aconselhamento jurídico nem prova de
+qualidade do dataset. A validação não baixa dados nem importa um loader de
+datasets.
