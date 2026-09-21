@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "self-authored-ptbr-fixture",
+  "revision": "v1",
+  "language": "pt-BR",
+  "native_language": true,
+  "source": "self-authored",
+  "license": "Apache-2.0",
+  "redistribution": "allowed",
+  "contains_external_data": false,
+  "contains_personal_data": false,
+  "purpose": "contract-and-runtime-testing-only",
+  "quality_claims_allowed": false
+}
