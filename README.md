@@ -136,6 +136,21 @@ quarantined or blocked. This is an engineering gate, not legal advice or proof
 of dataset quality. No validator path downloads data or imports a dataset
 loader.
 
+## Phase 3A first-party packet gate
+
+The support-routing annotation protocol and deterministic split gate are
+offline plumbing only. No dataset record is bundled, and the commands do not
+authorize training, quality claims, publication, or automation:
+
+```bash
+uv run python -m benchmarks.first_party_gate validate-protocol
+uv run python -m benchmarks.validate_manifests
+```
+
+Future maintainers provide a canonical, externally attested base-state JSONL
+and a public seed to build a no-clobber split plan. Human authorship, privacy,
+rights, representativeness, and independent review remain outside the tool.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

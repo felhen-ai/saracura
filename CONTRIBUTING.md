@@ -51,3 +51,9 @@ or artifact approvals to the registry. A future data artifact needs its own
 reviewed manifest with immutable bytes, record provenance, privacy and rights
 evidence, split controls, and the exact registry revision. The gate is an
 engineering control, not legal advice or a dataset-quality claim.
+
+Phase 3A keeps the first-party packet repository-only and offline. Do not add
+JSONL records, split plans, prompts, generated examples, author mappings, or
+weights. Run `uv run python -m benchmarks.first_party_gate validate-protocol`
+and the complete validation commands from the Phase 3A spec when changing the
+guide, manifest, or benchmark gate.
