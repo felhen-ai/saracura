@@ -8,6 +8,7 @@ from pathlib import Path
 from benchmarks.data_policy_registry import load_registry as load_data_policy_registry
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
+from benchmarks.synthetic_research import validate_synthetic_policy
 
 REQUIRED_FIELDS = {
     "schema_version",
@@ -55,6 +56,9 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "support-routing-protocol.v1":
         validate_protocol_bytes(raw)
+        return
+    if schema_version == "synthetic-research-policy.v1":
+        validate_synthetic_policy(path)
         return
     if schema_version == 1:
         validate_manifest(path)

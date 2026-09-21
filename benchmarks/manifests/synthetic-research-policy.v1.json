@@ -1,0 +1,25 @@
+{
+  "schema_version": "synthetic-research-policy.v1",
+  "workflow_revision": "phase3b-synthetic-research-training.v2",
+  "id": "synthetic-research",
+  "author_model": "qwen/qwen3.5-9b",
+  "reviewer_model": "mistralai/ministral-8b-2512",
+  "jev_model": "typesafe/jev-1.13",
+  "labels": ["billing", "technical_support", "account_access", "subscription_cancellation", "order_delivery"],
+  "splits": ["synthetic_train", "synthetic_dev", "synthetic_holdout"],
+  "prices": {"author_input": 0.12, "author_output": 0.20, "review_input": 0.20, "review_output": 0.60},
+  "provider": {"host": "openrouter.ai", "zdr": true, "data_collection": "deny", "enforce_distillable_text": true},
+  "accessed_date": "2026-09-21",
+  "privacy_controls": ["fictional_only", "mechanical_scan", "no_credentials", "no_private_data", "no_provider_storage"],
+  "authorizations": {
+    "synthetic_generation_authorized": true,
+    "synthetic_research_training_authorized": true,
+    "human_original": false,
+    "canonical_training_authorized": false,
+    "calibration_authorized": false,
+    "blind_test_authorized": false,
+    "publication_authorized": false,
+    "quality_claims_allowed": false,
+    "automation_authorized": false
+  }
+}
