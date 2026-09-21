@@ -1,0 +1,32 @@
+{
+  "api_version": "v1alpha1",
+  "model": "fixture-choice-v1",
+  "mode": "research",
+  "locale": "pt-BR",
+  "domain": "support",
+  "workflow": {
+    "id": "support-routing",
+    "revision": "2026-09-21"
+  },
+  "state": {
+    "subject": "Cobrança duplicada",
+    "body": "Fui cobrado duas vezes e preciso do estorno hoje."
+  },
+  "questions": [
+    {
+      "id": "department",
+      "type": "choice",
+      "instruction": "Qual área deve tratar o caso?",
+      "criteria": [
+        {
+          "id": "billing",
+          "description": "Cobranças, pagamentos e estornos"
+        },
+        {
+          "id": "support",
+          "description": "Falhas técnicas e uso do produto"
+        }
+      ]
+    }
+  ]
+}

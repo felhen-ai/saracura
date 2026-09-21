@@ -1,0 +1,58 @@
+"""Deterministic non-model backend for contract and runtime tests only."""
+
+from __future__ import annotations
+
+import hashlib
+
+from saracura.backends.base import BackendCapabilities, EncodedState, ScoredChoice
+from saracura.contracts.models import ChoiceQuestion, ModelReference
+from saracura.serialization import frame_segments
+
+FIXTURE_CHECKPOINT_SHA256 = hashlib.sha256(b"saracura-fixture-backend-v1").hexdigest()
+
+
+class DeterministicFixtureBackend:
+    """Hash-based fixture with no learned parameters and no quality claim."""
+
+    def __init__(self) -> None:
+        self.state_encode_calls = 0
+        self._model = ModelReference(
+            id="fixture-choice",
+            revision="fixture-choice-v1",
+            checkpoint_sha256=FIXTURE_CHECKPOINT_SHA256,
+        )
+        self._capabilities = BackendCapabilities(
+            decision_types=frozenset({"choice"}),
+            max_questions=50,
+            max_criteria=20,
+            execution_boundary="in-process-test-fixture",
+            cold_warm_semantics="deterministic-no-load",
+            quality_claims=False,
+        )
+
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return self._capabilities
+
+    @property
+    def model(self) -> ModelReference:
+        return self._model
+
+    def encode_state(self, state_payload: bytes) -> EncodedState:
+        self.state_encode_calls += 1
+        return EncodedState(payload=hashlib.sha256(state_payload).digest())
+
+    def score_choice(
+        self,
+        encoded_state: EncodedState,
+        question: ChoiceQuestion,
+        question_payload: bytes,
+    ) -> ScoredChoice:
+        scores: dict[str, float] = {}
+        for criterion in sorted(question.criteria, key=lambda item: item.id):
+            digest = hashlib.sha256(
+                frame_segments(encoded_state.payload, question_payload, criterion.id)
+            ).digest()
+            integer = int.from_bytes(digest[:8], byteorder="big", signed=False)
+            scores[criterion.id] = integer / float(2**64)
+        return ScoredChoice(question_id=question.id, raw_scores=scores)

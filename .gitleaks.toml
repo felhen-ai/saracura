@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public identifier of the deterministic byte fixture, never a credential"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+regexes = ['''fixture-bytes-v1''']
