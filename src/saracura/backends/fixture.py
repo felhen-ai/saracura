@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Final, Literal
 
 from saracura.backends.base import BackendCapabilities, EncodedState, ScoredChoice
 from saracura.contracts.models import ChoiceQuestion, ModelReference
 from saracura.serialization import frame_segments
 
+FIXTURE_BACKEND_ID: Final[Literal["fixture"]] = "fixture"
+FIXTURE_BACKEND_REVISION: Final[Literal["fixture-backend-v1"]] = "fixture-backend-v1"
+FIXTURE_MODEL_ID: Final[Literal["fixture-choice"]] = "fixture-choice"
+FIXTURE_MODEL_REVISION: Final[Literal["fixture-choice-v1"]] = "fixture-choice-v1"
 FIXTURE_CHECKPOINT_SHA256 = hashlib.sha256(b"saracura-fixture-backend-v1").hexdigest()
 
 
@@ -17,8 +22,8 @@ class DeterministicFixtureBackend:
     def __init__(self) -> None:
         self.state_encode_calls = 0
         self._model = ModelReference(
-            id="fixture-choice",
-            revision="fixture-choice-v1",
+            id=FIXTURE_MODEL_ID,
+            revision=FIXTURE_MODEL_REVISION,
             checkpoint_sha256=FIXTURE_CHECKPOINT_SHA256,
         )
         self._capabilities = BackendCapabilities(

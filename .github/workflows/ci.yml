@@ -24,7 +24,7 @@ jobs:
       - run: uv sync --locked --dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy src
+      - run: uv run mypy src tests benchmarks
       - run: uv run pytest -q
       - run: uv run python -m benchmarks.validate_manifests
       - run: uv build
