@@ -43,3 +43,11 @@ The encoder-eval extra is an opt-in research lane. Run the default suite first;
 CI must not acquire models or datasets. Candidate acquisition is a local,
 operator-triggered action restricted to the reviewed registry. Do not weaken
 the safetensors-only boundary or add request-triggered downloads.
+
+The Phase 2C data-policy registry is metadata-only. Run
+`uv run python -m benchmarks.data_policy_gate validate-registry` when changing
+its policy rows. Do not add examples, dataset bytes, prompts, generated labels,
+or artifact approvals to the registry. A future data artifact needs its own
+reviewed manifest with immutable bytes, record provenance, privacy and rights
+evidence, split controls, and the exact registry revision. The gate is an
+engineering control, not legal advice or a dataset-quality claim.

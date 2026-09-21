@@ -45,6 +45,13 @@ Do not open a public issue for a suspected vulnerability. Use GitHub's private v
   space, hashes, and atomic promotion are checked before a snapshot is readable.
 - The optional loader is local-only, uses `trust_remote_code=False` and
   `use_safetensors=True`, and is not registered as a Saracura decision backend.
+- The Phase 2C source-policy registry is metadata-only and fail-closed. It
+  contains no examples or approved artifact bytes, requires immutable
+  third-party revisions, rejects credential-bearing or mutable URLs, and
+  cannot authorize private, customer, model-assisted, or unvetted-public text.
+  Validation is offline and does not import a dataset loader. A later artifact
+  manifest must prove record-level privacy, rights, provenance, and takedown
+  controls before any training process can read data.
 
 Future model integrations must pin immutable revisions and hashes, use safe weight formats, keep `trust_remote_code=False`, and review tokenizer code, dataset loaders, and plugins independently. Safetensors alone does not make the rest of the supply chain safe.
 

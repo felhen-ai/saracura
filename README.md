@@ -117,6 +117,25 @@ reviewed revision publishes `pytorch_model.bin` without a safetensors weight.
 Probe reports are encoder-only observations and do not measure decision quality,
 trained heads, calibration, end-to-end latency, or automation readiness.
 
+## Phase 2C data and privacy gate
+
+Before any training packet can be authored, the repository validates the
+metadata-only source-policy registry:
+
+```bash
+uv run python -m benchmarks.data_policy_gate validate-registry
+```
+
+The registry has exactly eight source categories and approves no dataset bytes.
+Only future first-party human-original cases and deterministic derivatives may
+be considered for PT-BR training, subject to a separate artifact manifest and
+human privacy/rights review. The official Amazon MASSIVE `pt-PT` source is
+restricted to a separate external-control role; it cannot become PT-BR
+evidence. Model-assisted, private, customer, and unvetted-public sources remain
+quarantined or blocked. This is an engineering gate, not legal advice or proof
+of dataset quality. No validator path downloads data or imports a dataset
+loader.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

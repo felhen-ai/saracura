@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from benchmarks.encoder_registry import load_registry
+from benchmarks.data_policy_registry import load_registry as load_data_policy_registry
+from benchmarks.encoder_registry import load_registry as load_encoder_registry
 
 REQUIRED_FIELDS = {
     "schema_version",
@@ -46,7 +47,10 @@ def validate_routed_manifest(path: Path) -> None:
         raise ValueError(f"{path}: manifest root must be an object")
     schema_version = payload.get("schema_version")
     if schema_version == "encoder-candidates.v1":
-        load_registry(raw)
+        load_encoder_registry(raw)
+        return
+    if schema_version == "training-data-source-policies.v1":
+        load_data_policy_registry(raw)
         return
     if schema_version == 1:
         validate_manifest(path)
