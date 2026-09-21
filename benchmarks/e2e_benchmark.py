@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
@@ -22,9 +23,9 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, Self, cast
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 
 from benchmarks.encoder_registry import get_candidate
 from benchmarks.io import atomic_create
@@ -68,6 +69,192 @@ PROVIDER_CONTROLS = {
     "require_parameters": True,
     "max_price": {"prompt": "0.042", "completion": "0"},
 }
+MANDATORY_LIMITATIONS = (
+    "local warm-path excludes one-time model load",
+    "Jev includes WAN and provider routing when enabled",
+    "provider cold/warm state is not controllable",
+    "local and remote measured-iteration counts differ",
+    "synthetic PT-BR routing is narrow and cannot establish general quality",
+    "Jev accuracy is contextual diagnostic evidence, not a training or selection signal",
+    "remote p95 over ten samples is the maximum nearest-rank value and is descriptive only",
+    "throughput on one M4 Pro does not predict every deployment target",
+    "accuracy is an in-sample diagnostic on accepted synthetic packet rows",
+    "fresh-process load includes lazy imports and snapshot verification",
+)
+
+
+class ClosedModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False, frozen=True)
+
+
+class SummaryModel(ClosedModel):
+    count: int
+    min_ms: float
+    p50_ms: float
+    p95_ms: float
+    max_ms: float
+
+
+class BoundariesModel(ClosedModel):
+    start: int
+    tokenized: int
+    device: int
+    transferred: int
+    stop: int
+
+
+class ComponentsModel(ClosedModel):
+    tokenization_ns: int
+    cpu_to_mps_encoder_pooling_ns: int
+    mps_to_cpu_ns: int
+    cpu_head_ns: int
+    total_ns: int
+
+
+class LocalSampleModel(ClosedModel):
+    boundaries_ns: BoundariesModel
+    components_ns: ComponentsModel
+    prediction_digest: str
+    accuracy: float
+    total_ms: float
+
+
+class LocalWorkloadModel(ClosedModel):
+    batch_size: int
+    warmups: int
+    iterations: int
+    input_id_digest: str
+    prediction_digest: str
+    token_lengths: list[int]
+    token_lengths_digest: str
+    truncated: Literal[False]
+    accuracy: float
+    samples: list[LocalSampleModel]
+    samples_sha256: str
+    summary: SummaryModel
+    per_item_summary: SummaryModel
+    throughput_items_per_second: float
+
+
+class LocalResultModel(ClosedModel):
+    fresh_process_load_ms: float
+    page_cache_sensitive: Literal[True]
+    load_includes_import_and_snapshot_verification: Literal[True]
+    rss_metric: Literal["ru_maxrss_bytes"]
+    rss_before_load_bytes: int
+    rss_after_load_bytes: int
+    rss_after_workloads_bytes: int
+    workloads: dict[str, LocalWorkloadModel]
+
+
+class JevUsageModel(ClosedModel):
+    cost: str
+    input_tokens: int
+    output_tokens: int
+
+
+class JevSampleModel(ClosedModel):
+    latency_ms: float
+    answer_digest: str
+    accuracy: float
+    model: str
+    provider: Literal["TypeSafe"]
+    usage: JevUsageModel
+
+
+class JevWorkloadModel(ClosedModel):
+    batch_size: int
+    iterations: int
+    input_id_digest: str
+    samples: list[JevSampleModel]
+    samples_sha256: str
+    summary: SummaryModel
+    per_item_summary: SummaryModel
+    throughput_items_per_second: float
+    accuracy: float
+    cost_usd: str
+
+
+class JevResultModel(ClosedModel):
+    status: Literal["complete", "external_control_unavailable", "not_requested"]
+    completed_call_count: int
+    completed_answer_digests: list[str] | None = None
+    resolved_models: list[str] | None = None
+    provider: Literal["TypeSafe"] | None = None
+    cost_usd: str | None = None
+    workloads: dict[str, JevWorkloadModel] | None = None
+    key_usage_pre_usd: str | None = None
+    key_usage_post_usd: str | None = None
+
+    @model_validator(mode="after")
+    def validate_status_shape(self) -> Self:
+        if self.status == "complete" and (
+            self.workloads is None
+            or self.provider != "TypeSafe"
+            or self.completed_call_count != JEV_ITERATIONS * len(JEV_BATCH_SIZES)
+        ):
+            raise ValueError("complete Jev result shape")
+        if self.status != "complete" and self.workloads is not None:
+            raise ValueError("partial Jev result cannot contain aggregates")
+        return self
+
+
+class ComparisonEntryModel(ClosedModel):
+    batch_size: int
+    local_per_item_p50_ms: float
+    jev_per_item_p50_ms: float
+    local_speedup_over_jev: float
+
+
+class ProtocolModel(ClosedModel):
+    local_batch_sizes: list[int]
+    local_order: list[int]
+    local_warmups: int
+    local_iterations: int
+    max_tokens: int
+    device: Literal["mps"]
+    jev_batch_sizes: list[int]
+    jev_order: list[int]
+    jev_iterations: int
+
+
+class ProvenanceModel(ClosedModel):
+    packet_manifest_sha256: str
+    training_manifest_sha256: str
+    checkpoint_sha256: str
+    prior_cost_ledger_sha256: str
+    claim_sha256: str | None
+    benchmark_source_sha256: str
+    encoder_revision: str
+
+
+class EnvironmentModel(ClosedModel):
+    python: str
+    platform: str
+    processor: str
+    torch: str
+    transformers: str
+    safetensors: str
+
+
+class BudgetModel(ClosedModel):
+    approved_total_usd: str
+    jev_stage_limit_usd: str
+    prior_total_usd: str
+    phase3c_jev_usd: str
+
+
+class Phase3CResultModel(ClosedModel):
+    schema_version: Literal["phase3c.v1"]
+    sealed: Literal[True]
+    protocol: ProtocolModel
+    provenance: ProvenanceModel
+    environment: EnvironmentModel
+    local: LocalResultModel
+    jev: JevResultModel
+    comparison: dict[str, ComparisonEntryModel] | None
+    budget: BudgetModel
+    limitations: list[str]
 
 
 def digest_bytes(value: bytes) -> str:
@@ -206,13 +393,17 @@ def run_local_workloads(
     workloads: dict[str, Any] = {}
     for batch_size in LOCAL_ORDER:
         batch = ordered[:batch_size]
+        texts = [str(row["text"]) for row in batch]
+        lengths = list(components.token_lengths(texts))
+        if len(lengths) != batch_size or any(
+            not isinstance(value, int) or value <= 0 or value > MAX_TOKENS for value in lengths
+        ):
+            raise ValueError("input exceeds the untruncated token limit")
         samples: list[dict[str, Any]] = []
         for _ in range(warmups):
-            measure_local_sample(components, [str(row["text"]) for row in batch], clock)
+            measure_local_sample(components, texts, clock)
         for _ in range(iterations):
-            samples.append(
-                measure_local_sample(components, [str(row["text"]) for row in batch], clock)
-            )
+            samples.append(measure_local_sample(components, texts, clock))
         digests = {str(sample["prediction_digest"]) for sample in samples}
         if len(digests) != 1:
             raise ValueError("prediction drift")
@@ -229,13 +420,9 @@ def run_local_workloads(
         for sample in samples:
             public = dict(sample)
             public.pop("prediction_labels")
+            public["accuracy"] = accuracy
             public_samples.append(public)
         total_ms = [float(sample["total_ms"]) for sample in samples]
-        lengths = list(components.token_lengths([str(row["text"]) for row in batch]))
-        if len(lengths) != batch_size or any(
-            not isinstance(value, int) or value <= 0 or value > MAX_TOKENS for value in lengths
-        ):
-            raise ValueError("input exceeds the untruncated token limit")
         workloads[str(batch_size)] = {
             "batch_size": batch_size,
             "warmups": warmups,
@@ -247,6 +434,7 @@ def run_local_workloads(
             "truncated": False,
             "accuracy": accuracy,
             "samples": public_samples,
+            "samples_sha256": digest_json(public_samples),
             "summary": summarize(total_ms),
             "per_item_summary": summarize([value / batch_size for value in total_ms]),
             "throughput_items_per_second": throughput(batch_size, total_ms),
@@ -484,9 +672,64 @@ def create_claim(path: Path, predecessor_sha256: str) -> str:
     value = {"schema_version": "phase3c-claim.v1", "predecessor_sha256": predecessor_sha256}
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
-    atomic_create(path, canonical_json_bytes(cast(JsonValue, value)) + b"\n")
+    try:
+        atomic_create(path, canonical_json_bytes(cast(JsonValue, value)) + b"\n")
+    except FileExistsError as exc:
+        raise ValueError("predecessor claim already exists") from exc
     os.chmod(path, 0o600)
     return digest_json(value)
+
+
+def validate_predecessor_binding(
+    ledger_path: Path, *, packet_sha256: str, training_sha256: str
+) -> None:
+    if ledger_path.name != "jev-cost-ledger.json" or ledger_path.is_symlink():
+        raise ValueError("Phase 3B predecessor ledger path")
+    evaluation_path = ledger_path.with_name("evaluation-manifest.json")
+    if evaluation_path.is_symlink() or not evaluation_path.is_file():
+        raise ValueError("Phase 3B evaluation manifest missing")
+    evaluation = json.loads(evaluation_path.read_bytes())
+    if (
+        not isinstance(evaluation, dict)
+        or set(evaluation)
+        != {
+            "schema_version",
+            "sealed",
+            "packet_manifest_sha256",
+            "training_manifest_sha256",
+            "local",
+            "jev",
+            "jev_usage_snapshots",
+        }
+        or evaluation["schema_version"] != "synthetic-evaluation.v1"
+        or evaluation["sealed"] is not True
+        or evaluation["packet_manifest_sha256"] != packet_sha256
+        or evaluation["training_manifest_sha256"] != training_sha256
+        or evaluation.get("jev", {}).get("status") != "complete"
+    ):
+        raise ValueError("Phase 3B predecessor is not bound to these inputs")
+    ledger_value = json.loads(ledger_path.read_bytes())
+    ledger = BudgetLedger.from_json(ledger_value)
+    if ledger_value.get("final") is not True:
+        raise ValueError("Phase 3B predecessor ledger is not final")
+    jev_digests = evaluation["jev"].get("digests")
+    jev_usage = evaluation["jev"].get("usage", {}).get("cost")
+    jev_entries = [entry for entry in ledger.entries if entry["stage"] == "jev"]
+    if (
+        not isinstance(jev_digests, list)
+        or not jev_digests
+        or len(jev_entries) < len(jev_digests)
+        or not _finite(jev_usage)
+        or abs(
+            sum(
+                (Decimal(str(entry["cost"])) for entry in jev_entries[-len(jev_digests) :]),
+                Decimal(0),
+            )
+            - Decimal(str(jev_usage))
+        )
+        > Decimal("1e-15")
+    ):
+        raise ValueError("Phase 3B evaluation does not bind the ledger tail")
 
 
 def sanitized_report(result: Mapping[str, Any]) -> str:
@@ -500,7 +743,16 @@ def sanitized_report(result: Mapping[str, Any]) -> str:
         "Performance evidence only; no automation or quality claim.",
         "",
     ]
-    for section in ("local", "jev", "limitations"):
+    for section in (
+        "protocol",
+        "provenance",
+        "environment",
+        "local",
+        "jev",
+        "comparison",
+        "budget",
+        "limitations",
+    ):
         if section in result:
             lines.extend(
                 [
@@ -562,17 +814,20 @@ def write_phase3c_artifacts(
     claim_sha256: str | None,
 ) -> None:
     """Create the exact four-file result directory without replacing anything."""
+    validated_result = Phase3CResultModel.model_validate(result).model_dump(mode="json")
     if output_dir.exists():
         if output_dir.is_symlink() or not output_dir.is_dir():
             raise ValueError("invalid output directory")
+        if claim_sha256 is None:
+            raise ValueError("existing local output directory")
         if {item.name for item in output_dir.iterdir()} - {"cost-journal.jsonl"}:
             raise ValueError("output directory is not an active Phase 3C run")
     else:
         output_dir.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         output_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
     os.chmod(output_dir, 0o700)
-    result_bytes = canonical_json_bytes(cast(JsonValue, dict(result))) + b"\n"
-    report_bytes = sanitized_report(result).encode("utf-8")
+    result_bytes = canonical_json_bytes(cast(JsonValue, validated_result)) + b"\n"
+    report_bytes = sanitized_report(validated_result).encode("utf-8")
     for name, payload in (("result.json", result_bytes), ("report.md", report_bytes)):
         atomic_create(output_dir / name, payload)
         os.chmod(output_dir / name, 0o600)
@@ -593,15 +848,240 @@ def write_phase3c_artifacts(
         predecessor_sha256=predecessor_sha256,
         claim_sha256=claim_sha256,
     )
+    validate_phase3c_artifacts(output_dir)
 
 
-def load_local_components(snapshot: Path, checkpoint: Path) -> LocalComponents:
+def validate_phase3c_artifacts(output_dir: Path) -> Phase3CResultModel:
+    expected = {"result.json", "report.md", "cost-journal.jsonl", "artifact-manifest.json"}
+    if (
+        output_dir.is_symlink()
+        or not output_dir.is_dir()
+        or output_dir.stat().st_mode & 0o777 != 0o700
+    ):
+        raise ValueError("artifact directory mode")
+    paths = {item.name: item for item in output_dir.iterdir()}
+    if set(paths) != expected:
+        raise ValueError("artifact allowlist")
+    for path in paths.values():
+        if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o777 != 0o600:
+            raise ValueError("artifact file type or mode")
+    manifest = json.loads(paths["artifact-manifest.json"].read_bytes())
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "schema_version",
+        "files",
+        "sources",
+        "packet_manifest_sha256",
+        "training_manifest_sha256",
+        "predecessor_ledger_sha256",
+        "claim_sha256",
+        "self_sha256",
+    }:
+        raise ValueError("artifact manifest shape")
+    unsigned = dict(manifest)
+    self_digest = unsigned.pop("self_sha256")
+    if manifest["schema_version"] != "phase3c-artifact-manifest.v1" or self_digest != digest_json(
+        unsigned
+    ):
+        raise ValueError("artifact manifest self digest")
+    if set(manifest["files"]) != expected - {"artifact-manifest.json"}:
+        raise ValueError("artifact file ledger")
+    for name, metadata in manifest["files"].items():
+        raw = paths[name].read_bytes()
+        if metadata != {"bytes": len(raw), "sha256": digest_bytes(raw)}:
+            raise ValueError("artifact digest drift")
+    if set(manifest["sources"]) != set(SOURCE_ALLOWLIST):
+        raise ValueError("source allowlist")
+    for name, expected_digest in manifest["sources"].items():
+        if expected_digest != digest_bytes((ROOT / name).read_bytes()):
+            raise ValueError("source digest drift")
+    result = Phase3CResultModel.model_validate_json(paths["result.json"].read_bytes())
+    expected_protocol = {
+        "local_batch_sizes": list(LOCAL_BATCH_SIZES),
+        "local_order": list(LOCAL_ORDER),
+        "local_warmups": LOCAL_WARMUPS,
+        "local_iterations": LOCAL_ITERATIONS,
+        "max_tokens": MAX_TOKENS,
+        "device": "mps",
+        "jev_batch_sizes": list(JEV_BATCH_SIZES),
+        "jev_order": list(JEV_ORDER),
+        "jev_iterations": JEV_ITERATIONS,
+    }
+    if result.protocol.model_dump() != expected_protocol:
+        raise ValueError("protocol drift")
+    if (
+        result.provenance.packet_manifest_sha256 != manifest["packet_manifest_sha256"]
+        or result.provenance.training_manifest_sha256 != manifest["training_manifest_sha256"]
+        or result.provenance.prior_cost_ledger_sha256 != manifest["predecessor_ledger_sha256"]
+        or result.provenance.claim_sha256 != manifest["claim_sha256"]
+        or result.provenance.benchmark_source_sha256
+        != manifest["sources"]["benchmarks/e2e_benchmark.py"]
+    ):
+        raise ValueError("artifact provenance contradiction")
+    if set(result.local.workloads) != {str(value) for value in LOCAL_BATCH_SIZES}:
+        raise ValueError("local workload set")
+    if tuple(result.limitations) != MANDATORY_LIMITATIONS:
+        raise ValueError("mandatory limitations drift")
+    for key, local_workload in result.local.workloads.items():
+        if (
+            int(key) != local_workload.batch_size
+            or local_workload.warmups != LOCAL_WARMUPS
+            or local_workload.iterations != LOCAL_ITERATIONS
+            or len(local_workload.samples) != LOCAL_ITERATIONS
+            or len(local_workload.token_lengths) != local_workload.batch_size
+            or any(value <= 0 or value > MAX_TOKENS for value in local_workload.token_lengths)
+            or digest_json(local_workload.token_lengths) != local_workload.token_lengths_digest
+            or digest_json([sample.model_dump(mode="json") for sample in local_workload.samples])
+            != local_workload.samples_sha256
+        ):
+            raise ValueError("local sample binding")
+        for sample in local_workload.samples:
+            boundaries = sample.boundaries_ns
+            components = component_timings_ns(
+                boundaries.start,
+                boundaries.tokenized,
+                boundaries.device,
+                boundaries.transferred,
+                boundaries.stop,
+            )
+            if (
+                components != sample.components_ns.model_dump()
+                or not math.isclose(
+                    sample.total_ms,
+                    components["total_ns"] / 1_000_000,
+                    rel_tol=0,
+                    abs_tol=1e-12,
+                )
+                or sample.prediction_digest != local_workload.prediction_digest
+                or sample.accuracy != local_workload.accuracy
+            ):
+                raise ValueError("local timing or accuracy contradiction")
+        totals = [sample.total_ms for sample in local_workload.samples]
+        if (
+            summarize(totals) != local_workload.summary.model_dump()
+            or summarize([value / local_workload.batch_size for value in totals])
+            != local_workload.per_item_summary.model_dump()
+            or throughput(local_workload.batch_size, totals)
+            != local_workload.throughput_items_per_second
+        ):
+            raise ValueError("local summary contradiction")
+    if result.jev.workloads is not None:
+        if set(result.jev.workloads) != {str(value) for value in JEV_BATCH_SIZES}:
+            raise ValueError("Jev workload set")
+        all_models: set[str] = set()
+        jev_cost = Decimal(0)
+        for key, jev_workload in result.jev.workloads.items():
+            if (
+                int(key) != jev_workload.batch_size
+                or jev_workload.iterations != JEV_ITERATIONS
+                or len(jev_workload.samples) != JEV_ITERATIONS
+                or digest_json([sample.model_dump(mode="json") for sample in jev_workload.samples])
+                != jev_workload.samples_sha256
+            ):
+                raise ValueError("Jev sample binding")
+            totals = [sample.latency_ms for sample in jev_workload.samples]
+            workload_cost = sum(
+                (Decimal(sample.usage.cost) for sample in jev_workload.samples), Decimal(0)
+            )
+            if (
+                summarize(totals) != jev_workload.summary.model_dump()
+                or summarize([value / jev_workload.batch_size for value in totals])
+                != jev_workload.per_item_summary.model_dump()
+                or throughput(jev_workload.batch_size, totals)
+                != jev_workload.throughput_items_per_second
+                or sum(sample.accuracy for sample in jev_workload.samples) / JEV_ITERATIONS
+                != jev_workload.accuracy
+                or workload_cost != Decimal(jev_workload.cost_usd)
+            ):
+                raise ValueError("Jev summary contradiction")
+            all_models.update(sample.model for sample in jev_workload.samples)
+            jev_cost += workload_cost
+        if (
+            result.jev.resolved_models != sorted(all_models)
+            or result.jev.completed_call_count != JEV_ITERATIONS * len(JEV_BATCH_SIZES)
+            or jev_cost != Decimal(result.jev.cost_usd or "-1")
+        ):
+            raise ValueError("Jev aggregate contradiction")
+        expected_comparison = build_comparison(
+            {key: value.model_dump() for key, value in result.local.workloads.items()},
+            result.jev.model_dump(),
+        )
+        if (
+            result.comparison is None
+            or {key: value.model_dump() for key, value in result.comparison.items()}
+            != expected_comparison
+        ):
+            raise ValueError("comparison contradiction")
+    elif result.comparison is not None:
+        raise ValueError("partial result cannot contain comparison")
+
+    journal_rows = [
+        json.loads(line) for line in paths["cost-journal.jsonl"].read_bytes().splitlines()
+    ]
+    reservations: dict[str, Decimal] = {}
+    settled_ids: set[str] = set()
+    settled_cost = Decimal(0)
+    for row in journal_rows:
+        if (
+            not isinstance(row, dict)
+            or row.get("predecessor_sha256") != result.provenance.prior_cost_ledger_sha256
+        ):
+            raise ValueError("journal provenance")
+        if row.get("kind") == "reserve" and set(row) == {
+            "kind",
+            "request_id",
+            "cost",
+            "predecessor_sha256",
+            "settled",
+        }:
+            reservations[str(row["request_id"])] = _decimal(row["cost"])
+        elif row.get("kind") == "settle" and set(row) == {
+            "kind",
+            "request_id",
+            "cost",
+            "status",
+            "predecessor_sha256",
+        }:
+            request_id = str(row["request_id"])
+            cost = _decimal(row["cost"])
+            if (
+                request_id not in reservations
+                or request_id in settled_ids
+                or cost > reservations[request_id]
+            ):
+                raise ValueError("journal settlement")
+            settled_ids.add(request_id)
+            settled_cost += cost
+        elif row.get("kind") == "uncertain" and set(row) == {
+            "kind",
+            "request_id",
+            "predecessor_sha256",
+        }:
+            pass
+        else:
+            raise ValueError("journal row shape")
+    open_reservations = set(reservations) - settled_ids
+    if (
+        settled_cost != Decimal(result.budget.phase3c_jev_usd)
+        or settled_cost != Decimal(result.jev.cost_usd or "0")
+        or (result.jev.status == "complete" and (open_reservations or len(settled_ids) != 30))
+        or (result.jev.status == "not_requested" and journal_rows)
+    ):
+        raise ValueError("journal/result contradiction")
+    sanitized_report(result.model_dump(mode="json"))
+    return result
+
+
+def load_local_components(
+    snapshot: Path, checkpoint: Path, *, expected_checkpoint_sha256: str
+) -> LocalComponents:
     """Load only the reviewed local MPS stack; never silently falls back to CPU."""
     try:
         import torch  # type: ignore[import-not-found]
         from safetensors.torch import load  # type: ignore[import-not-found]
     except ImportError as exc:
         raise SyntheticError("encoder-eval extra is required") from exc
+    if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "").lower() not in {"", "0", "false"}:
+        raise SyntheticError("MPS fallback must be disabled")
     if not torch.backends.mps.is_available():
         raise SyntheticError("Apple MPS is required")
     from benchmarks.encoder_loader import VerifiedSnapshot, load_encoder
@@ -610,8 +1090,11 @@ def load_local_components(snapshot: Path, checkpoint: Path) -> LocalComponents:
     loaded = load_encoder(
         candidate, snapshot, verified=VerifiedSnapshot.create(candidate, snapshot)
     )
+    checkpoint_bytes = checkpoint.read_bytes()
+    if digest_bytes(checkpoint_bytes) != expected_checkpoint_sha256:
+        raise SyntheticError("checkpoint changed after manifest validation")
     head = torch.nn.Linear(384, 5)
-    head.load_state_dict(load(checkpoint.read_bytes()))
+    head.load_state_dict(load(checkpoint_bytes))
     loaded.model.to("mps").eval()
     head.eval()
 
@@ -655,7 +1138,9 @@ def _urllib_transport(
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != "openrouter.ai":
         raise SyntheticError("literal OpenRouter host required")
-    request = urllib.request.Request(url, data=body, headers=dict(headers), method=method)
+    request = urllib.request.Request(
+        url, data=None if method == "GET" else body, headers=dict(headers), method=method
+    )
     context = ssl.create_default_context()
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -672,6 +1157,8 @@ def _urllib_transport(
     try:
         with opener.open(request, timeout=timeout) as response:
             return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers), exc.read()
     except (urllib.error.URLError, TimeoutError) as exc:
         raise SyntheticError("OpenRouter request failed") from exc
 
@@ -680,9 +1167,9 @@ def dispatch_jev(
     payload: Mapping[str, Any],
     *,
     api_key: str,
+    journal: CostJournal,
     transport: Transport = _urllib_transport,
     clock: Clock = time,
-    journal: CostJournal | None = None,
     request_id: str = "jev-000",
 ) -> tuple[dict[str, Any], float]:
     if (
@@ -693,9 +1180,8 @@ def dispatch_jev(
     ):
         raise ValueError("invalid Jev dispatch")
     body = canonical_json_bytes(cast(JsonValue, dict(payload)))
-    if journal is not None:
-        worst_case = Decimal(len(body)) * JEV_INPUT_PRICE / Decimal(1_000_000)
-        journal.reserve(request_id, worst_case)
+    worst_case = Decimal(len(body)) * JEV_INPUT_PRICE / Decimal(1_000_000)
+    journal.reserve(request_id, worst_case)
     started = clock.perf_counter_ns()
     try:
         status, _, raw = transport(
@@ -708,29 +1194,50 @@ def dispatch_jev(
             body,
             timeout=60.0,
         )
-    except BaseException:
-        if journal is not None:
-            journal.uncertain_outcome(request_id)
+    except Exception:
+        journal.uncertain_outcome(request_id)
         raise
     elapsed = (clock.perf_counter_ns() - started) / 1_000_000
-    if status >= 400:
-        if journal is not None:
-            journal.uncertain_outcome(request_id)
-        raise SyntheticError("provider error")
-    response = json.loads(raw)
-    if not isinstance(response, dict):
-        if journal is not None:
-            journal.uncertain_outcome(request_id)
-        raise ValueError("provider response shape")
-    if journal is not None:
+    if status != 200:
         try:
-            keys = payload.get("questions", {}).keys()
-            validated = validate_jev_response(response, list(keys))
-            journal.settle(request_id, Decimal(validated["usage"]["cost"]))
-        except BaseException:
+            failed = json.loads(raw)
+            usage = failed.get("usage") if isinstance(failed, dict) else None
+            cost = usage.get("cost") if isinstance(usage, dict) else None
+            if _finite(cost):
+                journal.settle(request_id, Decimal(str(cost)), status="billed_failure")
+            else:
+                journal.uncertain_outcome(request_id)
+        except Exception:
+            if not journal.uncertain:
+                journal.uncertain_outcome(request_id)
+        raise SyntheticError("provider error")
+    try:
+        response = json.loads(raw)
+        if not isinstance(response, dict):
+            raise ValueError("provider response shape")
+        keys = payload.get("questions", {}).keys()
+        validated = validate_jev_response(response, list(keys))
+        journal.settle(request_id, Decimal(validated["usage"]["cost"]))
+    except Exception:
+        if not journal.uncertain:
             journal.uncertain_outcome(request_id)
-            raise
+        raise
     return response, elapsed
+
+
+def audit_openrouter_key(api_key: str, *, transport: Transport = _urllib_transport) -> Decimal:
+    status, _, raw = transport(
+        "GET",
+        "https://openrouter.ai/api/v1/key",
+        {"Authorization": f"Bearer {api_key}"},
+        b"",
+        timeout=60.0,
+    )
+    if status != 200:
+        raise SyntheticError("OpenRouter key audit failed")
+    value = json.loads(raw)
+    usage = value.get("data", {}).get("usage") if isinstance(value, dict) else None
+    return _decimal(usage)
 
 
 def process_max_rss_bytes() -> int:
@@ -806,6 +1313,7 @@ def run_jev_workloads(
                 "iterations": iterations,
                 "input_id_digest": opaque_input_digest(batch),
                 "samples": samples,
+                "samples_sha256": digest_json(samples),
                 "summary": summarize(latencies),
                 "per_item_summary": summarize([value / batch_size for value in latencies]),
                 "throughput_items_per_second": throughput(batch_size, latencies),
@@ -814,7 +1322,7 @@ def run_jev_workloads(
                     sum((Decimal(str(sample["usage"]["cost"])) for sample in samples), Decimal(0))
                 ),
             }
-    except BaseException as exc:
+    except Exception as exc:
         raise RemoteRunError(
             {
                 "status": "external_control_unavailable",
@@ -881,6 +1389,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     predecessor = digest_bytes(prior_raw)
     packet_sha256 = digest_bytes(packet_manifest.read_bytes())
     training_sha256 = digest_bytes(args.training.read_bytes())
+    validate_predecessor_binding(
+        args.prior_cost_ledger,
+        packet_sha256=packet_sha256,
+        training_sha256=training_sha256,
+    )
     rows = sorted(_read_accepted(packet_dir), key=lambda row: str(row.get("family_id", "")))
     if len(rows) < max(LOCAL_BATCH_SIZES):
         raise SystemExit("accepted packet is smaller than the fixed local workload")
@@ -891,17 +1404,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         rss_before = process_max_rss_bytes()
         load_started = time.perf_counter_ns()
         components = load_local_components(
-            snapshot, args.training.parent / "checkpoint.safetensors"
+            snapshot,
+            args.training.parent / "checkpoint.safetensors",
+            expected_checkpoint_sha256=training["files"]["checkpoint.safetensors"],
         )
         load_ms = (time.perf_counter_ns() - load_started) / 1_000_000
         rss_after_load = process_max_rss_bytes()
         local = run_local_workloads(rows, components)
         rss_after_workloads = process_max_rss_bytes()
-    except (OSError, SyntheticError, ValueError) as exc:
-        raise SystemExit("local Phase 3C measurement was rejected") from exc
+    except Exception:
+        raise SystemExit("local Phase 3C measurement was rejected") from None
     local_result = {
         "fresh_process_load_ms": load_ms,
         "page_cache_sensitive": True,
+        "load_includes_import_and_snapshot_verification": True,
         "rss_metric": "ru_maxrss_bytes",
         "rss_before_load_bytes": rss_before,
         "rss_after_load_bytes": rss_after_load,
@@ -912,13 +1428,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     journal_path = args.output_dir / "cost-journal.jsonl"
     claim_sha256: str | None = None
     if args.allow_network:
-        claim_path = args.output_dir.parent / ".phase3c-claims" / f"{predecessor}.json"
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            raise SystemExit("OPENROUTER_API_KEY is required with --allow-network")
+        key_usage_pre = audit_openrouter_key(api_key)
+        claim_path = args.prior_cost_ledger.parent / ".phase3c-claims" / f"{predecessor}.json"
         claim_sha256 = create_claim(claim_path, predecessor)
+        args.output_dir.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         args.output_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
         os.chmod(args.output_dir, 0o700)
-        initial_total = sum((Decimal(str(entry["cost"])) for entry in prior["entries"]), Decimal(0))
+        initial_total = sum(
+            (Decimal(str(entry["cost"])) for entry in prior_ledger.entries), Decimal(0)
+        )
         initial_jev = sum(
-            (Decimal(str(entry["cost"])) for entry in prior["entries"] if entry["stage"] == "jev"),
+            (
+                Decimal(str(entry["cost"]))
+                for entry in prior_ledger.entries
+                if entry["stage"] == "jev"
+            ),
             Decimal(0),
         )
         journal = CostJournal(
@@ -927,13 +1454,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             initial_stage_spent=initial_jev,
             initial_total_spent=initial_total,
         )
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not api_key:
-            raise SystemExit("OPENROUTER_API_KEY is required with --allow-network")
         try:
             jev = run_jev_workloads(rows, api_key=api_key, journal=journal)
         except RemoteRunError as exc:
             jev = exc.partial
+        jev["cost_usd"] = str(journal.stage_settled - initial_jev)
+        jev["key_usage_pre_usd"] = str(key_usage_pre)
+        try:
+            jev["key_usage_post_usd"] = str(audit_openrouter_key(api_key))
+        except Exception:
+            jev["key_usage_post_usd"] = None
     else:
         jev = {"status": "not_requested", "completed_call_count": 0}
     result = {
@@ -956,11 +1486,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "checkpoint_sha256": training["files"]["checkpoint.safetensors"],
             "prior_cost_ledger_sha256": predecessor,
             "claim_sha256": claim_sha256,
+            "benchmark_source_sha256": digest_bytes(Path(__file__).read_bytes()),
+            "encoder_revision": training["encoder"]["revision"],
         },
         "environment": {
             "python": platform.python_version(),
             "platform": platform.platform(),
             "processor": platform.processor(),
+            "torch": importlib.metadata.version("torch"),
+            "transformers": importlib.metadata.version("transformers"),
+            "safetensors": importlib.metadata.version("safetensors"),
         },
         "local": local_result,
         "jev": jev,
@@ -968,15 +1503,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "budget": {
             "approved_total_usd": str(TOTAL_BUDGET),
             "jev_stage_limit_usd": str(JEV_BUDGET),
-            "prior_total_usd": str(Decimal(str(prior_ledger.total))),
+            "prior_total_usd": str(
+                initial_total if args.allow_network else _decimal(prior_ledger.total)
+            ),
             "phase3c_jev_usd": str(jev.get("cost_usd", "0")),
         },
-        "limitations": [
-            "local warm-path excludes one-time model load",
-            "Jev includes WAN/provider routing when enabled",
-            "synthetic PT-BR routing is narrow and cannot establish general quality",
-            "throughput on one M4 Pro does not predict every deployment target",
-        ],
+        "limitations": list(MANDATORY_LIMITATIONS),
     }
     write_phase3c_artifacts(
         args.output_dir,
