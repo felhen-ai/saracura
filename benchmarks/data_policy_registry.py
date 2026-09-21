@@ -471,11 +471,41 @@ class Registry(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["training-data-source-policies.v1"]
     sources: list[Policy] = Field(min_length=8, max_length=8)
+    exceptions: list[SyntheticExperimentException] = Field(min_length=1, max_length=1)
 
     @model_validator(mode="after")
     def exact_ids(self) -> Registry:
         if {source.id for source in self.sources} != set(IDENTITY):
             raise ValueError("registry must contain exactly the eight fixed IDs")
+        if self.exceptions[0].id != "synthetic_experiment":
+            raise ValueError("registry must contain the synthetic experiment exception")
+        return self
+
+
+class SyntheticExperimentException(BaseModel):
+    """Explicit workflow-bound exception; it never changes source policy state."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: Literal["synthetic_experiment"]
+    workflow_revision: Literal["phase3b-synthetic-research-training.v2"]
+    source_policy_id: Literal["provider-model-generated"]
+    allowed_splits: list[Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]]
+    allowed_uses: list[Literal["synthetic_only"]]
+    author_model: Literal["qwen/qwen3.5-9b"]
+    reviewer_model: Literal["mistralai/ministral-8b-2512"]
+    canonical_training_authorized: Literal[False]
+    calibration_authorized: Literal[False]
+    blind_test_authorized: Literal[False]
+    publication_authorized: Literal[False]
+    quality_claims_allowed: Literal[False]
+    automation_authorized: Literal[False]
+
+    @model_validator(mode="after")
+    def closed_exception(self) -> SyntheticExperimentException:
+        if self.allowed_splits != ["synthetic_train", "synthetic_dev", "synthetic_holdout"]:
+            raise ValueError("synthetic split order is fixed")
+        if self.allowed_uses != ["synthetic_only"]:
+            raise ValueError("synthetic use is fixed")
         return self
 
 
@@ -504,4 +534,11 @@ def load_bundled_registry() -> Registry:
     return load_registry(bundled_registry_path().read_bytes())
 
 
-__all__ = ["Policy", "Registry", "bundled_registry_path", "load_bundled_registry", "load_registry"]
+__all__ = [
+    "Policy",
+    "Registry",
+    "SyntheticExperimentException",
+    "bundled_registry_path",
+    "load_bundled_registry",
+    "load_registry",
+]

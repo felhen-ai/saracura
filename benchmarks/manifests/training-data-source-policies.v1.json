@@ -201,5 +201,22 @@
       "reviewer_role": "saracura-maintainers",
       "rationale": "Public availability is not permission; unknown record-level provenance, privacy, rights, and redistribution status blocks this source category."
     }
+  ],
+  "exceptions": [
+    {
+      "id": "synthetic_experiment",
+      "workflow_revision": "phase3b-synthetic-research-training.v2",
+      "source_policy_id": "provider-model-generated",
+      "allowed_splits": ["synthetic_train", "synthetic_dev", "synthetic_holdout"],
+      "allowed_uses": ["synthetic_only"],
+      "author_model": "qwen/qwen3.5-9b",
+      "reviewer_model": "mistralai/ministral-8b-2512",
+      "canonical_training_authorized": false,
+      "calibration_authorized": false,
+      "blind_test_authorized": false,
+      "publication_authorized": false,
+      "quality_claims_allowed": false,
+      "automation_authorized": false
+    }
   ]
 }
