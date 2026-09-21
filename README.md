@@ -151,6 +151,26 @@ Future maintainers provide a canonical, externally attested base-state JSONL
 and a public seed to build a no-clobber split plan. Human authorship, privacy,
 rights, representativeness, and independent review remain outside the tool.
 
+## Phase 3C end-to-end throughput benchmark
+
+Phase 3C is a checkout-only, synthetic-only performance instrument. It measures
+the reviewed MiniLM head from PT-BR text through tokenization, Apple MPS
+inference, pooling, CPU transfer, and choice materialization, with separate
+load and warm-path evidence. Optional Jev control requests use the pinned
+`typesafe/jev-1.13` model through OpenRouter only when explicitly enabled.
+
+The default environment remains offline and lightweight: importing the runner
+does not import Torch or Transformers. The real run requires a verified local
+encoder snapshot, sealed Phase 3B manifests, and an explicit approved budget;
+it must not be used to authorize automation or make general quality claims.
+Offline protocol tests can be run with:
+
+```bash
+uv run pytest -q tests/test_e2e_benchmark.py
+uv run ruff check benchmarks/e2e_benchmark.py tests/test_e2e_benchmark.py
+uv run mypy benchmarks/e2e_benchmark.py tests/test_e2e_benchmark.py
+```
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
