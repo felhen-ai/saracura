@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from benchmarks.encoder_registry import load_registry
+
 REQUIRED_FIELDS = {
     "schema_version",
     "id",
@@ -37,14 +39,29 @@ def validate_manifest(path: Path) -> None:
         raise ValueError(f"{path}: fixture license or redistribution is not approved")
 
 
+def validate_routed_manifest(path: Path) -> None:
+    raw = path.read_bytes()
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: manifest root must be an object")
+    schema_version = payload.get("schema_version")
+    if schema_version == "encoder-candidates.v1":
+        load_registry(raw)
+        return
+    if schema_version == 1:
+        validate_manifest(path)
+        return
+    raise ValueError(f"{path}: unsupported manifest schema")
+
+
 def main() -> int:
     manifest_directory = Path(__file__).parent / "manifests"
     manifests = sorted(manifest_directory.glob("*.json"))
     if not manifests:
         raise ValueError("no first-party manifests found")
     for path in manifests:
-        validate_manifest(path)
-    print(f"validated {len(manifests)} self-authored manifest(s)")
+        validate_routed_manifest(path)
+    print(f"validated {len(manifests)} routed manifest(s)")
     return 0
 
 
