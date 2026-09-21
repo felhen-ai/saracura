@@ -77,6 +77,22 @@ See [SECURITY.md](SECURITY.md) before adding model, tokenizer, dataset, or plugi
 
 Runtime dependency licenses and resolved versions are recorded in [docs/dependency-licenses.md](docs/dependency-licenses.md).
 
+## Run the local scaling harness
+
+The checkout-only benchmark runner consumes the self-authored fixture and executes the public `DecisionEngine` at Q=1, Q=10, and Q=50. It records raw samples and a Markdown report under the ignored `.artifacts/` directory:
+
+```bash
+uv run python -m benchmarks.run \
+  --suite decision-scaling \
+  --backend fixture \
+  --warmups 1 \
+  --iterations 10 \
+  --code-revision local-smoke \
+  --output-dir .artifacts/benchmarks
+```
+
+The result schema is `phase2a.v1`. Percentiles use nearest-rank semantics (`sorted[ceil(p*n)-1]`), and each sample records the answer digest and the single state-encoding observation. This fixture is a research instrument only: its timing is not learned-model performance, does not establish quality, and does not authorize automation or production decisions. The runner is not part of the installed wheel and does not download models, tokenizers, datasets, or ML runtimes.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

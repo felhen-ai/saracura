@@ -76,3 +76,19 @@ Saracura é independente. Instalação, testes, CLI e exemplos não exigem códi
 Consulte [SECURITY.md](../SECURITY.md) antes de adicionar carregamento de modelos, tokenizers, datasets ou plugins. Contribuições devem seguir [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 As licenças e versões resolvidas das dependências de runtime estão registradas em [dependency-licenses.md](dependency-licenses.md).
+
+## Executar o harness local de escala
+
+O runner de benchmark, usado apenas a partir do checkout, consome a fixture autoescrita e executa o `DecisionEngine` público em Q=1, Q=10 e Q=50. Ele grava amostras brutas e um relatório Markdown em `.artifacts/`, que é ignorado pelo Git:
+
+```bash
+uv run python -m benchmarks.run \
+  --suite decision-scaling \
+  --backend fixture \
+  --warmups 1 \
+  --iterations 10 \
+  --code-revision local-smoke \
+  --output-dir .artifacts/benchmarks
+```
+
+O schema do resultado é `phase2a.v1`. Os percentis usam nearest-rank (`sorted[ceil(p*n)-1]`) e cada amostra registra o digest das respostas e a observação de uma única codificação do estado. Esta fixture é apenas um instrumento de pesquisa: seu tempo não é performance de modelo treinado, não prova qualidade e não autoriza automação ou decisões de produção. O runner não faz parte do wheel instalado e não baixa modelos, tokenizers, datasets nem runtimes pesados de ML.
