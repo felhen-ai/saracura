@@ -1,0 +1,60 @@
+{
+  "schema_version": "support-routing-protocol.v1",
+  "workflow_id": "support-routing",
+  "workflow_revision": "v1",
+  "locale": "pt-BR",
+  "labels": [
+    "billing",
+    "technical_support",
+    "account_access",
+    "subscription_cancellation",
+    "order_delivery"
+  ],
+  "review_outcomes": [
+    "ambiguous",
+    "out_of_scope",
+    "rejected"
+  ],
+  "guide_path": "docs/annotation-guides/support-routing.v1.md",
+  "guide_sha256": "3f84ff77ae57d50048485787ff2d934996c77cb8847f400a004db6fd943f8d03",
+  "policy_registry_path": "benchmarks/manifests/training-data-source-policies.v1.json",
+  "policy_registry_sha256": "42fa09e3f4b34684ac79d67a304142018c424ab849adbffc4124f3270368bbbe",
+  "base_state_schema": "support-routing-base-state.v1",
+  "split_algorithm": "support-routing-stratified-sha256.v1",
+  "split_proportions": [
+    {
+      "split": "train",
+      "weight": 40
+    },
+    {
+      "split": "dev",
+      "weight": 20
+    },
+    {
+      "split": "calibration",
+      "weight": 20
+    },
+    {
+      "split": "blind_test",
+      "weight": 20
+    }
+  ],
+  "normalization": "support-routing-text-normalization.v1",
+  "unicode_behavior": "python-3.11-3.13-vector-locked.v1",
+  "near_duplicate": {
+    "unit": "word_trigram_jaccard",
+    "threshold_numerator": 85,
+    "threshold_denominator": 100
+  },
+  "limits": {
+    "max_input_bytes": 16777216,
+    "max_plan_bytes": 8388608,
+    "max_states": 10000,
+    "max_text_codepoints": 2000,
+    "max_atoms_per_state": 8,
+    "max_pair_comparisons": 50000000
+  },
+  "training_authorized": false,
+  "quality_claims_allowed": false,
+  "publication_authorized": false
+}

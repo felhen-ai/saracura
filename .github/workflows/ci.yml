@@ -29,8 +29,9 @@ jobs:
       - run: uv run python -m benchmarks.validate_manifests
       - run: uv run python benchmarks/validate_default_environment.py
       - run: uv run python -m benchmarks.encoder_gate validate-registry
+      - run: uv run python -m benchmarks.first_party_gate validate-protocol
       - run: uv build
-      - run: uv run python benchmarks/inspect_wheel.py dist/*.whl
+      - run: uv run python benchmarks/inspect_wheel.py dist/*.whl dist/*.tar.gz
 
   secrets:
     runs-on: ubuntu-latest
@@ -46,3 +47,18 @@ jobs:
             | sha256sum --check --strict
           tar -xzf gitleaks.tar.gz gitleaks
       - run: ./gitleaks detect --source . --no-git --redact --exit-code 1
+
+  unicode-vectors:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked --dev
+      - run: uv run pytest -q tests/test_first_party_packet.py
