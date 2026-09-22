@@ -39,6 +39,7 @@ def _add_minilm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--encoder-snapshot", type=Path)
     parser.add_argument("--training-manifest", type=Path)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--training-capsule", type=Path)
     parser.add_argument("--device", choices=("mps", "cpu"))
 
 
@@ -77,19 +78,28 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _require_minilm_arguments(values: argparse.Namespace) -> MiniLMRoutingBackend:
-    if any(
-        getattr(values, name, None) is None
-        for name in ("encoder_snapshot", "training_manifest", "checkpoint", "device")
-    ):
+    if any(getattr(values, name, None) is None for name in ("encoder_snapshot", "device")):
         raise SaracuraError(
             ErrorCode.REQUEST_INVALID,
             "MiniLM commands require explicit local artifact paths and a device.",
+            "/",
+        )
+    capsule = values.training_capsule
+    synthetic_pair = values.training_manifest is not None and values.checkpoint is not None
+    if (capsule is None and not synthetic_pair) or (
+        capsule is not None
+        and (values.training_manifest is not None or values.checkpoint is not None)
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "MiniLM commands require one sealed human capsule or the Phase 4A synthetic pair.",
             "/",
         )
     return MiniLMRoutingBackend(
         encoder_snapshot=values.encoder_snapshot,
         training_manifest=values.training_manifest,
         checkpoint=values.checkpoint,
+        training_capsule=capsule,
         device=values.device,
     )
 
@@ -100,7 +110,13 @@ def _backend_for_decide(
     if values.backend == "fixture":
         if any(
             getattr(values, name, None) is not None
-            for name in ("encoder_snapshot", "training_manifest", "checkpoint", "device")
+            for name in (
+                "encoder_snapshot",
+                "training_manifest",
+                "checkpoint",
+                "training_capsule",
+                "device",
+            )
         ):
             raise SaracuraError(
                 ErrorCode.REQUEST_INVALID,

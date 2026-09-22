@@ -1,7 +1,8 @@
-"""Phase 4B.1 offline governance, packet materialization, and release install.
+"""Phase 4B.1 governance plus sanitized dispatch for the sealed 4B.2 stages.
 
-There is intentionally no model construction, embedding extraction, training,
-temperature fitting, blind evaluation, or runtime-calibration behavior here.
+Model construction, embedding extraction, and CPU-head training remain in
+``benchmarks.human_training``.  This module has no calibration, blind
+evaluation, runtime-calibration, network, or artifact discovery behavior.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Never, cast
 
 from benchmarks.first_party_gate import validate_protocol_bytes
 from benchmarks.first_party_packet import (
@@ -28,7 +29,6 @@ from benchmarks.first_party_packet import (
     MANIFEST_PATH,
     SPLITS,
     STATE_ID,
-    PacketError,
     parse_states_bytes,
     validate_plan,
 )
@@ -98,6 +98,13 @@ VIEW_NAMES = {
 
 class HumanResearchError(ValueError):
     """A bounded, non-secret Phase 4B.1 validation failure."""
+
+
+class _SanitizedArgumentParser(argparse.ArgumentParser):
+    """Do not echo operator paths or malformed values in research CLI errors."""
+
+    def error(self, _message: str) -> Never:
+        raise HumanResearchError("command arguments")
 
 
 @dataclass(frozen=True, slots=True)
@@ -904,6 +911,164 @@ def _validate_packet(packet_raw: bytes, values: dict[str, bytes]) -> dict[str, A
     return packet
 
 
+def validate_packet_view_subset(packet_raw: bytes, views: dict[str, bytes]) -> dict[str, Any]:
+    """Validate signed-packet claims for an explicitly supplied view subset.
+
+    Released stage capsules deliberately do not contain siblings from the other
+    three splits.  This validator consequently proves the *complete* closed
+    packet manifest and proves the byte ledger, ordering, labels, family
+    isolation, and counters for the supplied views.  The signed receipt binds
+    the remaining packet inputs; callers must verify that receipt separately.
+    """
+
+    if not views or set(views) - {"train", "dev", "calibration", "blind_test"}:
+        raise HumanResearchError("packet view subset")
+    packet = _json(packet_raw, maximum=RELEASE_INPUT_LIMITS["packet-manifest.json"])
+    required = {
+        "schema_version",
+        "protocol_sha256",
+        "policy_registry_sha256",
+        "states_sha256",
+        "split_plan_sha256",
+        "contributors_sha256",
+        "annotations_sha256",
+        "adjudications_sha256",
+        "controls_sha256",
+        "takedown_ledger_sha256",
+        "files",
+        "accepted_counts",
+        "excluded_counts",
+        "labels",
+        "split_algorithm",
+        "source_type",
+        "locale",
+        "synthetic_only",
+        "authorizations",
+        "packet_sha256",
+    }
+    digest_fields = {
+        "protocol_sha256",
+        "policy_registry_sha256",
+        "states_sha256",
+        "split_plan_sha256",
+        "contributors_sha256",
+        "annotations_sha256",
+        "adjudications_sha256",
+        "controls_sha256",
+        "takedown_ledger_sha256",
+    }
+    if (
+        set(packet) != required
+        or packet["schema_version"] != "support-routing-human-packet.v1"
+        or any(not _hash(packet[name]) for name in digest_fields)
+        or packet["labels"] != list(LABELS)
+        or packet["split_algorithm"] != "support-routing-stratified-sha256.v1"
+        or packet["source_type"] != "human_original"
+        or packet["locale"] != "pt-BR"
+        or packet["synthetic_only"] is not False
+        or packet["authorizations"]
+        != {
+            "training": False,
+            "calibration": False,
+            "blind_test": False,
+            "automation": False,
+            "broad_quality_claims": False,
+        }
+    ):
+        raise HumanResearchError("packet manifest schema")
+    _self_digest(packet, "packet_sha256")
+    files = packet["files"]
+    counts = packet["accepted_counts"]
+    excluded = packet["excluded_counts"]
+    if (
+        not isinstance(files, dict)
+        or set(files) != set(SPLITS)
+        or not isinstance(counts, dict)
+        or set(counts) != {"total", "by_split", "by_split_label"}
+        or not _integer(counts["total"], minimum=500)
+        or not isinstance(counts["by_split"], dict)
+        or set(counts["by_split"]) != set(SPLITS)
+        or not isinstance(counts["by_split_label"], dict)
+        or set(counts["by_split_label"]) != set(SPLITS)
+        or not isinstance(excluded, dict)
+        or set(excluded) != {"total", "by_reason"}
+        or not _integer(excluded["total"])
+        or not isinstance(excluded["by_reason"], dict)
+        or set(excluded["by_reason"]) != set(EXCLUSION_REASONS)
+        or any(not _integer(item) for item in excluded["by_reason"].values())
+        or excluded["total"] != sum(excluded["by_reason"].values())
+    ):
+        raise HumanResearchError("packet counts")
+    claimed_total = 0
+    for split in SPLITS:
+        ledger = files[split]
+        labels = counts["by_split_label"][split]
+        count = counts["by_split"][split]
+        if (
+            not isinstance(ledger, dict)
+            or set(ledger) != {"bytes", "sha256"}
+            or not _integer(ledger["bytes"], minimum=1)
+            or not _hash(ledger["sha256"])
+            or not _integer(count, minimum=(200 if split == "train" else 100))
+            or not isinstance(labels, dict)
+            or set(labels) != set(LABELS)
+            or any(not _integer(labels[label], minimum=10) for label in LABELS)
+            or sum(cast(int, labels[label]) for label in LABELS) != count
+        ):
+            raise HumanResearchError("packet counts")
+        claimed_total += cast(int, count)
+    if claimed_total != counts["total"]:
+        raise HumanResearchError("packet count reconciliation")
+
+    state_ids: set[str] = set()
+    family_ids: set[str] = set()
+    for split, raw in views.items():
+        file_name = VIEW_NAMES[split]
+        if files[split]["bytes"] != len(raw) or files[split]["sha256"] != digest(raw):
+            raise HumanResearchError("packet view ledger")
+        rows = _jsonl(raw, maximum=RELEASE_INPUT_LIMITS[file_name])
+        expected_labels: Counter[str] = Counter()
+        prior = ""
+        for row in rows:
+            fields = {
+                "state_id",
+                "family_id",
+                "locale",
+                "candidate_label",
+                "text",
+                "content_digest",
+            }
+            if (
+                set(row) != fields
+                or not isinstance(row["state_id"], str)
+                or STATE_ID.fullmatch(row["state_id"]) is None
+                or row["state_id"] <= prior
+                or not isinstance(row["family_id"], str)
+                or FAMILY_ID.fullmatch(row["family_id"]) is None
+                or row["state_id"] in state_ids
+                or row["family_id"] in family_ids
+                or row["locale"] != "pt-BR"
+                or not _member(row["candidate_label"], LABELS)
+                or not isinstance(row["text"], str)
+                or not row["text"]
+                or len(row["text"]) > 320
+                or len(row["text"].encode("utf-8")) > 1280
+                or not _hash(row["content_digest"])
+            ):
+                raise HumanResearchError("packet view schema")
+            prior = row["state_id"]
+            state_ids.add(row["state_id"])
+            family_ids.add(row["family_id"])
+            expected_labels[row["candidate_label"]] += 1
+        if (
+            len(rows) != counts["by_split"][split]
+            or {label: expected_labels[label] for label in LABELS}
+            != counts["by_split_label"][split]
+        ):
+            raise HumanResearchError("packet view reconciliation")
+    return packet
+
+
 def _safe_name(value: str) -> str:
     if SAFE_CHILD.fullmatch(value) is None or value in {".", ".."}:
         raise HumanResearchError("unsafe output child")
@@ -1190,18 +1355,86 @@ def _released_descriptor(
     names: tuple[str, ...],
 ) -> bytes:
     payload = {name: values[name] for name in names if name != "capsule-descriptor.json"}
+    return _released_descriptor_from_ledger(
+        kind, packet, receipt_raw, _ledger(payload, set(payload))
+    )
+
+
+def _released_descriptor_from_ledger(
+    kind: str,
+    packet: dict[str, Any],
+    receipt_raw: bytes,
+    files: list[dict[str, Any]],
+) -> bytes:
+    """Use the single released-descriptor schema for both creation and proof.
+
+    The train-head stage deliberately has no train/dev view bytes.  It can
+    nevertheless re-create their descriptor because the signed packet commits
+    their byte ledgers and the receipt is carried verbatim by the downstream
+    capsule.  Keeping this helper below ``_released_descriptor`` makes the
+    canonical shape impossible to drift between the writer and that proof.
+    """
+
     descriptor: dict[str, Any] = {
         "schema_version": "human-capsule.v1",
         "capsule_kind": kind,
         "packet_sha256": packet["packet_sha256"],
         "packet_release_receipt_sha256": digest(receipt_raw),
-        "files": _ledger(payload, set(payload)),
+        "files": files,
         "descriptor_sha256": "",
     }
     descriptor["descriptor_sha256"] = digest(
         canonical({key: value for key, value in descriptor.items() if key != "descriptor_sha256"})
     )
     return canonical(descriptor) + b"\n"
+
+
+def reconstruct_train_dev_descriptor(
+    packet: dict[str, Any], packet_raw: bytes, receipt_raw: bytes
+) -> bytes:
+    """Rebuild exactly the original released train/dev descriptor, without views.
+
+    ``packet_raw`` and ``receipt_raw`` are the exact downstream bytes.  The two
+    unavailable view entries are reconstructed only from the signed packet
+    ledger, never from paths, discovery, or a cache.
+    """
+
+    files = packet.get("files")
+    if (
+        not isinstance(files, dict)
+        or set(files) != {"train", "dev", "calibration", "blind_test"}
+        or any(
+            not isinstance(files[split], dict)
+            or set(files[split]) != {"bytes", "sha256"}
+            or type(files[split]["bytes"]) is not int
+            or files[split]["bytes"] <= 0
+            or not isinstance(files[split]["sha256"], str)
+            or not HEX64.fullmatch(files[split]["sha256"])
+            for split in ("train", "dev")
+        )
+        or not isinstance(packet.get("packet_sha256"), str)
+        or digest(
+            canonical({key: value for key, value in packet.items() if key != "packet_sha256"})
+        )
+        != packet["packet_sha256"]
+        or canonical(packet) + b"\n" != packet_raw
+    ):
+        raise HumanResearchError("train/dev descriptor reconstruction")
+    ledger = [
+        {"path": "dev.jsonl", **files["dev"]},
+        {
+            "path": "packet-manifest.json",
+            "bytes": len(packet_raw),
+            "sha256": digest(packet_raw),
+        },
+        {
+            "path": "packet-release-receipt.json",
+            "bytes": len(receipt_raw),
+            "sha256": digest(receipt_raw),
+        },
+        {"path": "train.jsonl", **files["train"]},
+    ]
+    return _released_descriptor_from_ledger("train-dev", packet, receipt_raw, ledger)
 
 
 def install_packet_release(
@@ -1262,8 +1495,8 @@ def install_packet_release(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m benchmarks.human_research")
-    commands = parser.add_subparsers(dest="command")
+    parser = _SanitizedArgumentParser(prog="python -m benchmarks.human_research")
+    commands = parser.add_subparsers(dest="command", parser_class=_SanitizedArgumentParser)
     materialize = commands.add_parser("materialize-packet")
     materialize.add_argument("--intake-capsule", type=Path, required=True)
     materialize.add_argument("--output-parent", type=Path, required=True)
@@ -1273,6 +1506,16 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--receipt", type=Path, required=True)
     install.add_argument("--output-parent", type=Path, required=True)
     install.add_argument("--release-name", required=True)
+    extract = commands.add_parser("extract-train-dev-embeddings")
+    extract.add_argument("--train-dev-capsule", type=Path, required=True)
+    extract.add_argument("--encoder-snapshot", type=Path, required=True)
+    extract.add_argument("--output-parent", type=Path, required=True)
+    extract.add_argument("--output-name", required=True)
+    train = commands.add_parser("train-head")
+    train.add_argument("--embedding-capsule", type=Path, required=True)
+    train.add_argument("--encoder-snapshot", type=Path, required=True)
+    train.add_argument("--output-parent", type=Path, required=True)
+    train.add_argument("--output-name", required=True)
     try:
         args = parser.parse_args(argv)
         if args.command == "materialize-packet":
@@ -1281,10 +1524,28 @@ def main(argv: list[str] | None = None) -> int:
             install_packet_release(
                 args.release_input_capsule, args.receipt, args.output_parent, args.release_name
             )
+        elif args.command == "extract-train-dev-embeddings":
+            from benchmarks.human_training import extract_train_dev_embeddings
+
+            extract_train_dev_embeddings(
+                args.train_dev_capsule,
+                args.encoder_snapshot,
+                args.output_parent,
+                args.output_name,
+            )
+        elif args.command == "train-head":
+            from benchmarks.human_training import train_head
+
+            train_head(
+                args.embedding_capsule,
+                args.encoder_snapshot,
+                args.output_parent,
+                args.output_name,
+            )
         else:
             parser.print_help()
             return 2
-    except (HumanResearchError, PacketError, OSError):
+    except Exception:
         print("GOVERNANCE_INVALID", file=sys.stderr)
         return 2
     return 0

@@ -356,7 +356,8 @@ section. Nested contracts are exact:
   and `macro_f1` in `[0,1]`, a nonnegative integer 5x5 `confusion_matrix`, and
   `per_label` with exactly the five ordered labels, each containing nonnegative
   integer `support` plus finite `[0,1]` `precision`, `recall`, and `f1`; counts,
-  supports, and matrix totals must reconcile;
+  supports, precision/recall/F1 (zero denominator is `0.0`), macro-F1,
+  accuracy, and matrix totals must all recompute and reconcile;
 - `serving_conformance`: exactly `schema=human-minilm-conformance.v1`, package
   `token_payload_sha256`, ordered five `labels`, arrays of exactly five finite
   float CPU and MPS logits, their lowercase SHA-256 digests, and
@@ -522,9 +523,13 @@ the same canonical packet manifest and receipt, and its descriptor. Every
 downstream command receives the training capsule, not loose manifest/checkpoint
 paths, and verifies the packet receipt before constructing the model.
 
-`train-head` accepts only that embedding capsule and public seed `20260921`. It
-never receives packet views, calibration, or blind paths. It repeats the CPU
-head training twice and requires byte-identical checkpoints and epoch ledgers.
+`train-head` accepts that embedding capsule, public seed `20260921`, and one
+explicit Phase 4A verified encoder snapshot solely to generate the
+checkpoint-specific CPU/MPS serving conformance evidence. The snapshot identity,
+revision, and package-registry digest must equal the embedding manifest's frozen
+encoder binding. It never receives packet views, calibration, or blind paths;
+it performs no cache discovery or snapshot-path re-open. It repeats the CPU head
+training twice and requires byte-identical checkpoints and epoch ledgers.
 
 The numerical contract remains Phase 3B's frozen encoder and linear
 `Linear(384,5)` head. Training uses the exact Phase 3B optimizer, loss,
