@@ -9,7 +9,7 @@ status: current
 canonical: CONTRIBUTING.md
 globalRef: qmd://saracura/CONTRIBUTING.md
 reviewCadenceDays: 30
-lastReviewedAt: 2026-09-21
+lastReviewedAt: 2026-09-22
 sourceRefs: []
 related:
   - README.md
@@ -21,6 +21,8 @@ sensitivity: public
 ---
 
 # Contributing to Saracura
+
+> **Português (Brasil):** O inglês é o idioma canônico da documentação técnica e das contribuições. Antes de implementar mudanças que ampliem tipos de decisão, fontes de dados, carregamento de modelos, rede ou automação, abra uma discussão. Execute toda a validação abaixo e nunca envie dados privados, traces de clientes, segredos, caminhos locais identificáveis ou datasets sem licença e procedência. O [README em português](docs/README.pt-BR.md) apresenta o projeto e o fluxo inicial.
 
 Saracura is intentionally narrow while its contract and evidence protocol are being established. Please discuss changes that expand supported decision types, workflows, data sources, model loading, networking, or automation before implementation.
 
