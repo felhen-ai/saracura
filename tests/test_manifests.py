@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.validate_manifests import validate_manifest
+from benchmarks.validate_manifests import validate_manifest, validate_routed_manifest
 from saracura.runtime.engine import FIXTURE_SPLIT_MANIFEST_SHA256
 
 
@@ -35,3 +35,9 @@ def test_external_data_is_rejected_in_phase_one(tmp_path: Path) -> None:
     path.write_text(payload, encoding="utf-8")
     with pytest.raises(ValueError, match="self-authored fixtures"):
         validate_manifest(path)
+
+
+def test_phase4c_manifests_route_through_closed_validators() -> None:
+    root = Path(__file__).parents[1] / "benchmarks/manifests"
+    validate_routed_manifest(root / "decision-backend-candidates.v1.json")
+    validate_routed_manifest(root / "universal-bakeoff-plan.v1.json")

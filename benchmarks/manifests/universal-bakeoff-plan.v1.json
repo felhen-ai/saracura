@@ -1,0 +1,29 @@
+{
+  "schema_version": "universal-bakeoff-plan.v1",
+  "plan_id": "universal-bakeoff-plan.v1",
+  "generator_revision": "phase4c.1-fixture-generator.v1",
+  "evidence_lane": "synthetic_research",
+  "candidate_registry_sha256": "587f745dabffacfb4ba5fa676b88fb1b3768db701ed2121fd0007531ed6adf71",
+  "dataset_artifact": null,
+  "remote_budget": {
+    "requests": 0,
+    "usd": 0
+  },
+  "scenarios": [
+    {"id": "scenario-01", "locale": "pt-BR", "domain": "support", "novelty": "seen_taxonomy", "N": 1, "Q": 1, "K": 5, "input_mode": "self_authored", "input_seed": "phase4c1-support-ptbr-01", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-02", "locale": "pt-BR", "domain": "support", "novelty": "seen_taxonomy", "N": 8, "Q": 1, "K": 5, "input_mode": "self_authored", "input_seed": "phase4c1-support-ptbr-02", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-03", "locale": "pt-BR", "domain": "support", "novelty": "unseen_taxonomy", "N": 1, "Q": 10, "K": 5, "input_mode": "self_authored", "input_seed": "phase4c1-support-ptbr-03", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-04", "locale": "pt-BR", "domain": "inbox_triage", "novelty": "unseen_taxonomy", "N": 8, "Q": 10, "K": 20, "input_mode": "rule_generated", "input_seed": "phase4c1-inbox-ptbr-04", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-05", "locale": "en", "domain": "support", "novelty": "seen_taxonomy", "N": 1, "Q": 1, "K": 5, "input_mode": "self_authored", "input_seed": "phase4c1-support-en-05", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-06", "locale": "pt-BR", "domain": "support", "novelty": "seen_taxonomy", "N": 32, "Q": 1, "K": 2, "input_mode": "rule_generated", "input_seed": "phase4c1-support-ptbr-06", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-07", "locale": "pt-BR", "domain": "inbox_triage", "novelty": "unseen_taxonomy", "N": 1, "Q": 50, "K": 20, "input_mode": "rule_generated", "input_seed": "phase4c1-inbox-ptbr-07", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]},
+    {"id": "scenario-08", "locale": "pt-BR", "domain": "support", "novelty": "seen_taxonomy", "N": 1, "Q": 1, "K": 77, "input_mode": "rule_generated", "input_seed": "phase4c1-support-ptbr-08", "authorized_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]}
+  ],
+  "report_policy": {
+    "status": "fixture_only",
+    "metric_authority": "declared_analytic_model",
+    "conclusion_authority": "none",
+    "placeholder_label": "deterministic_placeholder",
+    "allowed_metrics": ["declared_sequence_count", "declared_attention_work", "declared_state_count", "declared_question_count", "declared_choice_count", "unsupported_count", "failed_count"]
+  }
+}
