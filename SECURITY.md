@@ -9,7 +9,7 @@ status: current
 canonical: SECURITY.md
 globalRef: qmd://saracura/SECURITY.md
 reviewCadenceDays: 30
-lastReviewedAt: 2026-09-21
+lastReviewedAt: 2026-09-22
 sourceRefs: []
 related:
   - README.md
@@ -21,6 +21,8 @@ sensitivity: public
 ---
 
 # Security policy
+
+> **Português (Brasil):** Não abra uma issue pública para relatar uma vulnerabilidade. Use o canal privado de vulnerability reporting do GitHub e não inclua segredos, datasets privados ou entradas sensíveis de modelos no relato inicial. O Saracura ainda é um alpha de pesquisa; somente o commit mais recente da branch padrão recebe correções de segurança até que uma política de releases seja publicada.
 
 ## Supported versions
 

@@ -22,6 +22,8 @@ sensitivity: public
 
 # Saracura
 
+[English](README.md) | [Português (Brasil)](docs/README.pt-BR.md)
+
 Saracura is a PT-BR-first, local-first research engine for typed decisions at volume. Its architectural thesis is simple: encode one state once, then answer many calibrated questions with low incremental cost.
 
 > One state. Many calibrated decisions. Open and local.
@@ -29,6 +31,8 @@ Saracura is a PT-BR-first, local-first research engine for typed decisions at vo
 This repository is currently a **research-only alpha**. It does not contain trained weights, does not claim decision quality, and must not be used as an automation or authorization gate. The included deterministic fixture backend exists only to exercise the contract and runtime invariants.
 
 PT-BR-first means Brazilian Portuguese is the first language for examples, data governance, annotation, and evaluation. It does not mean this alpha already ships a PT-BR-optimized checkpoint. The API and architecture remain language-neutral so the same evidence protocol can expand to English and other languages. A Portuguese translation of this README is available at [docs/README.pt-BR.md](docs/README.pt-BR.md).
+
+English is the canonical language for technical documentation. The quickstart, public examples, and PT-BR evaluation materials are also maintained in Brazilian Portuguese where applicable.
 
 ## Current scope
 
