@@ -13,6 +13,7 @@ from benchmarks.universal_bakeoff import load_candidate_registry, load_plan
 from benchmarks.universal_local.plan import load_plan as load_universal_local_plan
 from benchmarks.universal_local.registry import load_registry as load_universal_local_registry
 from benchmarks.universal_remote.plan import validate_plan as validate_universal_remote_plan
+from benchmarks.universal_remote_resume.plan import validate_plan as validate_resume_plan
 
 REQUIRED_FIELDS = {
     "schema_version",
@@ -82,6 +83,11 @@ def validate_routed_manifest(path: Path) -> None:
         if raw != (Path(__file__).parent / "manifests/universal-bakeoff-plan.v3.json").read_bytes():
             raise ValueError(f"{path}: v3 plan must be the canonical file")
         validate_universal_remote_plan()
+        return
+    if schema_version == "phase4c3c-resume-plan.v1":
+        if raw != (Path(__file__).parent / "manifests/phase4c3c-resume-plan.v1.json").read_bytes():
+            raise ValueError(f"{path}: recovery plan must be the canonical file")
+        validate_resume_plan()
         return
     if schema_version == 1:
         validate_manifest(path)
