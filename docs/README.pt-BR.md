@@ -9,7 +9,7 @@ status: current
 canonical: docs/README.pt-BR.md
 globalRef: qmd://saracura/docs/README.pt-BR.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-21
+lastReviewedAt: 2026-09-22
 sourceRefs: []
 related:
   - README.md
@@ -22,13 +22,13 @@ sensitivity: public
 
 # Saracura
 
-Saracura é um motor experimental e local para decisões tipadas. A tese arquitetural é simples: codificar um estado uma vez e responder muitas perguntas calibradas com baixo custo incremental.
+Saracura é um motor de pesquisa PT-BR-first e local para decisões tipadas em volume. A tese arquitetural é simples: codificar um estado uma vez e responder muitas perguntas calibradas com baixo custo incremental.
 
 > Um estado. Muitas decisões calibradas. Aberto e local.
 
-Este repositório ainda é um **scaffold alpha exclusivo para pesquisa**. Ele não contém pesos treinados, não afirma qualidade de decisão e não deve ser usado como gate de automação ou autorização. O backend determinístico incluído é apenas uma fixture para exercitar o contrato e os invariantes do runtime.
+Este repositório ainda é um **alpha exclusivo para pesquisa**. Ele não contém pesos treinados, não afirma qualidade de decisão e não deve ser usado como gate de automação ou autorização. O backend determinístico incluído é apenas uma fixture para exercitar o contrato e os invariantes do runtime.
 
-Português brasileiro é o primeiro idioma das fixtures, enquanto a API e a arquitetura permanecem neutras em relação ao idioma.
+PT-BR-first significa que o português brasileiro é o primeiro idioma dos exemplos e do trabalho de governança de dados, anotação e avaliação. Isso não significa que este alpha já distribua um checkpoint otimizado para PT-BR. A API e a arquitetura permanecem neutras em relação ao idioma para que o mesmo protocolo de evidência possa se expandir para inglês e outros idiomas.
 
 ## Escopo atual
 
@@ -40,9 +40,10 @@ Português brasileiro é o primeiro idioma das fixtures, enquanto a API e a arqu
 - testes de isolamento entre perguntas com tolerância numérica absoluta de `1e-12`;
 - chaves de cache de schema fail-closed com os bytes canônicos completos e eixos de revisão;
 - artefatos de calibração imutáveis e compatíveis de forma fail-closed;
-- runtime in-process e CLI locais.
+- runtime in-process e CLI locais;
+- trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos.
 
-Não estão incluídos: download de modelos, treino, datasets externos, labels dinâmicos, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção.
+Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
 
 ## Instalação e validação
 

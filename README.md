@@ -9,7 +9,7 @@ status: current
 canonical: README.md
 globalRef: qmd://saracura/README.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-21
+lastReviewedAt: 2026-09-22
 sourceRefs: []
 related:
   - docs/README.pt-BR.md
@@ -22,13 +22,13 @@ sensitivity: public
 
 # Saracura
 
-Saracura is an early, local-first engine for typed decisions. Its architectural thesis is simple: encode one state once, then answer many calibrated questions with low incremental cost.
+Saracura is a PT-BR-first, local-first research engine for typed decisions at volume. Its architectural thesis is simple: encode one state once, then answer many calibrated questions with low incremental cost.
 
 > One state. Many calibrated decisions. Open and local.
 
-This repository is currently a **research-only alpha scaffold**. It does not contain trained weights, does not claim decision quality, and must not be used as an automation or authorization gate. The included deterministic fixture backend exists only to exercise the contract and runtime invariants.
+This repository is currently a **research-only alpha**. It does not contain trained weights, does not claim decision quality, and must not be used as an automation or authorization gate. The included deterministic fixture backend exists only to exercise the contract and runtime invariants.
 
-Brazilian Portuguese is the first fixture language, while the API and architecture remain language-neutral. A Portuguese translation of this README is available at [docs/README.pt-BR.md](docs/README.pt-BR.md).
+PT-BR-first means Brazilian Portuguese is the first language for examples, data governance, annotation, and evaluation. It does not mean this alpha already ships a PT-BR-optimized checkpoint. The API and architecture remain language-neutral so the same evidence protocol can expand to English and other languages. A Portuguese translation of this README is available at [docs/README.pt-BR.md](docs/README.pt-BR.md).
 
 ## Current scope
 
@@ -41,8 +41,9 @@ Brazilian Portuguese is the first fixture language, while the API and architectu
 - fail-closed schema-cache keys with complete canonical schema bytes and revision axes
 - immutable, fail-closed calibration artifacts
 - local in-process runtime and CLI
+- opt-in research lanes for encoder acquisition, synthetic head training, human PT-BR calibration, and external controls
 
-Not included: model downloads, training, external datasets, dynamic labels, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation.
+Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
 ## Install and verify
 
