@@ -657,6 +657,8 @@ def test_packaging_inspection_rejects_zero_args_and_packet_basenames(
     assert inspect_wheel._forbidden_artifact("root/SPLIT-PLAN.JSON")
     assert inspect_wheel._forbidden_artifact("root/records.JSONL")
     assert inspect_wheel._forbidden_artifact("root/MODEL.SAFETENSORS")
+    assert inspect_wheel._forbidden_artifact("root/generated-report.json")
+    assert "saracura/research-trust-keys.v1.json" in inspect_wheel.PACKAGE_RESOURCES
 
 
 def _write_minimal_wheel(path: Path, *, corrupt_resource: str | None = None) -> None:
@@ -682,13 +684,16 @@ def _write_minimal_sdist(path: Path, *, corrupt_resource: str | None = None) -> 
         archive.addfile(info, io.BytesIO(readme))
 
 
-def test_sdist_packet_basename_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("basename", sorted(inspect_wheel.PACKET_BASENAMES))
+def test_sdist_packet_basename_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, basename: str
+) -> None:
     wheel_path = tmp_path / "simulated.whl"
     _write_minimal_wheel(wheel_path)
     archive_path = tmp_path / "simulated.tar.gz"
     payload = b"{}\n"
     with tarfile.open(archive_path, "w:gz") as archive:
-        info = tarfile.TarInfo("project/split-plan.json")
+        info = tarfile.TarInfo(f"project/{basename}")
         info.size = len(payload)
         archive.addfile(info, io.BytesIO(payload))
     monkeypatch.setattr(sys, "argv", ["inspect_wheel.py", str(wheel_path), str(archive_path)])

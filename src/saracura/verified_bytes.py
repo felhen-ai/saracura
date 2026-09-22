@@ -374,6 +374,59 @@ def _read_external_file(path: Path, *, maximum: int) -> bytes:
         os.close(directory)
 
 
+def read_verified_external_file(path: Path, *, maximum: int) -> bytes:
+    """Read one explicit 0600 external file through the descriptor boundary."""
+
+    return _read_external_file(path, maximum=maximum)
+
+
+def open_verified_directory(path: Path) -> int:
+    """Open one explicit owned 0700 directory through the no-follow walker.
+
+    The caller owns the returned descriptor and must close it.
+    """
+
+    descriptor, _ = _open_directory(path)
+    return descriptor
+
+
+def read_verified_directory(
+    path: Path, *, expected_files: Mapping[str, int]
+) -> Mapping[str, bytes]:
+    """Snapshot an exact 0700 capsule directory through one verified directory FD.
+
+    ``expected_files`` is a closed basename-to-maximum-byte ledger. Every
+    sibling is enumerated before and after reads, and each file is snapshotted
+    once by :func:`_read_regular_at` while proving descriptor identity.
+    """
+
+    if not expected_files or any(
+        not isinstance(name, str)
+        or not name
+        or "/" in name
+        or name in {".", ".."}
+        or not isinstance(maximum, int)
+        or isinstance(maximum, bool)
+        or maximum <= 0
+        for name, maximum in expected_files.items()
+    ):
+        raise VerifiedBytesError("verified directory ledger is invalid")
+    directory, _ = _open_directory(path)
+    expected_names = set(expected_files)
+    try:
+        if _entry_names(directory) != expected_names:
+            raise VerifiedBytesError("operator directory file set is invalid")
+        values = {
+            name: _read_regular_at(directory, name, maximum=maximum)
+            for name, maximum in expected_files.items()
+        }
+        if _entry_names(directory) != expected_names:
+            raise VerifiedBytesError("operator directory changed while being read")
+        return MappingProxyType(values)
+    finally:
+        os.close(directory)
+
+
 def _finite_json(value: object) -> bool:
     if value is None or isinstance(value, (str, bool, int)):
         return True

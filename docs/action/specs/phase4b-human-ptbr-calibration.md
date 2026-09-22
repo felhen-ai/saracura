@@ -154,10 +154,17 @@ Every contributor object has exactly:
 - `verified_at`: canonical UTC seconds;
 - `revoked`: literal `false`.
 
-The registry must cover every author, reviewer, adjudicator, and maintainer
-reference. Author, review, and adjudication records must repeat the matching
-identity and grant digests from this registry. A revoked, missing, conflicting,
-duplicate, or unreferenced contributor fails closed.
+The registry must cover every author, reviewer, and adjudicator reference.
+Phase 3A v1 author states repeat the author ID and identity-attestation digest,
+but their frozen closed schema cannot repeat a contribution-grant digest. For an
+author, this registry binds that ID to a valid `human_original_authoring`
+contribution grant, and the later packet receipt binds the complete registry
+digest. Reviews and adjudications still repeat their matching identity and
+review-grant digests from this registry. In unsigned intake, `verified_by` is an
+opaque, format-checked maintainer ID; the later signed packet receipt
+collectively authenticates it rather than resolving it individually during
+materialization. A revoked, missing, conflicting, duplicate, or unreferenced
+contributor fails closed.
 
 ### Blinded independent annotations and adjudication
 
