@@ -1,7 +1,8 @@
-"""Checkout-only registry and acquisition tools for Phase 4C.2a.
+"""Checkout-only Phase 4C.2 local-candidate tools.
 
-This package deliberately has no optional ML imports.  Model loaders are a
-later phase and must not become part of the installed runtime.
+Importing this package remains lightweight. Optional ML libraries are imported
+only by explicit loader, freeze, or run commands and never by the installed
+Saracura runtime.
 """
 
 from benchmarks.universal_local.registry import (

@@ -90,9 +90,9 @@ CANDIDATE_ORDER = (
 # value is therefore insufficient to make an unreviewed checkpoint pass.
 NEW_FIELD_TRUTH_DIGESTS = {
     "saracura-compiled": "54a034f615947e8ebe97fdd5cde93f67cf696f79d8054cabefe59cc28564421e",
-    "laya-multilingual": "3d794a6fe90cf975edbbe188ad5d6158598be6c345b50e471e411448491c51a7",
+    "laya-multilingual": "e38e61929050ff3f018c6cc688f9d02998966717aef776b3446ff9bb6031be6b",
     "von-option-marker": "52fce00bc144dc676fa86c31e5a99e64e74fa8aed7762cf125a227aa9f0e5c77",
-    "mdeberta-nli": "7d00b884dd1e132b7c93e0a7814b14e981a8656f8af9b33b21f8d9cbf855c2f9",
+    "mdeberta-nli": "bf1df5e9b3bea8efacaf76060de1eba7f9c88689e5ea8d81b0696fcb2e10798a",
     "qwen-system-one": "52fce00bc144dc676fa86c31e5a99e64e74fa8aed7762cf125a227aa9f0e5c77",
     "typesafe-jev": "5139a58a6f7dfed37add1aebf98c10555771195920f3ba0afec8376010dccbfa",
     "diffusiongemma-openjev": "f870d738f65e5bea5572fd466785262c3e3e0821afe30f9b0177decc83140712",
@@ -202,6 +202,168 @@ def _new_field_truth_digest(candidate: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _validate_conformance(candidate: dict[str, Any]) -> None:
+    state = candidate["conformance_state"]
+    vector = candidate["conformance_vector_sha256"]
+    if state == "pending" and vector is None:
+        return
+    if (
+        state != "source_contract_reviewed"
+        or not isinstance(vector, str)
+        or not HEX64.fullmatch(vector)
+    ):
+        raise ValueError("conformance state is invalid")
+    fixture = ROOT / "benchmarks" / "fixtures" / "universal-local-conformance.v1.json"
+    if not fixture.is_file() or hashlib.sha256(fixture.read_bytes()).hexdigest() != vector:
+        raise ValueError("conformance fixture digest mismatch")
+    try:
+        payload = _load_json(fixture.read_bytes())
+    except ValueError as error:
+        raise ValueError("conformance fixture is invalid") from error
+    if set(payload) != {"schema_version", "candidates"}:
+        raise ValueError("conformance fixture is invalid")
+    entries = payload["candidates"]
+    if payload["schema_version"] != "universal-local-conformance.v1" or not isinstance(
+        entries, list
+    ):
+        raise ValueError("conformance fixture is invalid")
+    if [entry.get("candidate_id") if isinstance(entry, dict) else None for entry in entries] != [
+        "laya-multilingual",
+        "mdeberta-nli",
+    ]:
+        raise ValueError("conformance fixture candidate set mismatch")
+    for entry in entries:
+        _validate_conformance_entry(entry)
+    matching = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("candidate_id") == candidate["id"]
+    ]
+    if (
+        len(matching) != 1
+        or matching[0].get("acquisition_contract_digest")
+        != candidate["acquisition_contract_digest"]
+    ):
+        raise ValueError("conformance fixture linkage mismatch")
+
+
+def _validate_conformance_entry(entry: Any) -> None:
+    fields = {
+        "candidate_id",
+        "acquisition_contract_digest",
+        "rendering",
+        "examples",
+        "output_schema",
+        "scoring",
+        "public_card_example",
+    }
+    if not isinstance(entry, dict) or set(entry) != fields:
+        raise ValueError("conformance fixture entry is not closed")
+    cid = entry["candidate_id"]
+    acquisition_digest = entry["acquisition_contract_digest"]
+    if (
+        cid not in ELIGIBLE
+        or not isinstance(acquisition_digest, str)
+        or not HEX64.fullmatch(acquisition_digest)
+    ):
+        raise ValueError("conformance fixture identity is invalid")
+    if (
+        entry["rendering"]
+        != ("laya_option_marker" if cid == "laya-multilingual" else "mdeberta_pairwise_nli")
+        or entry["output_schema"] != "uncalibrated_ranking_weights"
+        or entry["public_card_example"] != "PT-BR and English framing"
+    ):
+        raise ValueError("conformance fixture contract is invalid")
+    examples = entry["examples"]
+    if (
+        not isinstance(examples, list)
+        or not all(isinstance(item, dict) for item in examples)
+        or [item.get("locale") for item in examples] != ["pt-BR", "en"]
+    ):
+        raise ValueError("conformance fixture locale coverage is invalid")
+    for example in examples:
+        if cid == "laya-multilingual":
+            if set(example) != {"locale", "token_ids", "marker_positions", "tensor_shapes"}:
+                raise ValueError("Laya conformance example is not closed")
+            token_ids = example["token_ids"]
+            markers = example["marker_positions"]
+            shapes = example["tensor_shapes"]
+            if (
+                not isinstance(token_ids, list)
+                or not token_ids
+                or not all(isinstance(item, int) and item >= 0 for item in token_ids)
+                or not isinstance(markers, list)
+                or not markers
+                or not all(isinstance(item, int) and 0 <= item < len(token_ids) for item in markers)
+                or set(shapes)
+                != {
+                    "input_ids",
+                    "attention_mask",
+                    "marker_pos",
+                    "marker_mask",
+                    "qtype",
+                    "marker_logits",
+                    "ranking_weights",
+                }
+                or shapes["input_ids"] != [1, len(token_ids)]
+                or shapes["attention_mask"] != [1, len(token_ids)]
+                or shapes["marker_pos"] != [1, len(markers)]
+                or shapes["marker_mask"] != [1, len(markers)]
+                or shapes["qtype"] != [1]
+                or shapes["marker_logits"] != [1, len(markers)]
+                or shapes["ranking_weights"] != [len(markers)]
+            ):
+                raise ValueError("Laya conformance example is invalid")
+        else:
+            if set(example) != {"locale", "token_ids", "pair_positions", "tensor_shapes"}:
+                raise ValueError("NLI conformance example is not closed")
+            rows = example["token_ids"]
+            positions = example["pair_positions"]
+            shapes = example["tensor_shapes"]
+            if (
+                not isinstance(rows, list)
+                or len(rows) != 2
+                or not all(
+                    isinstance(row, list)
+                    and row
+                    and all(isinstance(item, int) and item >= 0 for item in row)
+                    for row in rows
+                )
+                or not isinstance(positions, list)
+                or len(positions) != 2
+                or not all(
+                    isinstance(bounds, list)
+                    and len(bounds) == 4
+                    and 0 < bounds[0] <= bounds[1] < bounds[2] <= bounds[3] < len(row)
+                    for bounds, row in zip(positions, rows, strict=True)
+                )
+                or set(shapes)
+                != {"input_ids", "attention_mask", "classification_logits", "ranking_weights"}
+                or shapes["input_ids"] != [[1, len(row)] for row in rows]
+                or shapes["attention_mask"] != [[1, len(row)] for row in rows]
+                or shapes["classification_logits"] != [2, 3]
+                or shapes["ranking_weights"] != [2]
+            ):
+                raise ValueError("NLI conformance example is invalid")
+    scoring = entry["scoring"]
+    expected_scoring = (
+        {
+            "input_marker_logits": [0, 1],
+            "rule": "marker_logits_softmax_over_choices",
+            "weights": [0.2689414214, 0.7310585786],
+        }
+        if cid == "laya-multilingual"
+        else {
+            "entailment_index": 0,
+            "input_classification_logits": [[0, 0, 0], [1.0986122887, 0, 0]],
+            "rule": "fp32_three_label_softmax_entailment_then_linear_normalization",
+            "weights": [0.3571428571, 0.6428571429],
+        }
+    )
+    if scoring != expected_scoring:
+        raise ValueError("conformance scoring example is invalid")
+
+
 def _validate_candidate(candidate: Any, v1_by_id: dict[str, dict[str, Any]]) -> Candidate:
     if not isinstance(candidate, dict) or set(candidate) != CANDIDATE_FIELDS:
         raise ValueError("candidate entry is not closed")
@@ -274,11 +436,7 @@ def _validate_candidate(candidate: Any, v1_by_id: dict[str, dict[str, Any]]) -> 
             raise ValueError("eligible acquisition digest is invalid")
         if acquisition_contract_digest(candidate) != candidate["acquisition_contract_digest"]:
             raise ValueError("acquisition contract digest mismatch")
-        if (
-            candidate["conformance_state"] != "pending"
-            or candidate["conformance_vector_sha256"] is not None
-        ):
-            raise ValueError("Phase 4C.2a requires pending conformance")
+        _validate_conformance(candidate)
         if candidate["architecture_attribution"] != "positive_compatibility_only":
             raise ValueError("eligible attribution is invalid")
         for key in (

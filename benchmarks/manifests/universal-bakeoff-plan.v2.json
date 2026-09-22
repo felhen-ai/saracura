@@ -1,0 +1,36 @@
+{
+  "schema_version": "universal-bakeoff-plan.v2",
+  "plan_id": "phase4c2-local-candidates",
+  "generator_revision": "phase4c.2-text-fixture-generator.v1",
+  "evidence_lane": "synthetic_research",
+  "candidate_registry_sha256": "b7fae06d959334a605ceb663d09728bb03c2095d632ccbc1d54bfd56c0469ac1",
+  "predecessor_plan_sha256": "535165cdf6eacc3bd73bafecaf2ef2c82050890d3525045667623177614be08d",
+  "dataset_artifact": null,
+  "remote_budget": {"requests": 0, "tokens": 0, "usd": 0},
+  "generator_contract": {
+    "reserved_labels": ["S", "B", "I", "D"],
+    "state_byte_profiles": {"short": [80, 240], "medium": [400, 900], "long": [1800, 2800]},
+    "choice_byte_profiles": {"short": [8, 40], "medium": [41, 96], "long": [97, 180]},
+    "sentence_banks": {
+      "support": {
+        "pt-BR": {"subject": ["Atualização do pedido", "Dúvida sobre atendimento"], "body": ["A pessoa relata uma dúvida objetiva sobre o andamento do atendimento e solicita uma orientação clara para o próximo passo.", "A solicitação precisa de contexto suficiente para orientar o acompanhamento por um canal seguro e compreensível."], "instruction": ["Escolha a orientação mais útil para esta solicitação.", "Escolha o próximo passo mais claro para este atendimento."], "description": ["Confirmar o prazo informado e orientar o acompanhamento pelo canal de suporte.", "Registrar o contexto mínimo e explicar como acompanhar a solicitação."]},
+        "en": {"subject": ["Order update", "Support follow-up"], "body": ["The person asks for a clear next step after receiving an incomplete support update about the request.", "The request needs enough context to explain a safe and understandable follow-up path."], "instruction": ["Choose the most useful guidance for this request.", "Choose the clearest next step for this support request."], "description": ["Confirm the stated timeline and explain how to follow the support case.", "Record the necessary context and explain the follow-up path."]}
+      },
+      "inbox_triage": {
+        "pt-BR": {"subject": ["Mensagem recebida na caixa", "Novo pedido de triagem"], "body": ["A equipe precisa classificar uma mensagem nova com contexto suficiente para encaminhar a análise sem revelar dados pessoais.", "A caixa recebeu uma solicitação que exige encaminhamento objetivo e registro apenas do contexto necessário."], "instruction": ["Escolha o encaminhamento mais adequado para esta mensagem.", "Escolha a fila responsável por analisar esta solicitação."], "description": ["Encaminhar para a fila responsável e registrar o contexto mínimo necessário.", "Classificar a mensagem e orientar a próxima análise pela equipe responsável."]},
+        "en": {"subject": ["New inbox message", "New triage request"], "body": ["The team needs to classify a new message with enough context to route a review without exposing personal details.", "The inbox received a request that needs objective routing with only the necessary context."], "instruction": ["Choose the most appropriate routing for this message.", "Choose the team responsible for reviewing this request."], "description": ["Route the message to the responsible queue with only the necessary context.", "Classify the message and route the next review to the responsible team."]}
+      }
+    }
+  },
+  "scenarios": [
+    {"id":"scenario-01","locale":"pt-BR","domain":"support","novelty":"seen_taxonomy","N":1,"Q":1,"K":5,"input_mode":"self_authored","input_seed":"phase4c2-support-ptbr-01","state_length_profile":"short","choice_length_profile":"short"},
+    {"id":"scenario-02","locale":"pt-BR","domain":"support","novelty":"seen_taxonomy","N":8,"Q":1,"K":5,"input_mode":"rule_generated","input_seed":"phase4c2-support-ptbr-02","state_length_profile":"medium","choice_length_profile":"short"},
+    {"id":"scenario-03","locale":"pt-BR","domain":"support","novelty":"unseen_taxonomy","N":1,"Q":10,"K":5,"input_mode":"rule_generated","input_seed":"phase4c2-support-ptbr-03","state_length_profile":"medium","choice_length_profile":"medium"},
+    {"id":"scenario-04","locale":"pt-BR","domain":"inbox_triage","novelty":"unseen_taxonomy","N":8,"Q":10,"K":20,"input_mode":"rule_generated","input_seed":"phase4c2-inbox-ptbr-04","state_length_profile":"medium","choice_length_profile":"medium"},
+    {"id":"scenario-05","locale":"en","domain":"support","novelty":"seen_taxonomy","N":1,"Q":1,"K":5,"input_mode":"self_authored","input_seed":"phase4c2-support-en-05","state_length_profile":"short","choice_length_profile":"short"},
+    {"id":"scenario-06","locale":"pt-BR","domain":"support","novelty":"seen_taxonomy","N":32,"Q":1,"K":2,"input_mode":"rule_generated","input_seed":"phase4c2-support-ptbr-06","state_length_profile":"long","choice_length_profile":"medium"},
+    {"id":"scenario-07","locale":"pt-BR","domain":"inbox_triage","novelty":"unseen_taxonomy","N":1,"Q":50,"K":20,"input_mode":"rule_generated","input_seed":"phase4c2-inbox-ptbr-07","state_length_profile":"long","choice_length_profile":"long"},
+    {"id":"scenario-08","locale":"pt-BR","domain":"support","novelty":"seen_taxonomy","N":1,"Q":1,"K":77,"input_mode":"rule_generated","input_seed":"phase4c2-support-ptbr-08","state_length_profile":"medium","choice_length_profile":"long"}
+  ],
+  "report_policy": {"status":"real_local_candidate","metric_authority":"measured_systems_only","conclusion_authority":"systems_compatibility_only","allowed_metrics":["candidate_id","model_id","model_revision","acquisition_contract_digest","conformance_vector_sha256","conformance_state","architecture_attribution","plan_sha256","python_version","torch_version","transformers_version","tokenizers_version","safetensors_version","os_version","architecture","device_type","execution_dtype","source_weight_dtypes","process_threads","attention_implementation","mps_fallback_enabled","microbatch_size","load_duration_ms","warmup_duration_ms","latency_samples_ms","latency_p50_ms","latency_p95_ms","decisions_per_second","peak_rss_bytes","mps_current_allocated_bytes","mps_driver_allocated_bytes","input_token_count_min","input_token_count_max","state_tokens_original","state_tokens_retained","truncated_state_tokens","choice_tokens_original","choice_tokens_retained","truncated_choice_tokens","supported_count","supported_with_state_truncation_count","supported_with_choice_truncation_count","supported_with_state_and_choice_truncation_count","unsupported_count","failed_count","deterministic_repeat_match","comparison_eligible","error_code"]}
+}

@@ -325,6 +325,27 @@ class VerificationReceipt:
             raise ValueError("verified file changed while reading")
         return payload
 
+    def descriptor_path(self, path: str) -> str:
+        """Return a live descriptor-only handle usable by mmap-capable readers.
+
+        Consumers must call ``assert_live`` before and after using this handle.
+        It deliberately does not disclose a snapshot pathname or permit cache
+        rediscovery.  Both macOS and Linux expose an open descriptor through
+        this kernel-owned namespace.
+        """
+        self.assert_live()
+        if path not in self._file_fds:
+            raise ValueError("file is not available to snapshot consumers")
+        return f"/dev/fd/{self._file_fds[path]}"
+
+    def descriptor_free_bytes(self, path: str) -> int:
+        """Return free bytes for the filesystem backing a verified descriptor."""
+        self.assert_live()
+        if path not in self._file_fds:
+            raise ValueError("file is not available to snapshot consumers")
+        filesystem = os.fstatvfs(self._file_fds[path])
+        return int(filesystem.f_bavail * filesystem.f_frsize)
+
     def summary(self) -> dict[str, Any]:
         """Return a non-authoritative, path-free CLI summary while custody is live."""
         self.assert_live()
