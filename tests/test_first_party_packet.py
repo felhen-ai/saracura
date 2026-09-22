@@ -659,13 +659,27 @@ def test_packaging_inspection_rejects_zero_args_and_packet_basenames(
     assert inspect_wheel._forbidden_artifact("root/MODEL.SAFETENSORS")
 
 
-def _write_minimal_wheel(path: Path) -> None:
+def _write_minimal_wheel(path: Path, *, corrupt_resource: str | None = None) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("saracura/__init__.py", "")
-        archive.writestr("saracura/encoder-candidates.v1.json", "{}")
+        for name, value in inspect_wheel._package_resource_bytes().items():
+            archive.writestr(name, b"incorrect" if name == corrupt_resource else value)
         archive.writestr("saracura-0.dist-info/METADATA", "")
         archive.writestr("saracura-0.dist-info/WHEEL", "")
         archive.writestr("saracura-0.dist-info/RECORD", "")
+
+
+def _write_minimal_sdist(path: Path, *, corrupt_resource: str | None = None) -> None:
+    with tarfile.open(path, "w:gz") as archive:
+        for name, value in inspect_wheel._package_resource_bytes().items():
+            payload = b"incorrect" if name == corrupt_resource else value
+            info = tarfile.TarInfo(f"project/src/{name}")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+        readme = b"source"
+        info = tarfile.TarInfo("project/README.md")
+        info.size = len(readme)
+        archive.addfile(info, io.BytesIO(readme))
 
 
 def test_sdist_packet_basename_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -688,10 +702,25 @@ def test_clean_minimal_artifacts_pass_inspection(
     wheel_path = tmp_path / "simulated.whl"
     _write_minimal_wheel(wheel_path)
     archive_path = tmp_path / "simulated.tar.gz"
-    payload = b"source"
-    with tarfile.open(archive_path, "w:gz") as archive:
-        info = tarfile.TarInfo("project/README.md")
-        info.size = len(payload)
-        archive.addfile(info, io.BytesIO(payload))
+    _write_minimal_sdist(archive_path)
     monkeypatch.setattr(sys, "argv", ["inspect_wheel.py", str(wheel_path), str(archive_path)])
     assert inspect_wheel.main() == 0
+
+
+@pytest.mark.parametrize(
+    ("container", "resource"),
+    (
+        *(("wheel", resource) for resource in sorted(inspect_wheel.PACKAGE_RESOURCES)),
+        *(("sdist", resource) for resource in sorted(inspect_wheel.PACKAGE_RESOURCES)),
+    ),
+)
+def test_package_resource_bytes_are_exact_in_wheel_and_sdist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, container: str, resource: str
+) -> None:
+    wheel_path = tmp_path / "simulated.whl"
+    _write_minimal_wheel(wheel_path, corrupt_resource=resource if container == "wheel" else None)
+    archive_path = tmp_path / "simulated.tar.gz"
+    _write_minimal_sdist(archive_path, corrupt_resource=resource if container == "sdist" else None)
+    monkeypatch.setattr(sys, "argv", ["inspect_wheel.py", str(wheel_path), str(archive_path)])
+    with pytest.raises(SystemExit, match="package resource bytes"):
+        inspect_wheel.main()

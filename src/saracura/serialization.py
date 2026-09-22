@@ -92,6 +92,12 @@ def serialize_question(question: ChoiceQuestion) -> bytes:
     return frame_segments(*segments)
 
 
+def ordered_question_bytes(question: ChoiceQuestion) -> bytes:
+    """Serialize a closed question while preserving its declared criterion order."""
+
+    return canonical_json_bytes(cast(JsonValue, question.model_dump(mode="json")))
+
+
 def canonical_request_bytes(request: DecisionRequest) -> bytes:
     """Return byte-identical canonical request JSON for evidence and fixture tests."""
 

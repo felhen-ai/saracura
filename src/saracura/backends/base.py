@@ -9,6 +9,18 @@ from saracura.contracts.models import ChoiceQuestion, ModelReference
 
 
 @dataclass(frozen=True, slots=True)
+class BackendCalibrationMetadata:
+    """The model/runtime axes that make a calibration reusable."""
+
+    architecture_config_sha256: str
+    tokenizer_revision: str
+    truncation_policy_id: str
+    precision: str
+    quantization: str
+    output_transform: str
+
+
+@dataclass(frozen=True, slots=True)
 class BackendCapabilities:
     decision_types: frozenset[str]
     max_questions: int
@@ -21,6 +33,8 @@ class BackendCapabilities:
 @dataclass(frozen=True, slots=True)
 class EncodedState:
     payload: bytes
+    input_tokens: int = 0
+    opaque: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +49,9 @@ class Backend(Protocol):
 
     @property
     def model(self) -> ModelReference: ...
+
+    @property
+    def calibration_metadata(self) -> BackendCalibrationMetadata: ...
 
     def encode_state(self, state_payload: bytes) -> EncodedState: ...
 

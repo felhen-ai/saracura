@@ -1385,6 +1385,13 @@ encoder-eval = [
     { name = "torch" },
     { name = "transformers" },
 ]
+local-minilm = [
+    { name = "platformdirs" },
+    { name = "psutil" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "transformers" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1396,14 +1403,19 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "platformdirs", marker = "extra == 'encoder-eval'", specifier = ">=4.3,<5" },
+    { name = "platformdirs", marker = "extra == 'local-minilm'", specifier = ">=4.3,<5" },
     { name = "psutil", marker = "extra == 'encoder-eval'", specifier = ">=6.1,<7" },
+    { name = "psutil", marker = "extra == 'local-minilm'", specifier = ">=6.1,<7" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "safetensors", marker = "extra == 'encoder-eval'", specifier = ">=0.5,<1" },
+    { name = "safetensors", marker = "extra == 'local-minilm'", specifier = ">=0.5,<1" },
     { name = "torch", marker = "extra == 'encoder-eval'", specifier = ">=2.5,<3" },
+    { name = "torch", marker = "extra == 'local-minilm'", specifier = ">=2.5,<3" },
     { name = "transformers", marker = "extra == 'encoder-eval'", specifier = ">=4.47,<5" },
+    { name = "transformers", marker = "extra == 'local-minilm'", specifier = ">=4.47,<5" },
 ]
-provides-extras = ["encoder-eval"]
+provides-extras = ["local-minilm", "encoder-eval"]
 
 [package.metadata.requires-dev]
 dev = [

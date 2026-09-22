@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -9,13 +10,20 @@ from typing import cast
 
 from pydantic import JsonValue, ValidationError
 
-from saracura.calibration.models import CalibrationArtifact, CalibrationContext
+from saracura.calibration.models import (
+    AnyCalibrationArtifact,
+    CalibrationArtifact,
+    CalibrationContext,
+    IdentityCalibrationArtifact,
+    IdentityParameters,
+    identity_calibration_id,
+)
 from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.serialization import canonical_json_bytes
 
 
 def _validate_compatibility(
-    artifact: CalibrationArtifact,
+    artifact: AnyCalibrationArtifact,
     expected: CalibrationContext,
 ) -> None:
     actual = artifact.context().model_dump(mode="json")
@@ -30,7 +38,28 @@ def _validate_compatibility(
         )
 
 
-def load_calibration(path: Path, expected: CalibrationContext) -> CalibrationArtifact:
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate calibration JSON key")
+        result[key] = value
+    return result
+
+
+def _parse_artifact(raw: bytes) -> AnyCalibrationArtifact:
+    payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    if not isinstance(payload, dict):
+        raise ValueError("calibration root must be an object")
+    method = payload.get("method")
+    if method == "temperature-scaling":
+        return CalibrationArtifact.model_validate(payload)
+    if method == "identity":
+        return IdentityCalibrationArtifact.model_validate(payload)
+    raise ValueError("calibration method is not supported")
+
+
+def load_calibration(path: Path, expected: CalibrationContext) -> AnyCalibrationArtifact:
     try:
         raw = path.read_bytes()
     except FileNotFoundError as error:
@@ -41,8 +70,8 @@ def load_calibration(path: Path, expected: CalibrationContext) -> CalibrationArt
         ) from error
 
     try:
-        artifact = CalibrationArtifact.model_validate_json(raw)
-    except (ValidationError, ValueError) as error:
+        artifact = _parse_artifact(raw)
+    except (ValidationError, ValueError, json.JSONDecodeError) as error:
         details: dict[str, JsonValue] = {}
         if isinstance(error, ValidationError):
             violations = [
@@ -69,7 +98,7 @@ def load_calibration(path: Path, expected: CalibrationContext) -> CalibrationArt
 
 def write_calibration_atomic(
     path: Path,
-    artifact: CalibrationArtifact,
+    artifact: AnyCalibrationArtifact,
 ) -> None:
     """Create a canonical artifact atomically and never replace an existing revision."""
 
@@ -99,3 +128,30 @@ def write_calibration_atomic(
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def create_identity_calibration(
+    destination: Path,
+    context: CalibrationContext,
+    created_at: str,
+) -> IdentityCalibrationArtifact:
+    """Create the immutable no-fit identity artifact at a new destination."""
+
+    artifact = IdentityCalibrationArtifact(
+        **context.model_dump(mode="python"),
+        schema_version=1,
+        calibration_id=identity_calibration_id(context),
+        status="fixture_only",
+        method="identity",
+        parameters=IdentityParameters(temperature=1.0),
+        fit_sample_count=0,
+        evaluation_sample_count=0,
+        fit_independent_state_count=0,
+        evaluation_independent_state_count=0,
+        minimum_independent_state_count=0,
+        metrics_before={},
+        metrics_after={},
+        created_at=created_at,
+    )
+    write_calibration_atomic(destination, artifact)
+    return artifact

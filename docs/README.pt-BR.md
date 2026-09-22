@@ -133,6 +133,27 @@ imutável. O `mmbert-base` fica bloqueado porque a revisão analisada publica
 do encoder: não medem qualidade da decisão, head treinado, calibração, latência
 ponta a ponta ou prontidão para automação.
 
+## Roteamento MiniLM local opt-in da Fase 4A
+
+A Fase 4A pode executar um único head congelado, sintético e de cinco labels
+para roteamento de suporte quando o operador fornece explicitamente um snapshot
+local já verificado, o manifesto de treino selado e o checkpoint safetensors.
+Não há download, descoberta por cache, variável de ambiente, requisição ou
+serviço de rede. A instalação padrão não muda; o opt-in é explícito:
+
+    uv sync --locked --dev --extra local-minilm
+    uv run saracura describe-backend --backend minilm-routing \
+      --encoder-snapshot <snapshot-verificado> \
+      --training-manifest <training-manifest.json> \
+      --checkpoint <checkpoint.safetensors> --device cpu
+
+O loader verifica cada byte fornecido por descritores locais, constrói BERT e o
+tokenizer diretamente desses bytes e vincula a ABI de runtime/dispositivo à
+revisão imutável do modelo. O artefato de identidade da Fase 4A continua
+fixture_only: não tem ajuste, avaliação, limiar ou autorização de automação.
+MPS da Apple é uma escolha explícita do operador e não tem fallback automático
+para CPU.
+
 ## Gate de dados, licença e privacidade da Fase 2C
 
 Antes de criar qualquer pacote de treino, o repositório valida o registry de

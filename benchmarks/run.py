@@ -33,7 +33,13 @@ from benchmarks.io import write_result
 from benchmarks.validate_manifests import validate_manifest
 from saracura import __version__
 from saracura.backends import DeterministicFixtureBackend
-from saracura.backends.base import Backend, BackendCapabilities, EncodedState, ScoredChoice
+from saracura.backends.base import (
+    Backend,
+    BackendCalibrationMetadata,
+    BackendCapabilities,
+    EncodedState,
+    ScoredChoice,
+)
 from saracura.backends.fixture import (
     FIXTURE_BACKEND_ID,
     FIXTURE_BACKEND_REVISION,
@@ -69,6 +75,10 @@ class CountingBackend:
     @property
     def model(self) -> ModelReference:
         return self._backend.model
+
+    @property
+    def calibration_metadata(self) -> BackendCalibrationMetadata:
+        return self._backend.calibration_metadata
 
     def encode_state(self, state_payload: bytes) -> EncodedState:
         self.encode_calls += 1

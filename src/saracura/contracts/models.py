@@ -120,9 +120,17 @@ def parse_request_json(raw: bytes | str) -> DecisionRequest:
 
     from saracura.contracts.errors import ErrorCode, SaracuraError
 
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON object key")
+            value[key] = child
+        return value
+
     try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        payload = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
         raise SaracuraError(
             ErrorCode.REQUEST_INVALID,
             "Request is not valid UTF-8 JSON.",
