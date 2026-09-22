@@ -12,3 +12,7 @@ description = "Public SHA-256 digest of the self-authored MiniLM conformance vec
 targetRules = ["generic-api-key"]
 regexTarget = "match"
 regexes = ['''240d6a4c4bba8b4a69321cd32586369834d3abb5691dd273adb1cddc07256664''']
+
+[[allowlists]]
+description = "Pytest cache contains generated node IDs, not source material"
+paths = ['''(^|/)\.pytest_cache/''']

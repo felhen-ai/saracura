@@ -18,10 +18,13 @@ from saracura.backends.fixture import (
     FIXTURE_TRUNCATION_POLICY,
     DeterministicFixtureBackend,
 )
+from saracura.calibration.io import _verify_research_artifact
 from saracura.calibration.models import (
     AnyCalibrationArtifact,
     CalibrationContext,
     CalibrationDatasetProfile,
+    ResearchCalibrationArtifact,
+    revalidate_calibration_artifact,
 )
 from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.contracts.models import (
@@ -298,6 +301,21 @@ class DecisionEngine:
                     "No calibration artifact is registered for this question.",
                     f"/questions/{question.id}",
                 )
+            try:
+                # Never choose a lane from a mutable Python instance.  Pydantic
+                # ``model_copy(update=...)`` bypasses validators, so first
+                # round-trip every registered artifact through the closed union.
+                artifact = revalidate_calibration_artifact(artifact)
+                if isinstance(artifact, ResearchCalibrationArtifact):
+                    # Never trust an in-memory marker: verify the exact signed
+                    # receipt and reconstructed candidate at every v2 use.
+                    _verify_research_artifact(artifact)
+            except ValueError as error:
+                raise SaracuraError(
+                    ErrorCode.CALIBRATION_INCOMPATIBLE,
+                    "Calibration artifact failed schema validation.",
+                    f"/questions/{question.id}/calibration",
+                ) from error
             profile = self._calibration_profiles.get(question.id)
             expected = calibration_context(
                 request,

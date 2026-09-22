@@ -10,6 +10,7 @@ import os
 import platform
 import sys
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -41,6 +42,8 @@ from saracura.serialization import (
 from saracura.verified_bytes import (
     VerifiedMiniLMBytes,
     load_verified_minilm_bytes,
+    package_registry_sha256,
+    read_verified_minilm_snapshot,
 )
 
 MINILM_MODEL_ID: Final = "saracura-minilm-routing"
@@ -86,8 +89,9 @@ class MiniLMRoutingBackend:
         self,
         *,
         encoder_snapshot: Path,
-        training_manifest: Path,
-        checkpoint: Path,
+        training_manifest: Path | None = None,
+        checkpoint: Path | None = None,
+        training_capsule: Path | None = None,
         device: Literal["mps", "cpu"],
     ) -> None:
         self._device = device
@@ -96,7 +100,9 @@ class MiniLMRoutingBackend:
                 encoder_snapshot=encoder_snapshot,
                 training_manifest=training_manifest,
                 checkpoint=checkpoint,
+                training_capsule=training_capsule,
             )
+            self._verified_training_manifest = verified.training_manifest
             self._load_components(verified)
             self._architecture_descriptor = self._architecture_descriptor_for(verified)
             architecture_sha256 = hashlib.sha256(
@@ -214,7 +220,7 @@ class MiniLMRoutingBackend:
             raw_scores=dict(zip(MINILM_ROUTING_LABELS, logits, strict=True)),
         )
 
-    def _load_components(self, verified: VerifiedMiniLMBytes) -> None:
+    def _load_encoder_components(self, snapshot: Mapping[str, bytes]) -> None:
         try:
             safetensors = importlib.import_module("safetensors")
             safetensors_torch = importlib.import_module("safetensors.torch")
@@ -232,10 +238,10 @@ class MiniLMRoutingBackend:
         self._AddedToken: Any = transformers.AddedToken
         self._require_device()
 
-        config = self._parse_config(verified.snapshot["config.json"])
-        tokenizer_config = self._parse_tokenizer_config(verified.snapshot["tokenizer_config.json"])
-        special_tokens = self._parse_special_tokens(verified.snapshot["special_tokens_map.json"])
-        self._parse_tokenizer_json(verified.snapshot["tokenizer.json"])
+        config = self._parse_config(snapshot["config.json"])
+        tokenizer_config = self._parse_tokenizer_config(snapshot["tokenizer_config.json"])
+        special_tokens = self._parse_special_tokens(snapshot["special_tokens_map.json"])
+        self._parse_tokenizer_json(snapshot["tokenizer.json"])
         if config["model_type"] != "bert" or config["hidden_size"] != 384:
             raise ValueError("encoder configuration does not match the reviewed MiniLM")
         if tokenizer_config.get("tokenizer_class") != "PreTrainedTokenizerFast":
@@ -247,7 +253,7 @@ class MiniLMRoutingBackend:
         if model_config.model_type != "bert" or model_config.hidden_size != 384:
             raise ValueError("constructed encoder configuration is incompatible")
         encoder = self._BertModel(model_config)
-        state = self._safetensors_load(verified.snapshot["model.safetensors"])
+        state = self._safetensors_load(snapshot["model.safetensors"])
         expected_state = encoder.state_dict()
         position_ids = state.pop("embeddings.position_ids", None)
         expected_position_ids = torch.arange(
@@ -274,7 +280,7 @@ class MiniLMRoutingBackend:
         encoder.load_state_dict(state, strict=True)
 
         tokenizer_object = self._tokenizers.Tokenizer.from_str(
-            verified.snapshot["tokenizer.json"].decode("utf-8", "strict")
+            snapshot["tokenizer.json"].decode("utf-8", "strict")
         )
         mask = self._AddedToken(
             "<mask>",
@@ -316,6 +322,12 @@ class MiniLMRoutingBackend:
         ):
             raise ValueError("constructed tokenizer is incompatible")
 
+        self._encoder: Any = encoder.to(self._device).eval()
+        self._tokenizer: Any = tokenizer
+
+    def _load_components(self, verified: VerifiedMiniLMBytes) -> None:
+        self._load_encoder_components(verified.snapshot)
+        torch = self._torch
         head_state = self._safetensors_load(verified.checkpoint_bytes)
         if set(head_state) != {"weight", "bias"}:
             raise ValueError("routing head safetensors key set is incompatible")
@@ -330,9 +342,6 @@ class MiniLMRoutingBackend:
                 raise ValueError("routing head tensor is incompatible")
         head = torch.nn.Linear(384, 5, device="cpu")
         head.load_state_dict(head_state, strict=True)
-        encoder = encoder.to(self._device).eval()
-        self._encoder: Any = encoder
-        self._tokenizer: Any = tokenizer
         self._head: Any = head.eval()
 
     def _require_device(self) -> None:
@@ -535,8 +544,22 @@ class MiniLMRoutingBackend:
         return values
 
     def _embed(self, tokens: dict[str, Any]) -> Any:
+        embedding = self._embed_batch(tokens)
+        if tuple(embedding.shape) != (1, 384):
+            raise SaracuraError(
+                ErrorCode.BACKEND_UNAVAILABLE,
+                "MiniLM embedding is incompatible.",
+                "/model",
+            )
+        return embedding
+
+    def _embed_batch(self, tokens: dict[str, Any]) -> Any:
         attention = tokens["attention_mask"]
-        if int(attention.sum().item()) <= 0:
+        if (
+            attention.ndim != 2
+            or attention.shape[0] <= 0
+            or bool((attention.sum(dim=1) <= 0).any().item())
+        ):
             raise SaracuraError(
                 ErrorCode.BACKEND_UNAVAILABLE,
                 "MiniLM tokenizer produced an empty attention mask.",
@@ -556,8 +579,11 @@ class MiniLMRoutingBackend:
                 mask = tokens["attention_mask"].to(dtype=self._torch.float32).unsqueeze(-1)
                 embedding = (hidden * mask).sum(dim=1) / mask.sum(dim=1)
         embedding = embedding.detach().to(device="cpu", dtype=self._torch.float32).contiguous()
-        if tuple(embedding.shape) != (1, 384) or not bool(
-            self._torch.isfinite(embedding).all().item()
+        if (
+            embedding.ndim != 2
+            or embedding.shape[0] <= 0
+            or tuple(embedding.shape[1:]) != (384,)
+            or not bool(self._torch.isfinite(embedding).all().item())
         ):
             raise SaracuraError(
                 ErrorCode.BACKEND_UNAVAILABLE,
@@ -617,7 +643,31 @@ class MiniLMRoutingBackend:
         }
         if set(value) != expected_keys or value.get("schema") != "minilm-conformance.v1":
             raise ValueError("MiniLM conformance resource shape is invalid")
-        return _conformance_from_resource(value, device=self._device)
+        vector = _conformance_from_resource(value, device=self._device)
+        manifest = getattr(self, "_verified_training_manifest", None)
+        if (
+            isinstance(manifest, Mapping)
+            and manifest.get("schema_version") == "human-training-manifest.v1"
+        ):
+            serving = manifest["serving_conformance"]
+            logits = serving["mps_logits"] if self._device == "mps" else serving["cpu_logits"]
+            logits_digest = (
+                serving["mps_logits_sha256"]
+                if self._device == "mps"
+                else serving["cpu_logits_sha256"]
+            )
+            vector = _ConformanceVector(
+                vector.text,
+                vector.input_ids,
+                vector.attention_mask,
+                vector.token_type_ids,
+                serving["token_payload_sha256"],
+                logits,
+                logits_digest,
+                serving["comparison"]["rtol"],
+                serving["comparison"]["atol"],
+            )
+        return vector
 
     def _architecture_descriptor_for(self, verified: VerifiedMiniLMBytes) -> dict[str, JsonValue]:
         conformance_bytes = resources.files("saracura").joinpath(_CONFORMANCE_FILE).read_bytes()
@@ -718,6 +768,179 @@ class MiniLMRoutingBackend:
             "execution_path": self.execution_path,
         }
         return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
+def _verified_encoder_runtime(
+    encoder_snapshot: Path, device: Literal["cpu", "mps"]
+) -> MiniLMRoutingBackend:
+    """Construct only the reviewed encoder from a single snapshot of explicit bytes."""
+
+    _candidate, snapshot = read_verified_minilm_snapshot(encoder_snapshot)
+    return _encoder_runtime_from_snapshot(snapshot, device)
+
+
+def _encoder_runtime_from_snapshot(
+    snapshot: Mapping[str, bytes], device: Literal["cpu", "mps"]
+) -> MiniLMRoutingBackend:
+    """Build components only from already-snapshotted reviewed bytes."""
+
+    runtime = object.__new__(MiniLMRoutingBackend)
+    runtime._device = device
+    runtime._load_encoder_components(snapshot)
+    return runtime
+
+
+def _tokens_for_texts(runtime: MiniLMRoutingBackend, texts: list[str]) -> dict[str, Any]:
+    tokens = runtime._tokenizer(
+        texts,
+        padding=True,
+        truncation=True,
+        max_length=128,
+        return_tensors="pt",
+    )
+    expected = {"input_ids", "token_type_ids", "attention_mask"}
+    if set(tokens) != expected:
+        raise ValueError("MiniLM tokenizer output is incompatible")
+    values = {name: tokens[name] for name in expected}
+    if any(
+        value.device.type != "cpu"
+        or value.ndim != 2
+        or value.shape[0] != len(texts)
+        or value.dtype != runtime._torch.long
+        for value in values.values()
+    ):
+        raise ValueError("MiniLM tokenizer output is incompatible")
+    return values
+
+
+def extract_verified_minilm_embeddings(
+    *,
+    encoder_snapshot: Path,
+    texts: list[str],
+    device: Literal["cpu", "mps"],
+    batch_size: int,
+) -> Any:
+    """Run exact Phase 4A pooling from package-snapshotted bytes in batches of 32."""
+
+    if (
+        device != "mps"
+        or batch_size != 32
+        or not texts
+        or any(not isinstance(text, str) for text in texts)
+    ):
+        raise ValueError("human extraction contract")
+    runtime = _verified_encoder_runtime(encoder_snapshot, device)
+    chunks: list[Any] = []
+    for offset in range(0, len(texts), batch_size):
+        batch = texts[offset : offset + batch_size]
+        if not batch or len(batch) > batch_size:
+            raise ValueError("human extraction batch contract")
+        chunks.append(runtime._embed_batch(_tokens_for_texts(runtime, batch)))
+    result = runtime._torch.cat(chunks, dim=0).to(device="cpu", dtype=runtime._torch.float32)
+    if tuple(result.shape) != (len(texts), 384) or not bool(
+        runtime._torch.isfinite(result).all().item()
+    ):
+        raise ValueError("human extraction output")
+    return result.contiguous()
+
+
+def _human_head(checkpoint: bytes, runtime: MiniLMRoutingBackend) -> Any:
+    state = runtime._safetensors_load(checkpoint)
+    if set(state) != {"weight", "bias"}:
+        raise ValueError("human checkpoint tensor set")
+    expected = (("weight", (5, 384)), ("bias", (5,)))
+    for name, shape in expected:
+        value = state[name]
+        if (
+            not isinstance(value, runtime._torch.Tensor)
+            or tuple(value.shape) != shape
+            or value.dtype != runtime._torch.float32
+            or not bool(runtime._torch.isfinite(value).all().item())
+        ):
+            raise ValueError("human checkpoint tensor contract")
+    head = runtime._torch.nn.Linear(384, 5, device="cpu")
+    head.load_state_dict(state, strict=True)
+    return head.eval()
+
+
+def _human_conformance_on(
+    snapshot: Mapping[str, bytes], checkpoint: bytes, device: Literal["cpu", "mps"]
+) -> tuple[dict[str, Any], list[float]]:
+    runtime = _encoder_runtime_from_snapshot(snapshot, device)
+    raw = resources.files("saracura").joinpath(_CONFORMANCE_FILE).read_bytes()
+    value = MiniLMRoutingBackend._parse_json(raw)
+    vector = _conformance_from_resource(value, device=device)
+    tokens = _tokens_for_texts(runtime, [vector.text])
+    payload = {
+        "input_ids": tokens["input_ids"].tolist(),
+        "attention_mask": tokens["attention_mask"].tolist(),
+        "token_type_ids": tokens["token_type_ids"].tolist(),
+    }
+    if payload != {
+        "input_ids": vector.input_ids,
+        "attention_mask": vector.attention_mask,
+        "token_type_ids": vector.token_type_ids,
+    }:
+        raise ValueError("human tokenizer conformance")
+    head = _human_head(checkpoint, runtime)
+    with runtime._torch.inference_mode():
+        logits = head(runtime._embed_batch(tokens))[0].detach().cpu()
+    if tuple(logits.shape) != (5,) or not bool(runtime._torch.isfinite(logits).all().item()):
+        raise ValueError("human conformance logits")
+    return payload, [float(item) for item in logits.tolist()]
+
+
+def _assert_human_conformance_snapshot_binding(
+    candidate: Any, expected_encoder: Mapping[str, Any]
+) -> None:
+    """Bind the explicit Phase 4A snapshot to the sealed embedding manifest."""
+
+    if dict(expected_encoder) != {
+        "candidate": candidate.id,
+        "revision": candidate.revision,
+        "registry_sha256": package_registry_sha256(),
+        "device": "mps",
+        "frozen": True,
+    }:
+        raise ValueError("human conformance snapshot binding")
+
+
+def human_checkpoint_conformance(
+    *, encoder_snapshot: Path, checkpoint: bytes, expected_encoder: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Produce checkpoint-specific CPU/MPS conformance evidence from real logits."""
+
+    candidate, snapshot = read_verified_minilm_snapshot(encoder_snapshot)
+    _assert_human_conformance_snapshot_binding(candidate, expected_encoder)
+    cpu_payload, cpu_logits = _human_conformance_on(snapshot, checkpoint, "cpu")
+    mps_payload, mps_logits = _human_conformance_on(snapshot, checkpoint, "mps")
+    if cpu_payload != mps_payload or not any(cpu_logits) or not any(mps_logits):
+        raise ValueError("human conformance sentinel")
+    try:
+        torch = importlib.import_module("torch")
+        torch.testing.assert_close(
+            torch.tensor(cpu_logits, dtype=torch.float32),
+            torch.tensor(mps_logits, dtype=torch.float32),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+    except AssertionError as exc:
+        raise ValueError("human conformance equivalence") from exc
+    payload_raw = canonical_json_bytes(cast(JsonValue, cpu_payload))
+    return {
+        "schema": "human-minilm-conformance.v1",
+        "token_payload_sha256": hashlib.sha256(payload_raw).hexdigest(),
+        "labels": list(MINILM_ROUTING_LABELS),
+        "cpu_logits": cpu_logits,
+        "mps_logits": mps_logits,
+        "cpu_logits_sha256": hashlib.sha256(
+            canonical_json_bytes(cast(JsonValue, cpu_logits))
+        ).hexdigest(),
+        "mps_logits_sha256": hashlib.sha256(
+            canonical_json_bytes(cast(JsonValue, mps_logits))
+        ).hexdigest(),
+        "comparison": {"rtol": 0.00001, "atol": 0.000001},
+    }
 
 
 def _conformance_from_resource(

@@ -11,23 +11,54 @@ FORBIDDEN = (".bin", ".pkl", ".pickle", ".so", ".dylib", ".dll", ".pyc", ".pt", 
 PACKAGE_RESOURCES = {
     "saracura/encoder-candidates.v1.json",
     "saracura/minilm-conformance.v1.json",
+    "saracura/research-trust-keys.v1.json",
 }
 ROOT = Path(__file__).parents[1]
 PACKET_BASENAMES = {
-    "packet.json",
-    "families.jsonl",
-    "records.jsonl",
-    "reviews.jsonl",
+    "01-precommitted.json",
+    "02-running.json",
+    "03-sealed.json",
     "adjudications.jsonl",
-    "split-plan.json",
     "audit-report.json",
+    "base-states.jsonl",
+    "blind-report.json",
+    "blind-test.jsonl",
+    "calibration-candidate.json",
+    "calibration.jsonl",
+    "capsule-descriptor.json",
+    "checkpoint.safetensors",
+    "contributors.json",
+    "controls.json",
+    "dev.jsonl",
+    "embedding-manifest.json",
+    "embeddings.safetensors",
+    "families.jsonl",
+    "intake-manifest.json",
+    "maintainer-release-receipt.json",
+    "packet.json",
+    "packet-manifest.json",
+    "packet-release-receipt.json",
+    "packet-release-request.json",
+    "records.jsonl",
+    "release-input-manifest.json",
+    "research-calibration.json",
+    "reviews.jsonl",
+    "split-plan.json",
+    "takedown-ledger.jsonl",
+    "temperature-fit.json",
+    "train.jsonl",
+    "training-manifest.json",
+    "training-report.json",
 }
 
 
 def _forbidden_artifact(name: str) -> bool:
     lowered = name.lower()
-    return lowered.endswith((*FORBIDDEN, ".safetensors", ".onnx")) or (
-        PurePosixPath(lowered).name in PACKET_BASENAMES
+    basename = PurePosixPath(lowered).name
+    return (
+        lowered.endswith((*FORBIDDEN, ".safetensors", ".onnx"))
+        or basename in PACKET_BASENAMES
+        or basename.endswith("-report.json")
     )
 
 

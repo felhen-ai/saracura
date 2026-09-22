@@ -518,6 +518,23 @@ def test_opt_in_local_mps_conformance_uses_only_operator_paths() -> None:
     assert backend.capabilities.quality_claims is False
 
 
+def test_opt_in_human_capsule_mps_conformance_uses_only_operator_paths() -> None:
+    """Mac-only operator gate; it neither downloads nor fabricates artifacts."""
+
+    if os.environ.get("SARACURA_PHASE4B_LIVE_MPS") != "1":
+        pytest.skip("set SARACURA_PHASE4B_LIVE_MPS=1 with local operator artifact paths")
+    required = ("SARACURA_PHASE4B_SNAPSHOT", "SARACURA_PHASE4B_TRAINING_CAPSULE")
+    if any(not os.environ.get(name) for name in required):
+        pytest.fail("local human MPS conformance inputs were not provided")
+    backend = MiniLMRoutingBackend(
+        encoder_snapshot=Path(os.environ["SARACURA_PHASE4B_SNAPSHOT"]),
+        training_capsule=Path(os.environ["SARACURA_PHASE4B_TRAINING_CAPSULE"]),
+        device="mps",
+    )
+    assert backend.model.id == "saracura-minilm-routing"
+    assert backend.capabilities.quality_claims is False
+
+
 def test_new_minilm_cli_paths_are_socket_free_with_controlled_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -582,6 +599,36 @@ def test_new_minilm_cli_paths_are_socket_free_with_controlled_backend(
     assert len(_CliMiniLMBackend.instances) == 3
     assert _CliMiniLMBackend.instances[-1].encode_calls == 1
     assert _CliMiniLMBackend.instances[-1].score_calls == 1
+
+
+def test_minilm_cli_sanitizes_torch_mps_or_transformers_load_failures(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class ExplodingMiniLM:
+        def __init__(self, **_kwargs: object) -> None:
+            raise RuntimeError("/private/operator/transformers MPS failure")
+
+    monkeypatch.setattr(cli, "MiniLMRoutingBackend", ExplodingMiniLM)
+    assert (
+        cli.main(
+            [
+                "describe-backend",
+                "--backend",
+                "minilm-routing",
+                "--encoder-snapshot",
+                "/private/snapshot",
+                "--training-capsule",
+                "/private/capsule",
+                "--device",
+                "mps",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert "Unexpected internal error." in captured.err
+    assert "/private/operator/transformers" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def _valid_training_manifest(checkpoint: bytes) -> bytes:

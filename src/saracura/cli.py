@@ -5,11 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Never
 
 from saracura.backends import DeterministicFixtureBackend, MiniLMRoutingBackend
-from saracura.calibration import create_identity_calibration, load_calibration
+from saracura.calibration import (
+    ResearchCalibrationArtifact,
+    create_identity_calibration,
+    load_calibration_envelope,
+    validate_calibration_compatibility,
+)
 from saracura.contracts import ErrorCode, SaracuraError, parse_request_json
 from saracura.runtime import (
     MINILM_ROUTING_WORKFLOW_ID,
@@ -18,7 +24,11 @@ from saracura.runtime import (
     DecisionEngine,
     default_workflows,
 )
-from saracura.runtime.engine import calibration_context
+from saracura.runtime.engine import MAX_STATE_PAYLOAD_BYTES, calibration_context
+from saracura.serialization import serialize_state
+from saracura.verified_bytes import read_public_external_file
+
+MAX_REQUEST_BYTES = 1_000_000
 
 
 class _ArgumentFailure(ValueError):
@@ -39,6 +49,7 @@ def _add_minilm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--encoder-snapshot", type=Path)
     parser.add_argument("--training-manifest", type=Path)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--training-capsule", type=Path)
     parser.add_argument("--device", choices=("mps", "cpu"))
 
 
@@ -77,19 +88,28 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _require_minilm_arguments(values: argparse.Namespace) -> MiniLMRoutingBackend:
-    if any(
-        getattr(values, name, None) is None
-        for name in ("encoder_snapshot", "training_manifest", "checkpoint", "device")
-    ):
+    if any(getattr(values, name, None) is None for name in ("encoder_snapshot", "device")):
         raise SaracuraError(
             ErrorCode.REQUEST_INVALID,
             "MiniLM commands require explicit local artifact paths and a device.",
+            "/",
+        )
+    capsule = values.training_capsule
+    synthetic_pair = values.training_manifest is not None and values.checkpoint is not None
+    if (capsule is None and not synthetic_pair) or (
+        capsule is not None
+        and (values.training_manifest is not None or values.checkpoint is not None)
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "MiniLM commands require one sealed human capsule or the Phase 4A synthetic pair.",
             "/",
         )
     return MiniLMRoutingBackend(
         encoder_snapshot=values.encoder_snapshot,
         training_manifest=values.training_manifest,
         checkpoint=values.checkpoint,
+        training_capsule=capsule,
         device=values.device,
     )
 
@@ -100,7 +120,13 @@ def _backend_for_decide(
     if values.backend == "fixture":
         if any(
             getattr(values, name, None) is not None
-            for name in ("encoder_snapshot", "training_manifest", "checkpoint", "device")
+            for name in (
+                "encoder_snapshot",
+                "training_manifest",
+                "checkpoint",
+                "training_capsule",
+                "device",
+            )
         ):
             raise SaracuraError(
                 ErrorCode.REQUEST_INVALID,
@@ -117,20 +143,52 @@ def _run_decide(
     include_timing: bool,
     *,
     backend: DeterministicFixtureBackend | MiniLMRoutingBackend | None = None,
+    backend_factory: (
+        Callable[[], DeterministicFixtureBackend | MiniLMRoutingBackend] | None
+    ) = None,
 ) -> int:
     try:
-        request = parse_request_json(request_path.read_bytes())
-        resolved_backend = backend or DeterministicFixtureBackend()
+        request = parse_request_json(
+            read_public_external_file(request_path, maximum=MAX_REQUEST_BYTES)
+        )
         if len(request.questions) != 1:
             raise SaracuraError(
                 ErrorCode.REQUEST_INVALID,
                 "The local CLI accepts one calibration artifact and one question.",
                 "/questions",
             )
+        # This is deliberately request-only validation.  It must complete
+        # before the optional backend can import ML packages, inspect a device,
+        # or open a model/weight path.
+        default_workflows().validate(request)
+        if request.model in {"latest", "main", "master"}:
+            raise SaracuraError(
+                ErrorCode.MODEL_ALIAS_FORBIDDEN,
+                "The immutable model revision is not available.",
+                "/model",
+            )
+        if len(serialize_state(request)) > MAX_STATE_PAYLOAD_BYTES:
+            raise SaracuraError(
+                ErrorCode.REQUEST_INVALID,
+                "Serialized state exceeds the research runtime byte limit.",
+                "/state",
+                details={"max_bytes": MAX_STATE_PAYLOAD_BYTES},
+            )
+        # The sole envelope read classifies the lane and, for v2, verifies the
+        # bundled trust receipt.  It runs before constructing MiniLM and is
+        # retained for later compatibility validation without a reread.
+        artifact = load_calibration_envelope(calibration_path)
+        resolved_backend = backend or (
+            backend_factory() if backend_factory is not None else DeterministicFixtureBackend()
+        )
         question = request.questions[0]
         profile = (
             PHASE4A_IDENTITY_PROFILE if isinstance(resolved_backend, MiniLMRoutingBackend) else None
         )
+        if isinstance(resolved_backend, MiniLMRoutingBackend) and isinstance(
+            artifact, ResearchCalibrationArtifact
+        ):
+            profile = artifact.dataset_profile()
         expected = calibration_context(
             request,
             question.id,
@@ -138,7 +196,7 @@ def _run_decide(
             resolved_backend,
             profile,
         )
-        artifact = load_calibration(calibration_path, expected)
+        validate_calibration_compatibility(artifact, expected)
         engine = DecisionEngine(
             backend=resolved_backend,
             workflows=default_workflows(),
@@ -189,7 +247,9 @@ def _run_describe(values: argparse.Namespace) -> int:
 
 
 def _run_create_identity(values: argparse.Namespace) -> int:
-    request = parse_request_json(values.request.read_bytes())
+    request = parse_request_json(
+        read_public_external_file(values.request, maximum=MAX_REQUEST_BYTES)
+    )
     backend = _require_minilm_arguments(values)
     if request.model != backend.model.revision:
         raise SaracuraError(
@@ -229,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
                 values.request,
                 values.calibration,
                 values.timing,
-                backend=_backend_for_decide(values),
+                backend_factory=lambda: _backend_for_decide(values),
             )
         if values.command == "describe-backend":
             return _run_describe(values)
