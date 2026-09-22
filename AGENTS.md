@@ -56,7 +56,10 @@ Every new canonical Markdown file must include structural frontmatter with `titl
 - Frame semantic segments by byte length, never by ambiguous delimiters.
 - State encoding must not depend on questions or criteria and must execute once per request.
   This invariant governs runtime decision backends registered with
-  `DecisionEngine`. Benchmark-only reference adapters under `benchmarks/` may
-  model question-conditioned computation and are never registered.
+  `DecisionEngine`; installed runtime backends remain restricted to the
+  compiled specialized contract. Benchmark-only reference adapters under
+  `benchmarks/` may model question-conditioned computation, and the explicitly
+  checkout-only Phase 4C.2 candidate adapters may execute reviewed learned
+  models there, but neither class is registered as a runtime backend.
 - Calibration compatibility is fail-closed across every declared axis. Immutable artifacts must use a sibling temporary file plus an atomic create-if-absent operation; an existing revision is never overwritten.
 - Never add telemetry, remote fallback, arbitrary model paths, or request-triggered downloads.

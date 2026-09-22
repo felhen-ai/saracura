@@ -40,6 +40,16 @@ encoder-eval = [
   "torch>=2.5,<3",
   "transformers>=4.47,<5",
 ]
+# Checkout-only Phase 4C.2 acquisition and later local adapter lane.  These
+# dependencies are intentionally absent from the default environment.
+universal-local = [
+  "platformdirs>=4.3,<5",
+  "psutil>=6.1,<7",
+  "safetensors>=0.5,<1",
+  "torch>=2.5,<3",
+  "transformers>=4.48,<5",
+  "tokenizers>=0.21,<1",
+]
 
 [project.scripts]
 saracura = "saracura.cli:main"
