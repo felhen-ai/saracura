@@ -32,6 +32,17 @@ Do not open a public issue for a suspected vulnerability. Use GitHub's private v
 
 ## Current trust boundary
 
+The optional Phase 4A MiniLM backend accepts only explicit operator paths to a
+reviewed snapshot, sealed synthetic training manifest, and safetensors head. It
+opens them by descriptor with no-follow, ownership, mode, link, size, digest,
+and mutation checks; it never passes paths to a hub or auto-loader. BERT and
+the fast tokenizer are constructed from verified bytes, dynamic code and pickle
+formats are rejected, and the fixed public conformance vector must pass before
+request data is accepted. The Phase 4A identity calibration is an immutable
+no-fit transform with a separate synthetic identity dataset profile. Its
+fixture_only result does not express calibration quality and cannot authorize
+automation.
+
 - There is no telemetry or network fallback.
 - Requests cannot select arbitrary local model paths or trigger downloads.
 - The default installation has no model, tokenizer, dataset-loader, or remote plugin runtime.

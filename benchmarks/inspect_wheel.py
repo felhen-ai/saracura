@@ -5,10 +5,14 @@ from __future__ import annotations
 import sys
 import tarfile
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 FORBIDDEN = (".bin", ".pkl", ".pickle", ".so", ".dylib", ".dll", ".pyc", ".pt", ".pth", ".jsonl")
-REGISTRY_ENTRY = "saracura/encoder-candidates.v1.json"
+PACKAGE_RESOURCES = {
+    "saracura/encoder-candidates.v1.json",
+    "saracura/minilm-conformance.v1.json",
+}
+ROOT = Path(__file__).parents[1]
 PACKET_BASENAMES = {
     "packet.json",
     "families.jsonl",
@@ -28,7 +32,7 @@ def _forbidden_artifact(name: str) -> bool:
 
 
 def _allowed_entry(name: str) -> bool:
-    if name == REGISTRY_ENTRY:
+    if name in PACKAGE_RESOURCES:
         return True
     if name.startswith("saracura/"):
         return name.endswith((".py", "/py.typed"))
@@ -38,6 +42,30 @@ def _allowed_entry(name: str) -> bool:
             "licenses/LICENSE"
         )
     return False
+
+
+def _package_resource_bytes() -> dict[str, bytes]:
+    return {name: (ROOT / "src" / name).read_bytes() for name in PACKAGE_RESOURCES}
+
+
+def _verify_wheel_resources(archive: zipfile.ZipFile) -> None:
+    expected = _package_resource_bytes()
+    entries = archive.namelist()
+    for name, source_bytes in expected.items():
+        if entries.count(name) != 1 or archive.read(name) != source_bytes:
+            raise SystemExit("package resource bytes do not match the source tree")
+
+
+def _verify_sdist_resources(archive: tarfile.TarFile) -> None:
+    expected = _package_resource_bytes()
+    entries = archive.getnames()
+    for name, source_bytes in expected.items():
+        matches = [entry for entry in entries if entry.endswith(f"/src/{name}")]
+        if len(matches) != 1:
+            raise SystemExit("package resource missing from sdist")
+        member = archive.extractfile(matches[0])
+        if member is None or member.read() != source_bytes:
+            raise SystemExit("package resource bytes do not match the source tree")
 
 
 def main() -> int:
@@ -56,6 +84,7 @@ def main() -> int:
                 ]
                 if bad:
                     raise SystemExit("forbidden sdist entries")
+                _verify_sdist_resources(archive)
             continue
         with zipfile.ZipFile(name) as archive:
             saw_wheel = True
@@ -63,8 +92,7 @@ def main() -> int:
             unexpected = [item for item in entries if not _allowed_entry(item)]
             if unexpected:
                 raise SystemExit("unexpected wheel entries")
-            if entries.count(REGISTRY_ENTRY) != 1:
-                raise SystemExit("encoder registry missing from wheel")
+            _verify_wheel_resources(archive)
             bad = [item for item in entries if _forbidden_artifact(item)]
             if bad:
                 raise SystemExit("forbidden wheel entries: " + ",".join(bad))

@@ -5,7 +5,12 @@ from __future__ import annotations
 import hashlib
 from typing import Final, Literal
 
-from saracura.backends.base import BackendCapabilities, EncodedState, ScoredChoice
+from saracura.backends.base import (
+    BackendCalibrationMetadata,
+    BackendCapabilities,
+    EncodedState,
+    ScoredChoice,
+)
 from saracura.contracts.models import ChoiceQuestion, ModelReference
 from saracura.serialization import frame_segments
 
@@ -14,6 +19,10 @@ FIXTURE_BACKEND_REVISION: Final[Literal["fixture-backend-v1"]] = "fixture-backen
 FIXTURE_MODEL_ID: Final[Literal["fixture-choice"]] = "fixture-choice"
 FIXTURE_MODEL_REVISION: Final[Literal["fixture-choice-v1"]] = "fixture-choice-v1"
 FIXTURE_CHECKPOINT_SHA256 = hashlib.sha256(b"saracura-fixture-backend-v1").hexdigest()
+FIXTURE_ARCHITECTURE_SHA256 = "d6b67f81f2469584707a7aafc7a945b98c19decc3b932254034b7f10bbaad18a"
+FIXTURE_TOKENIZER_REVISION = "fixture-bytes-v1"
+FIXTURE_TRUNCATION_POLICY = "no-truncation-v1"
+FIXTURE_OUTPUT_TRANSFORM = "choice-softmax-v1"
 
 
 class DeterministicFixtureBackend:
@@ -34,6 +43,14 @@ class DeterministicFixtureBackend:
             cold_warm_semantics="deterministic-no-load",
             quality_claims=False,
         )
+        self._calibration_metadata = BackendCalibrationMetadata(
+            architecture_config_sha256=FIXTURE_ARCHITECTURE_SHA256,
+            tokenizer_revision=FIXTURE_TOKENIZER_REVISION,
+            truncation_policy_id=FIXTURE_TRUNCATION_POLICY,
+            precision="fp64",
+            quantization="none",
+            output_transform=FIXTURE_OUTPUT_TRANSFORM,
+        )
 
     @property
     def capabilities(self) -> BackendCapabilities:
@@ -42,6 +59,10 @@ class DeterministicFixtureBackend:
     @property
     def model(self) -> ModelReference:
         return self._model
+
+    @property
+    def calibration_metadata(self) -> BackendCalibrationMetadata:
+        return self._calibration_metadata
 
     def encode_state(self, state_payload: bytes) -> EncodedState:
         self.state_encode_calls += 1

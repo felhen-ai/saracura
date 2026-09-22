@@ -24,6 +24,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local-minilm = [
+  "platformdirs>=4.3,<5",
+  "psutil>=6.1,<7",
+  "safetensors>=0.5,<1",
+  "torch>=2.5,<3",
+  "transformers>=4.47,<5",
+]
+# Compatibility alias retained for the existing encoder research gate.
 encoder-eval = [
   "platformdirs>=4.3,<5",
   "psutil>=6.1,<7",
@@ -44,9 +52,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/saracura"]
-include = ["src/saracura/**", "benchmarks/manifests/encoder-candidates.v1.json"]
-artifacts = ["benchmarks/manifests/encoder-candidates.v1.json"]
-force-include = {"benchmarks/manifests/encoder-candidates.v1.json" = "saracura/encoder-candidates.v1.json"}
+include = ["src/saracura/**"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [

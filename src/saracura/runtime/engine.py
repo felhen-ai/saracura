@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from time import perf_counter
 from typing import cast
 
 from pydantic import JsonValue
 
-from saracura.backends.base import Backend
-from saracura.calibration.models import CalibrationArtifact, CalibrationContext
+from saracura.backends.base import Backend, BackendCalibrationMetadata
+from saracura.backends.fixture import (
+    FIXTURE_ARCHITECTURE_SHA256,
+    FIXTURE_OUTPUT_TRANSFORM,
+    FIXTURE_TOKENIZER_REVISION,
+    FIXTURE_TRUNCATION_POLICY,
+    DeterministicFixtureBackend,
+)
+from saracura.calibration.models import (
+    AnyCalibrationArtifact,
+    CalibrationContext,
+    CalibrationDatasetProfile,
+)
 from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.contracts.models import (
     Answer,
@@ -24,15 +36,40 @@ from saracura.contracts.models import (
 from saracura.runtime.workflows import WorkflowRegistry
 from saracura.serialization import SERIALIZER_VERSION, serialize_question, serialize_state
 
-FIXTURE_ARCHITECTURE_SHA256 = "d6b67f81f2469584707a7aafc7a945b98c19decc3b932254034b7f10bbaad18a"
-FIXTURE_TOKENIZER_REVISION = "fixture-bytes-v1"
-FIXTURE_TRUNCATION_POLICY = "no-truncation-v1"
-FIXTURE_OUTPUT_TRANSFORM = "choice-softmax-v1"
 FIXTURE_DATASET_ID = "self-authored-ptbr-fixture"
 FIXTURE_DATASET_REVISION = "v1"
 FIXTURE_SPLIT_MANIFEST_SHA256 = "d80de4e329009e0528febd5a6dc0323af14930dea68dbba0f07854e06d44cd71"
 MAX_STATE_PAYLOAD_BYTES = 1_000_000
 NUMERIC_ISOLATION_ABSOLUTE_TOLERANCE = 1e-12
+_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+FIXTURE_CALIBRATION_PROFILE = CalibrationDatasetProfile(
+    dataset_id=FIXTURE_DATASET_ID,
+    dataset_revision=FIXTURE_DATASET_REVISION,
+    split_manifest_sha256=FIXTURE_SPLIT_MANIFEST_SHA256,
+)
+PHASE4A_IDENTITY_PROFILE = CalibrationDatasetProfile(
+    dataset_id="no-fit-synthetic-identity",
+    dataset_revision="phase4a.v1",
+    split_manifest_sha256="fc73d3e22b04898301563915e5f43051ec627414b83c2c74371f5a2c2b75a0c7",
+)
+
+__all__ = [
+    "FIXTURE_ARCHITECTURE_SHA256",
+    "FIXTURE_CALIBRATION_PROFILE",
+    "FIXTURE_DATASET_ID",
+    "FIXTURE_DATASET_REVISION",
+    "FIXTURE_OUTPUT_TRANSFORM",
+    "FIXTURE_SPLIT_MANIFEST_SHA256",
+    "FIXTURE_TOKENIZER_REVISION",
+    "FIXTURE_TRUNCATION_POLICY",
+    "MAX_STATE_PAYLOAD_BYTES",
+    "NUMERIC_ISOLATION_ABSOLUTE_TOLERANCE",
+    "PHASE4A_IDENTITY_PROFILE",
+    "DecisionEngine",
+    "calibration_context",
+    "cardinality_bucket",
+]
 
 
 def cardinality_bucket(cardinality: int) -> str:
@@ -54,30 +91,101 @@ def calibration_context(
     question_id: str,
     criteria_count: int,
     backend: Backend,
+    profile: CalibrationDatasetProfile | None = None,
 ) -> CalibrationContext:
+    metadata = _calibration_metadata(backend)
+    resolved_profile = profile or _implicit_fixture_profile(backend)
+    if resolved_profile is None:
+        raise SaracuraError(
+            ErrorCode.CALIBRATION_MISSING,
+            "A non-fixture backend requires an explicit calibration dataset profile.",
+            f"/questions/{question_id}/calibration",
+        )
     return CalibrationContext(
         model_id=backend.model.id,
         model_revision=backend.model.revision,
         checkpoint_sha256=backend.model.checkpoint_sha256,
-        architecture_config_sha256=FIXTURE_ARCHITECTURE_SHA256,
+        architecture_config_sha256=metadata.architecture_config_sha256,
         serializer_version=SERIALIZER_VERSION,
-        tokenizer_revision=FIXTURE_TOKENIZER_REVISION,
-        truncation_policy_id=FIXTURE_TRUNCATION_POLICY,
-        precision="fp64",
-        quantization="none",
-        output_transform=FIXTURE_OUTPUT_TRANSFORM,
+        tokenizer_revision=metadata.tokenizer_revision,
+        truncation_policy_id=metadata.truncation_policy_id,
+        precision=metadata.precision,
+        quantization=metadata.quantization,
+        output_transform=metadata.output_transform,
         workflow_id=request.workflow.id,
         workflow_revision=request.workflow.revision,
         question_id=question_id,
-        dataset_id=FIXTURE_DATASET_ID,
-        dataset_revision=FIXTURE_DATASET_REVISION,
-        split_manifest_sha256=FIXTURE_SPLIT_MANIFEST_SHA256,
+        dataset_id=resolved_profile.dataset_id,
+        dataset_revision=resolved_profile.dataset_revision,
+        split_manifest_sha256=resolved_profile.split_manifest_sha256,
         locale=request.locale,
         domain=request.domain,
         head="choice",
         cardinality_bucket=cardinality_bucket(criteria_count),
         risk_policy=None,
     )
+
+
+def _calibration_metadata(backend: Backend) -> BackendCalibrationMetadata:
+    """Reject legacy structural backends instead of borrowing fixture metadata."""
+
+    try:
+        metadata = backend.calibration_metadata
+        if not isinstance(metadata, BackendCalibrationMetadata) or not _metadata_is_valid(metadata):
+            raise ValueError("backend calibration metadata is invalid")
+    except Exception as error:
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "Backend calibration compatibility metadata is unavailable.",
+            "/model",
+        ) from error
+    return metadata
+
+
+def _metadata_is_valid(metadata: BackendCalibrationMetadata) -> bool:
+    """Match the closed calibration-context constraints before any encoding work."""
+
+    return (
+        _is_sha256(metadata.architecture_config_sha256)
+        and _is_revision(metadata.tokenizer_revision)
+        and all(
+            _is_identifier(value)
+            for value in (
+                metadata.truncation_policy_id,
+                metadata.precision,
+                metadata.quantization,
+                metadata.output_transform,
+            )
+        )
+    )
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_PATTERN.fullmatch(value) is not None
+
+
+def _is_revision(value: object) -> bool:
+    return isinstance(value, str) and 1 <= len(value) <= 256
+
+
+def _is_identifier(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 128
+        and _IDENTIFIER_PATTERN.fullmatch(value) is not None
+    )
+
+
+def _implicit_fixture_profile(backend: Backend) -> CalibrationDatasetProfile | None:
+    if isinstance(backend, DeterministicFixtureBackend):
+        return FIXTURE_CALIBRATION_PROFILE
+    # The Phase 2A harness decorates the concrete fixture only to count calls.
+    # It cannot turn any other backend into a fixture: the wrapped object must
+    # still be the exact deterministic fixture implementation.
+    wrapped = getattr(backend, "_backend", None)
+    if isinstance(wrapped, DeterministicFixtureBackend):
+        return FIXTURE_CALIBRATION_PROFILE
+    return None
 
 
 def _probabilities(scores: dict[str, float], temperature: float) -> dict[str, float]:
@@ -94,16 +202,19 @@ class DecisionEngine:
         *,
         backend: Backend,
         workflows: WorkflowRegistry,
-        calibrations: Mapping[str, CalibrationArtifact],
+        calibrations: Mapping[str, AnyCalibrationArtifact],
+        calibration_profiles: Mapping[str, CalibrationDatasetProfile] | None = None,
     ) -> None:
         self._backend = backend
         self._workflows = workflows
         self._calibrations = calibrations
+        self._calibration_profiles = calibration_profiles or {}
 
     def decide(self, request: DecisionRequest, *, include_timing: bool = False) -> DecisionResponse:
         started = perf_counter()
         self._validate_backend_and_request(request)
         self._workflows.validate(request)
+        resolved_calibrations = self._resolve_calibrations(request)
 
         encoding_started = perf_counter()
         state_payload = serialize_state(request)
@@ -118,27 +229,7 @@ class DecisionEngine:
         encoding_finished = perf_counter()
 
         answers: list[Answer] = []
-        for question in request.questions:
-            artifact = self._calibrations.get(question.id)
-            if artifact is None:
-                raise SaracuraError(
-                    ErrorCode.CALIBRATION_MISSING,
-                    "No calibration artifact is registered for this question.",
-                    f"/questions/{question.id}",
-                )
-            expected = calibration_context(
-                request, question.id, len(question.criteria), self._backend
-            )
-            actual = artifact.context().model_dump(mode="json")
-            wanted = expected.model_dump(mode="json")
-            mismatches = sorted(key for key in wanted if actual[key] != wanted[key])
-            if mismatches:
-                raise SaracuraError(
-                    ErrorCode.CALIBRATION_INCOMPATIBLE,
-                    "Calibration artifact is incompatible with the request and runtime.",
-                    f"/questions/{question.id}/calibration",
-                    details={"mismatched_axes": cast(JsonValue, mismatches)},
-                )
+        for question, artifact in resolved_calibrations:
             scored = self._backend.score_choice(
                 encoded_state,
                 question,
@@ -187,13 +278,59 @@ class DecisionEngine:
             model=self._backend.model,
             timing=timing,
             usage=Usage(
-                input_tokens=0,
+                input_tokens=self._input_tokens(encoded_state.input_tokens),
                 questions=len(request.questions),
                 criteria=sum(len(question.criteria) for question in request.questions),
             ),
         )
 
+    def _resolve_calibrations(
+        self, request: DecisionRequest
+    ) -> tuple[tuple[ChoiceQuestion, AnyCalibrationArtifact], ...]:
+        """Resolve and compare every axis before state serialization or device work."""
+
+        resolved: list[tuple[ChoiceQuestion, AnyCalibrationArtifact]] = []
+        for question in request.questions:
+            artifact = self._calibrations.get(question.id)
+            if artifact is None:
+                raise SaracuraError(
+                    ErrorCode.CALIBRATION_MISSING,
+                    "No calibration artifact is registered for this question.",
+                    f"/questions/{question.id}",
+                )
+            profile = self._calibration_profiles.get(question.id)
+            expected = calibration_context(
+                request,
+                question.id,
+                len(question.criteria),
+                self._backend,
+                profile,
+            )
+            actual = artifact.context().model_dump(mode="json")
+            wanted = expected.model_dump(mode="json")
+            mismatches = sorted(key for key in wanted if actual[key] != wanted[key])
+            if mismatches:
+                raise SaracuraError(
+                    ErrorCode.CALIBRATION_INCOMPATIBLE,
+                    "Calibration artifact is incompatible with the request and runtime.",
+                    f"/questions/{question.id}/calibration",
+                    details={"mismatched_axes": cast(JsonValue, mismatches)},
+                )
+            resolved.append((question, artifact))
+        return tuple(resolved)
+
+    @staticmethod
+    def _input_tokens(value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise SaracuraError(
+                ErrorCode.BACKEND_UNAVAILABLE,
+                "Backend returned invalid token usage.",
+                "/model",
+            )
+        return value
+
     def _validate_backend_and_request(self, request: DecisionRequest) -> None:
+        _calibration_metadata(self._backend)
         if request.model != self._backend.model.revision:
             code = (
                 ErrorCode.MODEL_ALIAS_FORBIDDEN

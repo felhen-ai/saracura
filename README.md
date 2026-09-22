@@ -117,6 +117,29 @@ reviewed revision publishes `pytorch_model.bin` without a safetensors weight.
 Probe reports are encoder-only observations and do not measure decision quality,
 trained heads, calibration, end-to-end latency, or automation readiness.
 
+## Phase 4A opt-in local MiniLM routing
+
+Phase 4A can execute one frozen, synthetic-only five-label support-routing head
+when an operator supplies an already verified local encoder snapshot, its sealed
+training manifest, and its safetensors checkpoint. Nothing is downloaded or
+discovered from a cache, environment variable, request, or network service.
+The default installation remains unchanged; opt in explicitly:
+
+    uv sync --locked --dev --extra local-minilm
+    uv run saracura describe-backend --backend minilm-routing \
+      --encoder-snapshot <verified-snapshot> \
+      --training-manifest <training-manifest.json> \
+      --checkpoint <checkpoint.safetensors> --device cpu
+
+The loader verifies every supplied descriptor byte through local file
+descriptors, constructs BERT and the tokenizer directly from those bytes, and
+binds the runtime/device ABI to the immutable model revision. A Phase 4A
+identity artifact can then be created for that exact revision and used with the
+single frozen support-routing workflow. It is deliberately fixture_only: it has
+no fitted data, no evaluation claim, no threshold, and never authorizes
+automation. Apple MPS is explicit, has no CPU fallback, and is an operator
+choice rather than a default.
+
 ## Phase 2C data and privacy gate
 
 Before any training packet can be authored, the repository validates the

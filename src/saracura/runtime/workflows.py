@@ -6,7 +6,17 @@ from dataclasses import dataclass
 
 from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.contracts.models import ChoiceCriterion, ChoiceQuestion, DecisionRequest
-from saracura.serialization import serialize_question
+from saracura.serialization import ordered_question_bytes, serialize_question
+
+MINILM_ROUTING_WORKFLOW_ID = "support-routing"
+MINILM_ROUTING_WORKFLOW_REVISION = "phase4a-local-minilm-routing.v1"
+MINILM_ROUTING_LABELS = (
+    "billing",
+    "technical_support",
+    "account_access",
+    "subscription_cancellation",
+    "order_delivery",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +26,7 @@ class WorkflowSchema:
     locale: str
     domain: str
     questions: dict[str, ChoiceQuestion]
+    criteria_order_semantic: bool = False
 
 
 class WorkflowRegistry:
@@ -46,7 +57,12 @@ class WorkflowRegistry:
 
         for index, question in enumerate(request.questions):
             expected = schema.questions.get(question.id)
-            if expected is None or serialize_question(question) != serialize_question(expected):
+            same_question = expected is not None and (
+                ordered_question_bytes(question) == ordered_question_bytes(expected)
+                if schema.criteria_order_semantic
+                else serialize_question(question) == serialize_question(expected)
+            )
+            if not same_question:
                 raise SaracuraError(
                     ErrorCode.SCHEMA_UNSUPPORTED,
                     "Question does not match the known workflow schema.",
@@ -76,6 +92,48 @@ def known_scaling_questions(count: int = 50) -> tuple[ChoiceQuestion, ...]:
     return tuple(_scaling_question(index) for index in range(1, count + 1))
 
 
+MINILM_ROUTING_QUESTION = ChoiceQuestion(
+    id="department",
+    type="choice",
+    instruction=(
+        "Classifique a mensagem de suporte em exatamente uma categoria. "
+        "Aplique as definições e a prioridade descritas nos critérios."
+    ),
+    criteria=(
+        ChoiceCriterion(
+            id="billing",
+            description=(
+                "cobrança, pagamento, estorno, fatura ou método de pagamento, "
+                "salvo cancelamento puro"
+            ),
+        ),
+        ChoiceCriterion(
+            id="technical_support",
+            description=(
+                "falha, configuração, compatibilidade ou ajuda de uso não bloqueada por acesso"
+            ),
+        ),
+        ChoiceCriterion(
+            id="account_access",
+            description=(
+                "autenticação, identidade, credencial ou acesso à conta; "
+                "tem prioridade quando bloqueia outra ação"
+            ),
+        ),
+        ChoiceCriterion(
+            id="subscription_cancellation",
+            description=(
+                "parar assinatura, renovação ou plano recorrente sem cobrança ou estorno separado"
+            ),
+        ),
+        ChoiceCriterion(
+            id="order_delivery",
+            description=("envio, rastreio, entrega, pacote ausente/danificado ou pedido físico"),
+        ),
+    ),
+)
+
+
 def default_workflows() -> WorkflowRegistry:
     support = ChoiceQuestion(
         id="department",
@@ -95,6 +153,14 @@ def default_workflows() -> WorkflowRegistry:
                 locale="pt-BR",
                 domain="support",
                 questions={support.id: support},
+            ),
+            WorkflowSchema(
+                id=MINILM_ROUTING_WORKFLOW_ID,
+                revision=MINILM_ROUTING_WORKFLOW_REVISION,
+                locale="pt-BR",
+                domain="support",
+                questions={MINILM_ROUTING_QUESTION.id: MINILM_ROUTING_QUESTION},
+                criteria_order_semantic=True,
             ),
             WorkflowSchema(
                 id="decision-scaling",

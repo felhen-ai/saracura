@@ -1,0 +1,14 @@
+{
+  "schema": "minilm-conformance.v1",
+  "text": "Preciso atualizar o endereço de entrega do meu pedido.",
+  "input_ids": [[0, 70464, 31, 46581, 14821, 36, 136689, 8, 23809, 54, 4346, 39568, 5, 2]],
+  "attention_mask": [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],
+  "token_type_ids": [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  "token_payload_sha256": "240d6a4c4bba8b4a69321cd32586369834d3abb5691dd273adb1cddc07256664",
+  "cpu_reference_logits": [-0.7078226208686829, -0.608864963054657, 0.07758018374443054, 0.17575061321258545, 1.0344152450561523],
+  "cpu_logits_sha256": "cf86a3769256af7bbc418f67aff3798bbd1f1bb41e75c7b3a380b72d15cea5f7",
+  "mps_reference_logits": [-0.7078224420547485, -0.608864963054657, 0.07757969200611115, 0.17575055360794067, 1.0344157218933105],
+  "mps_logits_sha256": "55a21300b18e6762ba969a8db2caef3d13c38402f127b65ac63a9487047911b4",
+  "comparison": {"rtol": 0.00001, "atol": 0.000001},
+  "labels": ["billing", "technical_support", "account_access", "subscription_cancellation", "order_delivery"]
+}
