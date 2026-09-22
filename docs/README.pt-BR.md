@@ -93,6 +93,23 @@ uv run python -m benchmarks.run \
 
 O schema do resultado é `phase2a.v1`. Os percentis usam nearest-rank (`sorted[ceil(p*n)-1]`) e cada amostra registra o digest das respostas e a observação de uma única codificação do estado. Esta fixture é apenas um instrumento de pesquisa: seu tempo não é performance de modelo treinado, não prova qualidade e não autoriza automação ou decisões de produção. O runner não faz parte do wheel instalado e não baixa modelos, tokenizers, datasets nem runtimes pesados de ML.
 
+## Benchmark de controle nativo TypeSafe da Fase 3D
+
+A Fase 3D é um experimento explícito somente com dados sintéticos. Ela reutiliza
+o workload selado e o construtor da Fase 3C, fixa `jev-1.13.0` e mantém
+separados probabilidade, confiança, tokens, latência e custo calculado nativos.
+O ambiente padrão continua offline e leve, sem SDK TypeSafe ou backend de
+runtime. Uma execução ao vivo exige o contrato genérico `TYPESAFE_API_KEY`,
+`--allow-network` e o orçamento local revisado `0.25`. O custo calculado não é
+comprovante de cobrança e nenhum resultado escolhe limiar de automação.
+
+```bash
+uv run pytest -q tests/test_typesafe_native.py
+uv run ruff check benchmarks/typesafe_native.py tests/test_typesafe_native.py
+uv run ruff format --check benchmarks/typesafe_native.py tests/test_typesafe_native.py
+uv run mypy benchmarks/typesafe_native.py tests/test_typesafe_native.py
+```
+
 ## Gate opcional de pesquisa de encoders
 
 A Fase 2B é uma trilha local e explícita de pesquisa. Ela não escolhe modelo,

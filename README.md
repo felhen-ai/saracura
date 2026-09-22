@@ -171,6 +171,24 @@ uv run ruff check benchmarks/e2e_benchmark.py tests/test_e2e_benchmark.py
 uv run mypy benchmarks/e2e_benchmark.py tests/test_e2e_benchmark.py
 ```
 
+## Phase 3D native TypeSafe control benchmark
+
+Phase 3D is an explicit synthetic-only control experiment. It reuses the sealed
+Phase 3C workload and request builder, pins `jev-1.13.0`, and keeps native
+probability, confidence, token, latency, and computed-cost evidence separate.
+The default environment remains offline and lightweight; no TypeSafe SDK or
+runtime backend is added. A live run requires the generic `TYPESAFE_API_KEY`
+environment contract, `--allow-network`, and the reviewed `0.25` local budget.
+Computed cost is not a provider billing receipt and no result chooses an
+automation threshold.
+
+```bash
+uv run pytest -q tests/test_typesafe_native.py
+uv run ruff check benchmarks/typesafe_native.py tests/test_typesafe_native.py
+uv run ruff format --check benchmarks/typesafe_native.py tests/test_typesafe_native.py
+uv run mypy benchmarks/typesafe_native.py tests/test_typesafe_native.py
+```
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
