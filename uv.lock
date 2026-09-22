@@ -1541,6 +1541,14 @@ local-minilm = [
     { name = "torch" },
     { name = "transformers" },
 ]
+universal-local = [
+    { name = "platformdirs" },
+    { name = "psutil" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "transformers" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1554,18 +1562,24 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'local-minilm'", specifier = ">=45,<46" },
     { name = "platformdirs", marker = "extra == 'encoder-eval'", specifier = ">=4.3,<5" },
     { name = "platformdirs", marker = "extra == 'local-minilm'", specifier = ">=4.3,<5" },
+    { name = "platformdirs", marker = "extra == 'universal-local'", specifier = ">=4.3,<5" },
     { name = "psutil", marker = "extra == 'encoder-eval'", specifier = ">=6.1,<7" },
     { name = "psutil", marker = "extra == 'local-minilm'", specifier = ">=6.1,<7" },
+    { name = "psutil", marker = "extra == 'universal-local'", specifier = ">=6.1,<7" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "safetensors", marker = "extra == 'encoder-eval'", specifier = ">=0.5,<1" },
     { name = "safetensors", marker = "extra == 'local-minilm'", specifier = ">=0.5,<1" },
+    { name = "safetensors", marker = "extra == 'universal-local'", specifier = ">=0.5,<1" },
+    { name = "tokenizers", marker = "extra == 'universal-local'", specifier = ">=0.21,<1" },
     { name = "torch", marker = "extra == 'encoder-eval'", specifier = ">=2.5,<3" },
     { name = "torch", marker = "extra == 'local-minilm'", specifier = ">=2.5,<3" },
+    { name = "torch", marker = "extra == 'universal-local'", specifier = ">=2.5,<3" },
     { name = "transformers", marker = "extra == 'encoder-eval'", specifier = ">=4.47,<5" },
     { name = "transformers", marker = "extra == 'local-minilm'", specifier = ">=4.47,<5" },
+    { name = "transformers", marker = "extra == 'universal-local'", specifier = ">=4.48,<5" },
 ]
-provides-extras = ["local-minilm", "encoder-eval"]
+provides-extras = ["local-minilm", "encoder-eval", "universal-local"]
 
 [package.metadata.requires-dev]
 dev = [

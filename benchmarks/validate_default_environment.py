@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import importlib.util
 
-FORBIDDEN = ("torch", "transformers", "huggingface_hub", "sentence_transformers", "datasets")
+FORBIDDEN = (
+    "torch",
+    "transformers",
+    "tokenizers",
+    "safetensors",
+    "platformdirs",
+    "psutil",
+    "huggingface_hub",
+    "sentence_transformers",
+    "datasets",
+)
 
 
 def main() -> int:
