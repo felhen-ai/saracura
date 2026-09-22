@@ -28,6 +28,7 @@ related:
   - docs/action/specs/phase3d-typesafe-native-control.md
   - docs/action/specs/phase4a-opt-in-minilm-backend.md
   - docs/action/specs/phase4b-human-ptbr-calibration.md
+  - docs/action/specs/phase4c2-local-candidate-adapters.md
 supersedes: []
 supersededBy: []
 sensitivity: public
