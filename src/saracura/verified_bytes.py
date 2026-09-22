@@ -270,6 +270,122 @@ def _open_parent(path: Path) -> tuple[int, str]:
     return descriptor, path.name
 
 
+def _open_calibration_directory(path: Path) -> tuple[int, os.stat_result]:
+    """Open a no-follow directory walk for calibration envelopes.
+
+    Historic schema-v1 fixtures are intentionally public (0644) and commonly
+    live below root-owned or shared read/execute-only directories.  The walk
+    accepts owner/current-or-root directories with any non-writable mode
+    (including 0750 and 0711), while rejecting every link and every
+    group/world-writable ancestor.  Schema-v2 additionally requires an owned
+    0600 leaf after this single read.
+    """
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    components = _directory_components(path)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(Path("/").anchor, flags)
+        for component in components:
+            current = os.fstat(descriptor)
+            if (
+                not statmod.S_ISDIR(current.st_mode)
+                or current.st_uid not in {os.getuid(), 0}
+                # The root-owned sticky /tmp ancestor and a root-owned mount
+                # root are system-provided traversal boundaries.  They cannot
+                # be substituted as an ordinary writable project ancestor;
+                # every descendant and leaf is still no-follow and identity-
+                # checked. Other group/world-writable ancestors remain unsafe.
+                or (
+                    current.st_mode & 0o022
+                    and not (
+                        current.st_uid == 0
+                        and (
+                            (current.st_mode & statmod.S_ISVTX and current.st_mode & 0o777 == 0o777)
+                            or _is_root_mount(descriptor, current)
+                        )
+                    )
+                )
+            ):
+                raise VerifiedBytesError("calibration directory ownership or mode is unsafe")
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+    except (OSError, VerifiedBytesError) as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise VerifiedBytesError("calibration directory cannot be opened safely") from error
+    assert descriptor is not None
+    result = os.fstat(descriptor)
+    if (
+        not statmod.S_ISDIR(result.st_mode)
+        or result.st_uid not in {os.getuid(), 0}
+        or result.st_mode & 0o022
+    ):
+        os.close(descriptor)
+        raise VerifiedBytesError("calibration directory ownership or mode is unsafe")
+    return descriptor, result
+
+
+def _is_root_mount(directory_descriptor: int, current: os.stat_result) -> bool:
+    """Recognize a root-owned mounted volume without trusting a pathname."""
+
+    if current.st_uid != 0:
+        return False
+    try:
+        parent = os.stat("..", dir_fd=directory_descriptor, follow_symlinks=False)
+    except OSError:
+        return False
+    return current.st_dev != parent.st_dev
+
+
+def _read_calibration_regular_at(
+    directory_descriptor: int, name: str, *, maximum: int
+) -> tuple[bytes, bool]:
+    """Read a single 0600/0644 regular calibration envelope without a reread."""
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as error:
+        raise VerifiedBytesError("calibration file cannot be opened safely") from error
+    try:
+        before = os.fstat(descriptor)
+        mode = before.st_mode & 0o777
+        if (
+            not statmod.S_ISREG(before.st_mode)
+            or before.st_uid not in {os.getuid(), 0}
+            or mode not in {0o600, 0o644}
+            or before.st_nlink != 1
+            or before.st_size > maximum
+        ):
+            raise VerifiedBytesError("calibration file ownership, mode, or size is unsafe")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1_024 * 1_024, maximum + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum:
+                raise VerifiedBytesError("calibration file exceeds its byte limit")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        try:
+            named = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        except OSError as error:
+            raise VerifiedBytesError("calibration file changed while being read") from error
+        if (
+            _stat_identity(before) != _stat_identity(after)
+            or _stat_identity(before) != _stat_identity(named)
+            or total != before.st_size
+        ):
+            raise VerifiedBytesError("calibration file changed while being read")
+        return b"".join(chunks), before.st_uid == os.getuid() and mode == 0o600
+    finally:
+        os.close(descriptor)
+
+
 def _read_regular_at(
     directory_descriptor: int,
     name: str,
@@ -278,7 +394,7 @@ def _read_regular_at(
     exact_size: int | None = None,
     exact_sha256: str | None = None,
 ) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(name, flags, dir_fd=directory_descriptor)
     except OSError as error:
@@ -388,6 +504,45 @@ def read_verified_external_file(path: Path, *, maximum: int) -> bytes:
     """Read one explicit 0600 external file through the descriptor boundary."""
 
     return _read_external_file(path, maximum=maximum)
+
+
+def read_calibration_external_file(path: Path, *, maximum: int) -> tuple[bytes, bool, bool]:
+    """Read one calibration envelope once, bounded and no-follow.
+
+    The booleans report whether the exact opened leaf and its final parent are
+    private 0600/0700.  Signed schema-v2 requires the owned 0600 leaf; every
+    ancestor is independently no-follow and non-group/world-writable, while
+    legacy schema-v1 may retain a root-owned/current-user 0644 leaf.  No caller
+    gets an unverified probe followed by a second parse read.
+    """
+
+    if path.name in {"", ".", ".."}:
+        raise VerifiedBytesError("calibration file path is invalid")
+    directory, parent = _open_calibration_directory(path.parent)
+    try:
+        raw, private_leaf = _read_calibration_regular_at(directory, path.name, maximum=maximum)
+        return raw, private_leaf, parent.st_mode & 0o777 == 0o700
+    finally:
+        os.close(directory)
+
+
+def read_public_external_file(path: Path, *, maximum: int) -> bytes:
+    """Read one explicit public input without following links or blocking.
+
+    Requests are allowed to use the historic 0644 checked-in fixture mode, but
+    they still receive the calibration walk's bounded, O_NONBLOCK regular-file
+    and identity checks.  This is intentionally separate from the private
+    capsule reader so it does not relax capsule custody rules.
+    """
+
+    if path.name in {"", ".", ".."}:
+        raise VerifiedBytesError("public file path is invalid")
+    directory, _parent = _open_calibration_directory(path.parent)
+    try:
+        raw, _private_leaf = _read_calibration_regular_at(directory, path.name, maximum=maximum)
+        return raw
+    finally:
+        os.close(directory)
 
 
 def read_verified_minilm_snapshot(

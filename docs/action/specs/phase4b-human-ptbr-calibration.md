@@ -251,6 +251,11 @@ calendar timestamps, invalid identifier/hash lengths, and noncanonical bytes.
 Arrays have the stated order and exact or bounded length. Unless a field is
 explicitly nullable, `null` is forbidden.
 
+For schema-v2 final calibration JSON, the raw parsed tree is checked for NFC
+strings and keys before schema validation, canonicality, or signed receipt and
+candidate reconstruction. A decomposed string is rejected as-is; keys that
+would collide under NFC are rejected rather than normalized.
+
 ### Trust keys and receipts
 
 The trust registry root has exactly `schema_version=research-trust-keys.v1`,
@@ -413,7 +418,18 @@ metrics, evidence digests, and timestamp, but exactly `schema_version=2`,
 no extra fields. Finalization copies candidate fields byte-for-byte except
 schema/status, adds receipt/digests/ID, and never recomputes metrics. The research
 receipt evidence binds `candidate_sha256`, so there is no signature/artifact
-circularity. Receipt verification precedes compatibility checking.
+circularity. Receipt verification reconstructs the exact candidate from the
+final artifact and recomputes its canonical digest, thereby binding temperature,
+every context axis, counts, metrics, and timestamp before compatibility checking.
+A schema-v2 object that is merely parsed or constructed in memory has no runtime
+authority. There is no public marker, capability, or mutable verification bit:
+the canonical loader verifies the receipt, and `DecisionEngine` re-verifies the
+exact receipt evidence and reconstructed candidate at every schema-v2 runtime
+use. CLI profile derivation follows the canonical verified loader; a parsed
+object alone cannot authorize execution.
+Before model conversion, the schema-v2 loader validates the exact JSON wire
+types recursively against the full closed artifact schema; it does not coerce
+strings, booleans, or decimal forms into signed integer fields.
 `exposure_run_sha256` is exactly the lowercase `state_sha256` stored in
 `02-running.json`; the blind report, candidate, `research_calibration` receipt
 evidence, derived calibration ID, and finalization all use that value. It never
@@ -422,8 +438,9 @@ means the sealed-state or capsule-descriptor digest.
 ### Blind exposure states
 
 Every exposure state has exactly `schema_version=blind-exposure-state.v1`,
-`state`, `custody_key`, `packet_sha256`, `blind_capsule_sha256`,
-`training_manifest_sha256`, `checkpoint_sha256`, `fit_sha256`, nullable
+`state`, `custody_key`, packet self-digest `packet_sha256`, raw
+`packet_manifest_bytes_sha256`, `packet_release_receipt_sha256`,
+`blind_capsule_sha256`, `training_manifest_sha256`, `checkpoint_sha256`, `fit_sha256`, nullable
 `previous_state_sha256`, `created_at`, and `state_sha256`. The precommit state is
 `precommitted` with null predecessor; running is `running` and names the exact
 precommit digest; sealed is `sealed`, names the exact running digest, and adds
@@ -554,8 +571,8 @@ revision, code/environment, seed, epoch ledger, selected epoch, and checkpoint.
 specific CPU and MPS logits/digests for that frozen self-authored text. The
 backend uses these manifest values for a human checkpoint; it never compares a
 human head with the Phase 4A synthetic-head logits. It declares
-`calibration_authorized=true`, `automation_authorized=false`, and
-`broad_quality_claims_authorized=false`. The Phase 4A verified-byte loader is
+`authorizations={calibration:true, automation:false, quality_claims:false}`.
+The Phase 4A verified-byte loader is
 generalized to accept this closed manifest variant without weakening the
 existing synthetic variant.
 
@@ -616,17 +633,32 @@ revision `bounded-log-temperature-golden-v1`, pre/post calibration NLL, ECE,
 and Brier score, and a fit digest. It requires at least 100 independent states
 and 10 per label. It is not accepted by `DecisionEngine`.
 
-The fit output capsule contains exactly `temperature-fit.json`,
-`packet-manifest.json`, `packet-release-receipt.json`, and its descriptor.
+The fit output capsule contains exactly `temperature-fit.json`, the immutable
+descriptor-led `calibration.jsonl` replay witness, `packet-manifest.json`,
+`packet-release-receipt.json`, and its descriptor. The witness is never a loose
+input or output report: before a blind precommit it is revalidated against the
+same signed packet, its closed rows/counts/family and label minima are
+reconciled, and the frozen fit is recomputed exactly. It is not emitted by the
+runtime artifact or any human-readable report.
 
 ## One-time blind evaluation and runtime artifact
 
 Blind execution is an append-only state machine inside an explicit
-`--exposure-registry` directory. The custody key is SHA-256 of only the packet
-manifest and blind-capsule descriptor digests. It is independent of model,
+`--exposure-registry` directory. The custody key is SHA-256 of only the raw
+packet-manifest byte digest and blind-capsule descriptor digest. The state also
+records the packet self-digest and packet-release-receipt digest, so finalization
+can independently reconstruct the custody name and reconcile both governance
+identities. It is independent of model,
 checkpoint, fit, code, or timestamp, so the same blind release can never be
 used to compare a second candidate. `begin-blind` atomically creates the new
-keyed child and `01-precommitted.json` before opening blind bytes. The
+keyed child and `01-precommitted.json` before opening any blind record byte.
+To derive the custody key, it may read only the bounded canonical blind capsule
+descriptor before that publication; this governance-only file contains no view
+record, text, label, or logit and is reconciled byte-for-byte with the signed
+packet's blind ledger. The claim is
+serialized with a non-blocking exclusive registry lock and retained through the
+atomic no-replace sealed rename, so a racing begin fails before it opens a blind
+record. The
 precommit records the first and only model/checkpoint/fit. Any existing custody
 key blocks every later begin, including a different model or fit. It then creates
 `02-running.json` inside `<custody-key>.active`, and evaluates the exact blind
@@ -640,8 +672,19 @@ precommitted/running run after recomputing every digest. While still running it
 reuses an already-created immutable report or candidate only if every byte and
 expected digest recomputes exactly; otherwise it fails. It cannot alter or rerun
 a sealed result. If `.active` already contains the exact complete sealed set,
-`resume-blind` validates every byte, state link, descriptor, and fsync invariant,
-then performs only the pending atomic rename; it never reevaluates the model.
+`resume-blind` verifies the complete descriptor file set, every state link,
+candidate/report reciprocity, all static fit/context/count/packet/receipt/
+training/checkpoint/golden/view bindings, and fsync invariant, then performs
+only the pending atomic rename; it neither constructs a backend nor parses or
+scores calibration/blind records. A complete active directory remains a private
+same-custodian recovery boundary: an actor able to replace every private active
+file and its descriptor before the rename can create a coordinated blind-metric
+claim with fresh self-digests but no independently signed pre-release metric
+anchor. That actor is outside the filesystem-custody threat model. If custody is
+lost or suspect, recovery is not evidence: maintainers must fail closed, retain
+the directory for investigation, and must not finalize it; the implementation
+never treats self-digests alone as a release signature or falls back to loose
+report/candidate files.
 `begin-blind` fails if either the active or sealed name exists;
 creation and final rename use create-if-absent semantics. No state file is
 edited or deleted. A sealed run is a
@@ -719,7 +762,13 @@ only enough to:
   artifact after receipt verification;
 - run the existing MiniLM backend with a compatible final artifact.
 
-`saracura decide` first securely parses the calibration envelope. Omitted
+`saracura decide` first securely parses the calibration envelope in one bounded,
+no-follow, identity-checked read. That same read determines the schema lane and
+parses the bytes; an invalid or replaced v2 envelope never falls back to v1.
+It completes request-only validation plus that one envelope parse and v2 receipt
+verification before constructing a MiniLM backend, loading any backend bytes,
+or selecting a device.
+Omitted
 `--dataset-profile` remains valid only for schema-v1 identity/fixture artifacts.
 For schema v2, the CLI derives the profile from the signed artifact, constructs
 the expected backend/request context, and then runs normal compatibility
@@ -750,7 +799,12 @@ checkpoint 16 MiB; temperature fit 1 MiB. Record count is
 at most 10,000. Atomic writers set 0600 before content, fsync file and parent,
 and use create-if-absent or sibling-directory rename; no existing byte is
 replaced. Human runtime calibration uses secure verified reads; legacy public
-fixture examples retain their current lightweight path behavior.
+fixture examples retain their current lightweight path behavior. Final research-
+calibration publication retains the verified output-parent directory descriptor
+and performs temporary creation, no-clobber installation, cleanup, and parent
+fsync relative to that descriptor. If cleanup initially fails after publication,
+cleanup is retried and the retained parent is still fsynced; a failed fsync is
+reported as a failure and never treated as durable.
 
 The sdist may contain benchmark source and the checkout-only golden JSON, but
 must exclude `.artifacts`, every JSONL, weights, and packet/report basenames:

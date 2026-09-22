@@ -47,6 +47,149 @@ def test_simulated_intake_schema_is_never_a_production_input(tmp_path: Path) -> 
         materialize_packet(intake, out, "packet")
 
 
+def test_mkdir_at_cleans_private_precommit_after_open_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    original_open = os.open
+
+    def fail_precommit(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if isinstance(path, str) and ".mkdir-" in path:
+            raise OSError("injected open failure")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", fail_precommit)
+    try:
+        with pytest.raises(HumanResearchError):
+            human_research._mkdir_at(parent_fd, "capsule")
+    finally:
+        os.close(parent_fd)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_mkdir_at_cleans_private_precommit_after_fchmod_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    original_fchmod = os.fchmod
+
+    def fail_fchmod(fd: int, mode: int) -> None:
+        raise OSError("injected chmod failure")
+
+    monkeypatch.setattr(os, "fchmod", fail_fchmod)
+    try:
+        with pytest.raises(HumanResearchError):
+            human_research._mkdir_at(parent_fd, "capsule")
+    finally:
+        os.close(parent_fd)
+    assert list(tmp_path.iterdir()) == []
+    monkeypatch.setattr(os, "fchmod", original_fchmod)
+
+
+def test_mkdir_at_cleans_private_precommit_after_publication_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "capsule").mkdir()
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    original_open = os.open
+    original_close = os.close
+    private_fds: set[int] = set()
+    closed_fds: set[int] = set()
+
+    def record_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        fd = original_open(path, flags, mode, dir_fd=dir_fd)
+        if isinstance(path, str) and ".mkdir-" in path:
+            private_fds.add(fd)
+        return fd
+
+    def record_close(fd: int) -> None:
+        closed_fds.add(fd)
+        original_close(fd)
+
+    monkeypatch.setattr(os, "open", record_open)
+    monkeypatch.setattr(os, "close", record_close)
+    try:
+        with pytest.raises(HumanResearchError, match="immutable output conflict"):
+            human_research._mkdir_at(parent_fd, "capsule")
+    finally:
+        os.close(parent_fd)
+
+    assert private_fds
+    assert private_fds <= closed_fds
+    assert [entry.name for entry in tmp_path.iterdir()] == ["capsule"]
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt("stop"), SystemExit(7)])
+def test_mkdir_at_cleans_private_precommit_and_preserves_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: BaseException,
+) -> None:
+    parent_fd = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+
+    def interrupt_publication(parent_fd: int, stage: str, final: str) -> None:
+        raise interruption
+
+    monkeypatch.setattr(human_research, "_rename_no_replace", interrupt_publication)
+    try:
+        with pytest.raises(type(interruption)) as error:
+            human_research._mkdir_at(parent_fd, "capsule")
+    finally:
+        os.close(parent_fd)
+
+    assert error.value is interruption
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_published_blind_precommit_closes_fd_when_final_registry_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "registry"
+    registry.mkdir(mode=0o700)
+    registry_fd = os.open(registry, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    original_mkdir_at = human_research._mkdir_at
+    original_fsync = human_research._fsync
+    stage_fds: list[int] = []
+    fsync_count = 0
+
+    def record_mkdir_at(parent_fd: int, name: str) -> int:
+        fd = original_mkdir_at(parent_fd, name)
+        stage_fds.append(fd)
+        return fd
+
+    def fail_final_registry_fsync(fd: int) -> None:
+        nonlocal fsync_count
+        fsync_count += 1
+        if fsync_count == 3:
+            raise HumanResearchError("injected final registry fsync failure")
+        original_fsync(fd)
+
+    monkeypatch.setattr(human_research, "_mkdir_at", record_mkdir_at)
+    monkeypatch.setattr(human_research, "_fsync", fail_final_registry_fsync)
+    try:
+        with pytest.raises(HumanResearchError, match="injected final registry fsync failure"):
+            human_research._publish_blind_precommit(registry_fd, "a" * 64, b"precommit")
+    finally:
+        os.close(registry_fd)
+
+    assert len(stage_fds) == 1
+    with pytest.raises(OSError):
+        os.fstat(stage_fds[0])
+    assert (registry / f"{'a' * 64}.active" / "01-precommitted.json").read_bytes() == b"precommit"
+
+
 def test_strict_json_requires_nfc_and_exactly_one_terminal_lf() -> None:
     with pytest.raises(ResearchTrustError):
         research_trust.strict_json(b'{"value":"x"}')
@@ -517,6 +660,15 @@ def test_verified_external_file_detects_replacement_during_read(
     monkeypatch.setattr(os, "read", racing_read)
     with pytest.raises(verified_bytes.VerifiedBytesError):
         verified_bytes.read_verified_external_file(receipt, maximum=64)
+
+
+def test_verified_external_file_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    """O_NONBLOCK plus fstat must reject a FIFO before any read can hang."""
+
+    fifo = tmp_path / "receipt.fifo"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(verified_bytes.VerifiedBytesError):
+        verified_bytes.read_verified_external_file(fifo, maximum=64)
 
 
 def _simulated_packet_values() -> tuple[dict[str, bytes], bytes, dict[str, Any]]:

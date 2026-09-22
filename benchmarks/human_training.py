@@ -16,6 +16,7 @@ from typing import Any, Never, cast
 
 from benchmarks.first_party_packet import LABELS
 from benchmarks.human_research import (
+    HEX64,
     HumanResearchError,
     _bind_receipt,
     _finish_stage,
@@ -87,9 +88,9 @@ def _descriptor(values: dict[str, bytes], *, kind: str) -> dict[str, Any]:
         or descriptor["schema_version"] != "human-capsule.v1"
         or descriptor["capsule_kind"] != kind
         or not isinstance(descriptor["packet_sha256"], str)
-        or len(descriptor["packet_sha256"]) != 64
+        or HEX64.fullmatch(descriptor["packet_sha256"]) is None
         or not isinstance(descriptor["packet_release_receipt_sha256"], str)
-        or len(descriptor["packet_release_receipt_sha256"]) != 64
+        or HEX64.fullmatch(descriptor["packet_release_receipt_sha256"]) is None
     ):
         raise HumanResearchError("capsule descriptor boundary")
     unsigned = dict(descriptor)
@@ -193,7 +194,8 @@ def _packet_only(raw: bytes) -> dict[str, Any]:
         set(packet) != required
         or packet.get("schema_version") != "support-routing-human-packet.v1"
         or any(
-            not isinstance(packet[name], str) or len(packet[name]) != 64 for name in digest_fields
+            not isinstance(packet[name], str) or HEX64.fullmatch(packet[name]) is None
+            for name in digest_fields
         )
         or packet.get("labels") != list(LABELS)
         or packet.get("split_algorithm") != "support-routing-stratified-sha256.v1"
@@ -261,7 +263,7 @@ def _packet_only(raw: bytes) -> dict[str, Any]:
             or type(ledger["bytes"]) is not int
             or ledger["bytes"] <= 0
             or not isinstance(ledger["sha256"], str)
-            or len(ledger["sha256"]) != 64
+            or HEX64.fullmatch(ledger["sha256"]) is None
             or type(split_count) is not int
             or split_count < minimum
             or not isinstance(label_counts, dict)
@@ -535,7 +537,10 @@ def _validate_embedding_manifest(
         "train_dev_capsule_sha256",
         "protocol_sha256",
     )
-    if any(not isinstance(manifest[name], str) or len(manifest[name]) != 64 for name in hashes):
+    if any(
+        not isinstance(manifest[name], str) or HEX64.fullmatch(manifest[name]) is None
+        for name in hashes
+    ):
         raise HumanResearchError("embedding manifest binding")
     if manifest["packet_manifest_sha256"] != digest(packet_raw) or manifest[
         "packet_release_receipt_sha256"

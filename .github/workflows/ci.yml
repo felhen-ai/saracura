@@ -79,4 +79,4 @@ jobs:
       # Linux has no MPS device. The live MPS tests are explicitly skipped;
       # this job exercises closed capsule/tensor/CPU validation without model
       # downloads, snapshot discovery, or operator artifacts.
-      - run: uv run pytest -q tests/test_human_training.py tests/test_phase4a.py
+      - run: uv run pytest -q tests/test_human_training.py tests/test_human_calibration.py tests/test_calibration.py tests/test_phase4a.py

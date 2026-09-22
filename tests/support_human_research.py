@@ -39,7 +39,7 @@ def write_private(path: Path, raw: bytes) -> None:
     path.chmod(0o600)
 
 
-def make_test_registry(private_key: Any) -> TrustRegistry:
+def make_test_registry(private_key: Any, *, scopes: list[str] | None = None) -> TrustRegistry:
     value: dict[str, Any] = {
         "schema_version": "research-trust-keys.v1",
         "keys": [
@@ -48,7 +48,7 @@ def make_test_registry(private_key: Any) -> TrustRegistry:
                 "public_key_ed25519": private_key.public_key().public_bytes_raw().hex(),
                 "active_from": "2026-01-01T00:00:00Z",
                 "revoked_at": None,
-                "scopes": ["packet_training"],
+                "scopes": scopes or ["packet_training"],
             }
         ],
         "registry_sha256": "",
@@ -60,12 +60,18 @@ def make_test_registry(private_key: Any) -> TrustRegistry:
 
 
 def inject_test_trust(
-    monkeypatch: Any, private_key: Any, *, now: datetime = datetime(2026, 9, 22, 12, tzinfo=UTC)
+    monkeypatch: Any,
+    private_key: Any,
+    *,
+    scopes: list[str] | None = None,
+    now: datetime = datetime(2026, 9, 22, 12, tzinfo=UTC),
 ) -> None:
     """Install an ephemeral registry and fixed clock only inside a test process."""
 
     monkeypatch.setattr(
-        research_trust, "package_trust_registry", lambda: make_test_registry(private_key)
+        research_trust,
+        "package_trust_registry",
+        lambda: make_test_registry(private_key, scopes=scopes),
     )
     inject_test_clock(monkeypatch, now=now)
 
@@ -78,10 +84,12 @@ def inject_test_clock(
     monkeypatch.setattr(research_trust, "_utc_now", lambda: now)
 
 
-def signed_receipt(private_key: Any, evidence: dict[str, str]) -> bytes:
+def signed_receipt(
+    private_key: Any, evidence: dict[str, str], *, scope: str = "packet_training"
+) -> bytes:
     value: dict[str, Any] = {
         "schema_version": "maintainer-release-receipt.v1",
-        "scope": "packet_training",
+        "scope": scope,
         "key_id": "maintainer_aaaaaaaaaaaaaaaa",
         "evidence_mode": "real_human",
         "issued_at": "2026-09-22T00:00:00Z",
