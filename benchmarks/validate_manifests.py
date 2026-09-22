@@ -9,6 +9,7 @@ from benchmarks.data_policy_registry import load_registry as load_data_policy_re
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
 from benchmarks.synthetic_research import validate_synthetic_policy
+from benchmarks.universal_bakeoff import load_candidate_registry, load_plan
 
 REQUIRED_FIELDS = {
     "schema_version",
@@ -59,6 +60,12 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "synthetic-research-policy.v1":
         validate_synthetic_policy(path)
+        return
+    if schema_version == "decision-backend-candidates.v1":
+        load_candidate_registry(raw)
+        return
+    if schema_version == "universal-bakeoff-plan.v1":
+        load_plan(raw)
         return
     if schema_version == 1:
         validate_manifest(path)
