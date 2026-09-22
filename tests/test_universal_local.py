@@ -5,13 +5,16 @@ import importlib.util
 import json
 import os
 import urllib.request
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from benchmarks import inspect_wheel
-from benchmarks.universal_local import acquisition, registry
+from benchmarks.universal_local import acquisition, conformance, registry, runner
 from benchmarks.universal_local.acquisition import verification_receipt, verify_snapshot
+from benchmarks.universal_local.loaders import LoadError
 from benchmarks.universal_local.registry import Candidate
 
 
@@ -39,7 +42,7 @@ def _fake_candidate() -> Candidate:
     return Candidate(data)
 
 
-def test_v2_registry_is_pending_and_routes_offline() -> None:
+def test_v2_registry_links_reviewed_real_conformance_offline() -> None:
     candidates = registry.validate_registry()
     assert {candidate.id for candidate in candidates} == {
         "saracura-compiled",
@@ -50,8 +53,14 @@ def test_v2_registry_is_pending_and_routes_offline() -> None:
         "typesafe-jev",
         "diffusiongemma-openjev",
     }
+    digest = hashlib.sha256(
+        (
+            Path(__file__).parents[1] / "benchmarks/fixtures/universal-local-conformance.v1.json"
+        ).read_bytes()
+    ).hexdigest()
     assert all(
-        candidate.conformance_state == "pending"
+        candidate.conformance_state == "source_contract_reviewed"
+        and candidate.conformance_vector_sha256 == digest
         for candidate in candidates
         if candidate.acquisition_state == "eligible"
     )
@@ -71,8 +80,21 @@ def test_registry_rejects_duplicate_keys_and_contract_mutation() -> None:
     payload["candidates"][1]["acquisition_contract_digest"] = registry.acquisition_contract_digest(
         payload["candidates"][1]
     )
-    with pytest.raises(ValueError, match="truth table"):
+    with pytest.raises(ValueError, match=r"linkage|truth table"):
         registry.load_registry(json.dumps(payload).encode())
+
+
+def test_conformance_fixture_schema_rejects_unknown_fields() -> None:
+    fixture = json.loads(
+        (
+            Path(__file__).parents[1] / "benchmarks/fixtures/universal-local-conformance.v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    entry = fixture["candidates"][0]
+    registry._validate_conformance_entry(entry)
+    entry["raw_scores"] = [0.1, 0.9]
+    with pytest.raises(ValueError, match="not closed"):
+        registry._validate_conformance_entry(entry)
 
 
 def test_registry_rejects_mutated_predecessor_bytes(
@@ -373,3 +395,98 @@ def test_default_environment_proof_does_not_import_optional_local_stack() -> Non
 def test_universal_local_is_checkout_only_and_excluded_from_package() -> None:
     assert not (Path(__file__).parents[1] / "src" / "saracura" / "universal_local").exists()
     assert not inspect_wheel._allowed_entry("benchmarks/universal_local/acquisition.py")
+
+
+def test_pending_conformance_seals_bounded_run_artifact_without_loading_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(runner, "ARTIFACT_ROOT", tmp_path / "universal-bakeoff")
+    pending_data = dict(registry.get_candidate("laya-multilingual").data)
+    pending_data["conformance_state"] = "pending"
+    pending_data["conformance_vector_sha256"] = None
+    result = runner.run(Candidate(pending_data), "cpu", 1, 1, "pending")
+    assert result == {"candidate_id": "laya-multilingual", "status": "blocked"}
+    artifact = tmp_path / "universal-bakeoff" / "pending"
+    assert {entry.name for entry in artifact.iterdir()} == {
+        "result.json",
+        "report.md",
+        "artifact-manifest.json",
+    }
+    serialized = (artifact / "result.json").read_text(encoding="utf-8")
+    assert "conformance_pending" in serialized
+    assert "Pedido atualizado" not in serialized
+
+
+def test_laya_choice_logits_are_not_indexed_by_sequence_offsets() -> None:
+    class Logits:
+        key: object = None
+
+        def __getitem__(self, key: object) -> Logits:
+            self.key = key
+            return self
+
+    logits = Logits()
+    assert runner._select_laya_choice_logits(logits, 3, 2) is logits
+    assert logits.key == (3, slice(None, 2))
+
+
+def test_throughput_counts_every_measured_iteration() -> None:
+    assert runner._decisions_per_second(10, [100.0, 100.0, 100.0]) == 100.0
+
+
+def test_live_conformance_must_equal_committed_vector(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    candidate = _fake_candidate()
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "schema_version": "universal-local-conformance.v1",
+                "candidates": [{"candidate_id": candidate.id, "value": "reviewed"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Receipt:
+        live = False
+
+        def assert_live(self) -> None:
+            self.live = True
+
+    receipt = Receipt()
+    tokenizer = object()
+    monkeypatch.setattr(conformance, "FIXTURE_PATH", fixture)
+    monkeypatch.setattr(conformance, "_tokenizer", lambda *_: tokenizer)
+    monkeypatch.setattr(
+        conformance, "_fragment", lambda *_: {"candidate_id": candidate.id, "value": "changed"}
+    )
+    with pytest.raises(LoadError, match="live tokenizer"):
+        conformance.validate_conformance_receipt(cast(Any, receipt), candidate)
+    assert not receipt.live
+
+
+def test_unexpected_execution_error_still_seals_bounded_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Receipt:
+        pass
+
+    candidate = registry.get_candidate("laya-multilingual")
+    monkeypatch.setattr(runner, "ARTIFACT_ROOT", tmp_path / "universal-bakeoff")
+    monkeypatch.setattr(runner, "validate_plan", lambda: object())
+    monkeypatch.setattr(runner, "verification_receipt", lambda _: nullcontext(Receipt()))
+    monkeypatch.setattr(conformance, "validate_conformance_receipt", lambda *_: object())
+    monkeypatch.setattr(
+        runner, "load_candidate", lambda *_: (_ for _ in ()).throw(IndexError("regression"))
+    )
+    result = runner.run(candidate, "cpu", 1, 1, "unexpected")
+    assert result == {"candidate_id": "laya-multilingual", "status": "blocked"}
+    artifact = tmp_path / "universal-bakeoff" / "unexpected"
+    assert {entry.name for entry in artifact.iterdir()} == {
+        "result.json",
+        "report.md",
+        "artifact-manifest.json",
+    }
+    assert "candidate_execution_blocked" in (artifact / "result.json").read_text()

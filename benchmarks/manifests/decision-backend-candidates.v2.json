@@ -95,8 +95,8 @@
         {"path": "model.safetensors", "bytes": 643835514, "sha256": "9d628fd971b700382ac6f65920a86f149777b2e748e0c955fb3b19695aa8f204", "role": "encoder and decision-head weights"}
       ],
       "acquisition_contract_digest": "be1356e4d2a771830e44b899d1ddd8fc2f30b36943d6becb321afdfecc5b638d",
-      "conformance_state": "pending",
-      "conformance_vector_sha256": null,
+      "conformance_state": "source_contract_reviewed",
+      "conformance_vector_sha256": "14f2eba88e45d9b9138c3c4ceabc5413a5bdb069f838a6480b4071a9d94fa3b7",
       "architecture_attribution": "positive_compatibility_only"
     },
     {
@@ -188,8 +188,8 @@
         {"path": "model.safetensors", "bytes": 557652046, "sha256": "65af59b1ff4450b09ecbf13ca35c840dbf038b26ff8e10e5ea89ca724828ed1e", "role": "encoder and NLI weights"}
       ],
       "acquisition_contract_digest": "4e1f66f9eb10bef1eb1850d4fc9bbd7f58342fb10ecfbfe9cfdf446e7ec82720",
-      "conformance_state": "pending",
-      "conformance_vector_sha256": null,
+      "conformance_state": "source_contract_reviewed",
+      "conformance_vector_sha256": "14f2eba88e45d9b9138c3c4ceabc5413a5bdb069f838a6480b4071a9d94fa3b7",
       "architecture_attribution": "positive_compatibility_only"
     },
     {
