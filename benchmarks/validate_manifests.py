@@ -12,6 +12,7 @@ from benchmarks.synthetic_research import validate_synthetic_policy
 from benchmarks.universal_bakeoff import load_candidate_registry, load_plan
 from benchmarks.universal_local.plan import load_plan as load_universal_local_plan
 from benchmarks.universal_local.registry import load_registry as load_universal_local_registry
+from benchmarks.universal_remote.plan import validate_plan as validate_universal_remote_plan
 
 REQUIRED_FIELDS = {
     "schema_version",
@@ -74,6 +75,13 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "universal-bakeoff-plan.v2":
         load_universal_local_plan(raw)
+        return
+    if schema_version == "universal-bakeoff-plan.v3":
+        # v3 is bound to the actual checked-in predecessor bytes; validation
+        # of an alternate raw payload remains available through its own CLI.
+        if raw != (Path(__file__).parent / "manifests/universal-bakeoff-plan.v3.json").read_bytes():
+            raise ValueError(f"{path}: v3 plan must be the canonical file")
+        validate_universal_remote_plan()
         return
     if schema_version == 1:
         validate_manifest(path)
