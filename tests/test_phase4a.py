@@ -8,10 +8,10 @@ import os
 import socket
 from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 import saracura.cli as cli
 import saracura.verified_bytes as verified_bytes
@@ -31,6 +31,7 @@ from saracura.calibration import (
 )
 from saracura.contracts import (
     ChoiceQuestion,
+    DecisionRequest,
     ErrorCode,
     ModelReference,
     SaracuraError,
@@ -192,7 +193,7 @@ class _CliMiniLMBackend:
 
 def _artifact_for_nonfixture(
     backend: _NonFixtureBackend, *, changed_precision: bool = False
-) -> tuple[object, CalibrationArtifact]:
+) -> tuple[DecisionRequest, CalibrationArtifact]:
     request = decision_request(known_scaling_questions(1)).model_copy(
         update={"model": backend.model.revision}
     )
@@ -235,7 +236,7 @@ def test_phase4a_profile_and_package_registry_are_exact() -> None:
     }
     assert (
         PHASE4A_IDENTITY_PROFILE.split_manifest_sha256
-        == hashlib.sha256(canonical_json_bytes(expected)).hexdigest()
+        == hashlib.sha256(canonical_json_bytes(cast(JsonValue, expected))).hexdigest()
     )
     assert (
         package_registry_bytes()
@@ -488,10 +489,13 @@ def test_minilm_special_token_map_matches_the_reviewed_snapshot_contract() -> No
             "normalized": False,
         },
     }
-    assert backend._parse_special_tokens(canonical_json_bytes(valid))["mask_token"] == "<mask>"
-    valid["mask_token"]["normalized"] = True
+    assert (
+        backend._parse_special_tokens(canonical_json_bytes(cast(JsonValue, valid)))["mask_token"]
+        == "<mask>"
+    )
+    cast(dict[str, JsonValue], valid["mask_token"])["normalized"] = True
     with pytest.raises(ValueError, match="mask token contract"):
-        backend._parse_special_tokens(canonical_json_bytes(valid))
+        backend._parse_special_tokens(canonical_json_bytes(cast(JsonValue, valid)))
 
 
 def test_opt_in_local_mps_conformance_uses_only_operator_paths() -> None:
@@ -671,15 +675,19 @@ def _valid_training_manifest(checkpoint: bytes) -> bytes:
         },
         "authorizations": {"calibration": False, "automation": False, "quality_claims": False},
     }
-    manifest["manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
-    return canonical_json_bytes(manifest) + b"\n"
+    manifest["manifest_sha256"] = hashlib.sha256(
+        canonical_json_bytes(cast(JsonValue, manifest))
+    ).hexdigest()
+    return canonical_json_bytes(cast(JsonValue, manifest)) + b"\n"
 
 
 def _rehashed_manifest_bytes(manifest: dict[str, object]) -> bytes:
     unhashed = dict(manifest)
     unhashed.pop("manifest_sha256", None)
-    manifest["manifest_sha256"] = hashlib.sha256(canonical_json_bytes(unhashed)).hexdigest()
-    return canonical_json_bytes(manifest) + b"\n"
+    manifest["manifest_sha256"] = hashlib.sha256(
+        canonical_json_bytes(cast(JsonValue, unhashed))
+    ).hexdigest()
+    return canonical_json_bytes(cast(JsonValue, manifest)) + b"\n"
 
 
 def _safe_write(path: Path, content: bytes) -> None:
@@ -787,7 +795,10 @@ def _small_verified_inputs(
             for item in candidate.files
         ],
     }
-    _safe_write(snapshot / "snapshot.complete.json", canonical_json_bytes(marker))
+    _safe_write(
+        snapshot / "snapshot.complete.json",
+        canonical_json_bytes(cast(JsonValue, marker)),
+    )
 
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir(mode=0o700)
@@ -850,7 +861,7 @@ def test_verified_byte_loader_detects_same_process_mutation_during_read(
 ) -> None:
     snapshot, manifest, checkpoint = _small_verified_inputs(tmp_path, monkeypatch)
     target_inode = os.stat(manifest, follow_symlinks=False).st_ino
-    original_read = verified_bytes.os.read
+    original_read = os.read
     mutated = False
 
     def mutate_after_read(descriptor: int, count: int) -> bytes:
@@ -861,7 +872,7 @@ def test_verified_byte_loader_detects_same_process_mutation_during_read(
             _safe_write(manifest, b"{}")
         return data
 
-    monkeypatch.setattr(verified_bytes.os, "read", mutate_after_read)
+    monkeypatch.setattr(os, "read", mutate_after_read)
     with pytest.raises(VerifiedBytesError, match="changed"):
         load_verified_minilm_bytes(
             encoder_snapshot=snapshot,
