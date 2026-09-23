@@ -263,6 +263,10 @@ minimum only when both are accepted.
 The provider lane keeps explicit network authorization, ZDR/data-collection
 controls, no secrets in argv/logs/artifacts, atomic no-clobber writes, resumable
 cost ledger, bounded retries, and record-level author/reviewer response hashes.
+Both provider requests disable optional model reasoning with
+`reasoning_effort=none`; the task is constrained generation and independent
+review, not chain-of-thought collection, and hidden reasoning must not consume
+the response budget or turn a bounded batch into an unbounded wait.
 The current Phase 4E execution has a USD 10.00 new-spend safety envelope,
 partitioned into four nonfungible stages: USD 2.00 corpus author, USD 6.00
 corpus reviewer, USD 0.75 comparison author, and USD 1.25 comparison reviewer.

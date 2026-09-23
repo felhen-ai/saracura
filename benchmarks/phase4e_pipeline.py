@@ -69,6 +69,7 @@ def _provider_body(
             "model": model,
             "messages": list(messages),
             "max_tokens": max_output_tokens,
+            "reasoning_effort": "none",
             "temperature": 0,
             "provider": {"data_collection": "deny", "zdr": True},
             "response_format": {
