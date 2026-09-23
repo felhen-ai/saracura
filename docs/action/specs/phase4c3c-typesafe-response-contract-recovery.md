@@ -696,8 +696,4 @@ artifacts remain immutable evidence and are not removed by rollback.
 
 ## Next gate
 
-If the continuation artifact is complete, Phase 4C.4 may produce the
-architecture decision record. Because the benchmark is synthetic and
-unlabeled, production selection remains `insufficient_evidence`; the ADR may
-select the next labeled PT-BR experiment based on systems fit, capacity, cost,
-and operational complexity.
+If the continuation artifact is complete, or is a sealed terminal partial that is explicitly declared `insufficient_evidence`, Phase 4C.4 may produce the [architecture decision record](../../decisions/0001-two-tier-decision-architecture.md). For a terminal partial, the operator must have stopped further recovery and the failure and completed coverage must remain preserved; missing cells stay `insufficient_evidence`, the artifact is not relabeled complete, and it cannot support a candidate-quality recommendation or another provider call. Because the benchmark is synthetic and unlabeled, production selection remains `insufficient_evidence`; the ADR may select the next labeled PT-BR experiment based on systems fit, capacity, cost, and operational complexity.

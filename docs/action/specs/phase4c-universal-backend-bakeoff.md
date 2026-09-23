@@ -465,8 +465,7 @@ never trigger an automatic fallback.
 
 ## Phase 4C.4: architecture decision record
 
-The ADR is produced only after the intended evidence lanes are complete. It
-must compare:
+The ADR is produced after each intended evidence lane is complete or explicitly declared `insufficient_evidence`. A sealed terminal partial may close a lane only after the operator stops further recovery and preserves the failure and completed coverage; it is not relabeled complete, does not authorize another provider call, and supports no conclusion that depends on missing cells. Such conclusions are `insufficient_evidence`. See [ADR 0001](../../decisions/0001-two-tier-decision-architecture.md). It must compare:
 
 - generality on unseen taxonomies and domains;
 - PT-BR behavior and cross-locale parity;

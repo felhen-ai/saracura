@@ -49,6 +49,10 @@ English is the canonical language for technical documentation. The quickstart, p
 
 Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
+## Two-tier research architecture
+
+Saracura is pursuing one typed decision API with two execution tiers. The experimental `universal` tier is intended to accept new Choice schemas without requiring users to adopt predefined model packs or task-specific heads. The optional `compiled` tier specializes stable, high-volume decisions when that optimization is justified. The first universal implementation remains experimental, no model is production-approved, and results do not authorize automation. TypeSafe/Jev is a benchmark and design reference, not a Saracura runtime dependency or fallback. See [ADR 0001](docs/decisions/0001-two-tier-decision-architecture.md).
+
 ## Install and verify
 
 Python 3.11+ and [uv](https://docs.astral.sh/uv/) are required.
