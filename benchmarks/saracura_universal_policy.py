@@ -117,6 +117,14 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
             "content_moderation",
             "personal_productivity",
         ],
+        "splits": {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240},
+        "axes": {
+            "explicitness": ["explicit", "implicit"],
+            "negation": ["absent", "present"],
+            "distractor_overlap": ["low", "high"],
+            "urgency": ["normal", "urgent"],
+        },
+        "cross_locale_pairs": 120,
     }:
         raise Phase4EPolicyError("planning policy is invalid")
     if policy["authorizations"] != {

@@ -1,0 +1,1549 @@
+# ruff: noqa: E501
+"""Offline-first, fail-closed corpus contracts for Phase 4E.2a.
+
+This is intentionally a checkout-only research tool.  It never obtains a
+credential and the injected transport is unreachable unless the caller has
+already made an explicit, higher-phase network decision.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import re
+import tempfile
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from ctypes import CDLL, c_char_p, c_int, get_errno, set_errno
+from dataclasses import dataclass, field
+from decimal import Decimal
+from difflib import SequenceMatcher
+from errno import EEXIST
+from pathlib import Path
+from typing import Any, Literal, Protocol, cast
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
+
+from benchmarks.encoder_loader import VerifiedSnapshot, load_encoder
+from benchmarks.encoder_registry import get_candidate
+from benchmarks.io import atomic_create
+from benchmarks.saracura_universal_policy import validate_phase4e_policy
+from saracura.contracts.models import ChoiceCriterion
+from saracura.serialization import canonical_json_bytes
+from saracura.universal.rendering import CapacityError, render_task, validate_rendered_capacity
+from saracura.universal.tasks import UniversalTask
+
+SPLITS = ("synthetic_train", "synthetic_dev", "synthetic_holdout")
+LOCALES = ("pt-BR", "en")
+OPTION_COUNTS = tuple(range(2, 9))
+DOMAINS = (
+    "email_triage",
+    "customer_support",
+    "finance",
+    "accounting",
+    "commerce",
+    "operations",
+    "scheduling",
+    "document_routing",
+    "browser_action",
+    "security_triage",
+    "content_moderation",
+    "personal_productivity",
+)
+AXES: dict[str, tuple[str, str]] = {
+    "explicitness": ("explicit", "implicit"),
+    "negation": ("absent", "present"),
+    "distractor_overlap": ("low", "high"),
+    "urgency": ("normal", "urgent"),
+}
+SPLIT_SIZES = {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240}
+PAIR_COUNTS = {"synthetic_train": 84, "synthetic_dev": 18, "synthetic_holdout": 18}
+STAGE_LIMITS = {
+    "corpus_author": Decimal("0.60"),
+    "corpus_reviewer": Decimal("1.00"),
+    "comparison_author": Decimal("0.15"),
+    "comparison_reviewer": Decimal("0.25"),
+}
+PRICES = {
+    "corpus_author": (Decimal("0.12"), Decimal("0.20")),
+    "corpus_reviewer": (Decimal("0.20"), Decimal("0.60")),
+}
+AUTHOR_MODEL = "qwen/qwen3.5-9b"
+REVIEWER_MODEL = "mistralai/ministral-8b-2512"
+_SENSITIVE = re.compile(r"(?:\b\d{3}[.]?\d{3}[.]?\d{3}-?\d{2}\b|\b\d{13,16}\b|@|https?://)", re.I)
+
+
+class CorpusError(ValueError):
+    """A closed corpus invariant was violated."""
+
+
+class TokenCounter(Protocol):
+    def count(self, text: str) -> int: ...
+
+
+class Transport(Protocol):
+    def __call__(self, method: str, url: str, headers: Mapping[str, str], body: bytes) -> Any: ...
+
+
+@dataclass(frozen=True)
+class VerifiedMiniLMTokenizerReceipt:
+    """Exact tokenizer capability bound to the reviewed MiniLM snapshot.
+
+    Construction verifies descriptor bytes before loading with ``local_files_only``;
+    it is therefore the only production capacity path and cannot acquire a model.
+    """
+
+    _tokenizer: Any = field(repr=False, compare=False)
+    candidate_id: str
+    revision: str
+
+    @classmethod
+    def create(cls, snapshot: Path) -> VerifiedMiniLMTokenizerReceipt:
+        candidate = get_candidate("multilingual-minilm-l12")
+        verified = VerifiedSnapshot.create(candidate, snapshot)
+        loaded = load_encoder(candidate, snapshot, verified=verified)
+        if (
+            loaded.candidate.id != "multilingual-minilm-l12"
+            or loaded.candidate.revision != "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
+        ):
+            raise CorpusError("verified tokenizer is not reviewed MiniLM")
+        return cls(loaded.tokenizer, loaded.candidate.id, loaded.candidate.revision)
+
+    def count(self, text: str) -> int:
+        encoded = self._tokenizer(text, truncation=False, add_special_tokens=True)
+        ids = encoded.get("input_ids") if isinstance(encoded, Mapping) else None
+        if not isinstance(ids, list) or not all(isinstance(item, int) for item in ids):
+            raise CorpusError("verified tokenizer output")
+        return len(ids)
+
+
+def _canonical(value: Any) -> bytes:
+    return canonical_json_bytes(value)
+
+
+def _sha(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _seeded(seed: str, *parts: object) -> int:
+    return int(_sha("\0".join((seed, *(str(part) for part in parts))).encode())[:16], 16)
+
+
+def _cell_counts(split: str) -> dict[tuple[str, int], int]:
+    """Allocate each fixed split before any provider result is visible."""
+    total = SPLIT_SIZES[split]
+    if split == "synthetic_train":
+        pt = [96] * 7
+        en = [64] * 7
+    elif split == "synthetic_dev":
+        pt = [21, 21, 21, 21, 20, 20, 20]
+        en = [14, 14, 14, 14, 14, 13, 13]
+    else:
+        pt = [21, 21, 21, 21, 20, 20, 20]
+        en = [14, 14, 14, 14, 14, 13, 13]
+    result = {("pt-BR", count): pt[index] for index, count in enumerate(OPTION_COUNTS)}
+    result.update({("en", count): en[index] for index, count in enumerate(OPTION_COUNTS)})
+    if sum(result.values()) != total:
+        raise AssertionError("fixed split allocation")
+    return result
+
+
+def build_plan() -> dict[str, Any]:
+    """Return the immutable, text-free 1,600-slot public-seed plan."""
+    policy = validate_phase4e_policy()
+    seed = cast(str, policy["planning"]["seed"])
+    slots: list[dict[str, Any]] = []
+    serial = 0
+    for split in SPLITS:
+        for locale, option_count in (
+            (locale_value, count) for locale_value in LOCALES for count in OPTION_COUNTS
+        ):
+            for within_cell in range(_cell_counts(split)[(locale, option_count)]):
+                axes = {
+                    key: values[_seeded(seed, split, locale, option_count, within_cell, key) % 2]
+                    for key, values in AXES.items()
+                }
+                task_id = "task-" + _sha(f"{seed}\0task\0{serial}".encode())
+                slots.append(
+                    {
+                        "slot": serial,
+                        "task_id": task_id,
+                        "family_id": "family-" + _sha(f"{seed}\0family\0{serial}".encode()),
+                        "pair_id": None,
+                        "split": split,
+                        "locale": locale,
+                        "domain": DOMAINS[
+                            _seeded(seed, split, locale, option_count, within_cell) % len(DOMAINS)
+                        ],
+                        "axes": axes,
+                        "option_count": option_count,
+                        "gold_position": within_cell % option_count,
+                    }
+                )
+                serial += 1
+    # Pair slots only after cell/split allocation.  Thus a partial pair cannot leak across a split.
+    for split in SPLITS:
+        needed = PAIR_COUNTS[split]
+        by_cell: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+        for slot in slots:
+            if slot["split"] == split:
+                by_cell[(cast(str, slot["locale"]), cast(int, slot["option_count"]))].append(slot)
+        pair_index = 0
+        while pair_index < needed:
+            option_count = OPTION_COUNTS[pair_index % len(OPTION_COUNTS)]
+            pt = by_cell[("pt-BR", option_count)].pop(0)
+            en = by_cell[("en", option_count)].pop(0)
+            pair_id = "family-" + _sha(f"{seed}\0pair\0{split}\0{pair_index}".encode())
+            # Cross-locale members share every semantic axis; locale is deliberately separate.
+            en["family_id"] = pt["family_id"] = pair_id
+            en["pair_id"] = pt["pair_id"] = pair_id
+            en["domain"] = pt["domain"]
+            en["axes"] = pt["axes"]
+            en["gold_position"] = pt["gold_position"]
+            pair_index += 1
+    return {
+        "schema_version": "phase4e-universal-plan.v1",
+        "workflow_revision": "phase4e-saracura-universal-synthetic.v1",
+        "seed": seed,
+        "slots": slots,
+    }
+
+
+def validate_plan(value: Mapping[str, Any]) -> None:
+    """Fail closed on any mutation; no provider result can alter this plan."""
+    if _canonical(value) != _canonical(build_plan()):
+        raise CorpusError("immutable plan mismatch")
+    slots = value.get("slots")
+    if not isinstance(slots, list) or len(slots) != 1600:
+        raise CorpusError("plan slot count")
+    counts = Counter(cast(str, row["split"]) for row in slots)
+    if counts != SPLIT_SIZES:
+        raise CorpusError("plan split allocation")
+    pairs: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in slots:
+        pair = row.get("pair_id")
+        if pair is not None:
+            pairs[cast(str, pair)].append(row)
+    if len(pairs) != 120 or any(len(rows) != 2 for rows in pairs.values()):
+        raise CorpusError("cross-locale plan")
+    for rows in pairs.values():
+        if {row["locale"] for row in rows} != set(LOCALES) or len(
+            {row["split"] for row in rows}
+        ) != 1:
+            raise CorpusError("cross-locale split isolation")
+    for split in SPLITS:
+        for locale in LOCALES:
+            for count in OPTION_COUNTS:
+                positions = [
+                    cast(int, row["gold_position"])
+                    for row in slots
+                    if row["split"] == split
+                    and row["locale"] == locale
+                    and row["option_count"] == count
+                ]
+                if (
+                    not positions
+                    or max(Counter(positions).values()) - min(Counter(positions).values()) > 1
+                ):
+                    raise CorpusError("gold positions are not balanced")
+
+
+class _Closed(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class AuthorRecord(_Closed):
+    task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
+    family_id: str = Field(pattern=r"^family-[0-9a-f]{64}$")
+    locale: Literal["pt-BR", "en"]
+    domain: str
+    axes: dict[str, str]
+    option_count: int = Field(ge=2, le=8)
+    gold_position: int = Field(ge=0, le=7)
+    instruction: str = Field(min_length=1, max_length=120)
+    state: dict[str, Any] = Field(min_length=1, max_length=64)
+    criteria: list[ChoiceCriterion] = Field(min_length=2, max_length=8)
+    selected_criterion_id: str
+    cross_locale_attestation: CrossLocaleAttestation | None = None
+
+
+class SemanticEquivalenceAttestation(_Closed):
+    """Language-neutral semantics independently stated by an actor."""
+
+    scenario: str = Field(min_length=1, max_length=120)
+    criterion_roles: list[str] = Field(min_length=2, max_length=8)
+    selected_role: str = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def distinct_roles_and_selected_role(self) -> SemanticEquivalenceAttestation:
+        if len(set(self.criterion_roles)) != len(self.criterion_roles):
+            raise ValueError("cross-locale criterion roles must be distinct")
+        if self.selected_role not in self.criterion_roles:
+            raise ValueError("cross-locale selected role must be declared")
+        return self
+
+
+class CrossLocaleAttestation(SemanticEquivalenceAttestation):
+    """Author's semantic contract bound to one planned locale pair."""
+
+    pair_id: str = Field(pattern=r"^family-[0-9a-f]{64}$")
+
+
+class ReviewerRecord(_Closed):
+    task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
+    status: Literal["accepted", "rejected"]
+    selected_criterion_id: str | None
+    reason_codes: list[str] = Field(max_length=8)
+    natural_language: bool
+    fictional: bool
+    exclusive_options: bool
+    private_or_sensitive: bool
+    semantic_equivalence_attestation: SemanticEquivalenceAttestation
+
+
+class ValidatedAuthorRow(_Closed):
+    """One locally validated author result eligible for a blind review request.
+
+    This keeps planner and answer fields available to the local acceptance
+    pipeline while making the reviewer transport derive its public view from a
+    closed, typed row rather than from caller-provided chat messages.
+    """
+
+    task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
+    family_id: str = Field(pattern=r"^family-[0-9a-f]{64}$")
+    locale: Literal["pt-BR", "en"]
+    domain: str
+    instruction: str = Field(min_length=1, max_length=120)
+    state: dict[str, JsonValue] = Field(min_length=1, max_length=64)
+    criteria: list[ChoiceCriterion] = Field(min_length=2, max_length=8)
+    selected_criterion_id: str
+    split: Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]
+    pair_id: str | None
+    axes: dict[str, str]
+    cross_locale_attestation: CrossLocaleAttestation | None
+
+    @model_validator(mode="after")
+    def valid_author_task(self) -> ValidatedAuthorRow:
+        try:
+            UniversalTask.model_validate(
+                {
+                    "task_id": self.task_id,
+                    "family_id": self.family_id,
+                    "locale": self.locale,
+                    "domain": self.domain,
+                    "instruction": self.instruction,
+                    "state": self.state,
+                    "criteria": self.criteria,
+                    "selected_criterion_id": self.selected_criterion_id,
+                }
+            )
+        except ValidationError as error:
+            raise ValueError("author task contract") from error
+        return self
+
+
+class AcceptedPacketRow(_Closed):
+    """One sealed synthetic row with its independently matching review receipt."""
+
+    task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
+    family_id: str = Field(pattern=r"^family-[0-9a-f]{64}$")
+    locale: Literal["pt-BR", "en"]
+    domain: str
+    instruction: str = Field(min_length=1, max_length=120)
+    state: dict[str, JsonValue] = Field(min_length=1, max_length=64)
+    criteria: list[ChoiceCriterion] = Field(min_length=2, max_length=8)
+    selected_criterion_id: str
+    split: Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]
+    pair_id: str | None
+    axes: dict[str, str]
+    cross_locale_attestation: CrossLocaleAttestation | None
+    synthetic_only: Literal[True]
+    review: ReviewerRecord
+    review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def matching_review_receipt(self) -> AcceptedPacketRow:
+        try:
+            UniversalTask.model_validate(
+                {
+                    "task_id": self.task_id,
+                    "family_id": self.family_id,
+                    "locale": self.locale,
+                    "domain": self.domain,
+                    "instruction": self.instruction,
+                    "state": self.state,
+                    "criteria": self.criteria,
+                    "selected_criterion_id": self.selected_criterion_id,
+                }
+            )
+        except ValidationError as error:
+            raise ValueError("accepted task contract") from error
+        review = self.review.model_dump(mode="json")
+        if (
+            self.review.status != "accepted"
+            or self.review.task_id != self.task_id
+            or self.review.selected_criterion_id != self.selected_criterion_id
+            or not self.review.natural_language
+            or not self.review.fictional
+            or not self.review.exclusive_options
+            or self.review.private_or_sensitive
+        ):
+            raise ValueError("accepted review does not match task")
+        if self.review_sha256 != _sha(_canonical(review)):
+            raise ValueError("accepted review integrity")
+        if self.pair_id is None:
+            if self.cross_locale_attestation is not None:
+                raise ValueError("unpaired task cannot have a cross-locale attestation")
+        else:
+            attestation = self.cross_locale_attestation
+            reviewer_attestation = self.review.semantic_equivalence_attestation
+            selected_position = next(
+                index
+                for index, criterion in enumerate(self.criteria)
+                if criterion.id == self.selected_criterion_id
+            )
+            if (
+                attestation is None
+                or attestation.pair_id != self.pair_id
+                or len(attestation.criterion_roles) != len(self.criteria)
+                or attestation.selected_role != attestation.criterion_roles[selected_position]
+                or _canonical(_author_semantic_attestation(attestation))
+                != _canonical(reviewer_attestation.model_dump(mode="json"))
+            ):
+                raise ValueError("cross-locale attestation does not bind task semantics")
+        return self
+
+
+def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
+    required = {
+        "task_id",
+        "family_id",
+        "locale",
+        "domain",
+        "axes",
+        "option_count",
+        "gold_position",
+        "pair_id",
+    }
+    if not required <= set(slot):
+        raise CorpusError("author batch slot")
+    schema = AuthorRecord.model_json_schema()
+    properties = cast(dict[str, dict[str, Any]], schema["properties"])
+    for name in (
+        "task_id",
+        "family_id",
+        "locale",
+        "domain",
+        "axes",
+        "option_count",
+        "gold_position",
+    ):
+        properties[name] = {**properties[name], "const": slot[name]}
+    option_count = slot["option_count"]
+    if not isinstance(option_count, int) or not 2 <= option_count <= 8:
+        raise CorpusError("author batch option count")
+    properties["criteria"] = {
+        **properties["criteria"],
+        "minItems": option_count,
+        "maxItems": option_count,
+    }
+    if slot["pair_id"] is None:
+        properties["cross_locale_attestation"] = {
+            **properties["cross_locale_attestation"],
+            "const": None,
+        }
+    else:
+        properties["cross_locale_attestation"] = {
+            **properties["cross_locale_attestation"],
+            "type": "object",
+        }
+    return schema
+
+
+def _validate_author_batch(slots: Sequence[Mapping[str, Any]]) -> None:
+    if not slots:
+        raise CorpusError("invalid author batch")
+    pairs: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for slot in slots:
+        pair_id = slot.get("pair_id")
+        if pair_id is not None:
+            if not isinstance(pair_id, str):
+                raise CorpusError("author batch pair")
+            pairs[pair_id].append(slot)
+    for members in pairs.values():
+        if len(members) != 2 or {member.get("locale") for member in members} != set(LOCALES):
+            raise CorpusError("cross-locale author batch")
+
+
+def author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return an exact response schema for this planned author request.
+
+    A paired family is deliberately a two-record response: no provider request
+    can represent only one locale member or add a replacement identity.
+    """
+
+    _validate_author_batch(slots)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["records"],
+        "properties": {
+            "records": {
+                "type": "array",
+                "minItems": len(slots),
+                "maxItems": len(slots),
+                "prefixItems": [_author_slot_schema(slot) for slot in slots],
+                "items": False,
+            }
+        },
+    }
+
+
+def reviewer_schema(batch_size: int) -> dict[str, Any]:
+    if batch_size < 1:
+        raise CorpusError("invalid reviewer batch")
+    schema = ReviewerRecord.model_json_schema()
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["reviews"],
+        "properties": {
+            "reviews": {
+                "type": "array",
+                "minItems": batch_size,
+                "maxItems": batch_size,
+                "items": schema,
+            }
+        },
+    }
+
+
+def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": "Create fictional decision tasks only. Echo every planned field exactly. The selected criterion must occupy gold_position. For a cross-locale pair, provide the same language-neutral scenario and ordered criterion-role attestation in both records, with selected_role at gold_position. Do not use personal data, credentials, real organizations, URLs, or private records.",
+        },
+        {"role": "user", "content": _canonical({"slots": list(slots)}).decode("utf-8")},
+    ]
+
+
+def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]]:
+    """Build the only reviewer prompt from one validated author row.
+
+    Review happens one task at a time so a reviewer cannot infer pair metadata
+    from siblings.  The transport view is an allowlist, not a redaction of
+    caller-provided messages.
+    """
+    if len(rows) != 1 or not isinstance(rows[0], ValidatedAuthorRow):
+        raise CorpusError("reviewer requires one validated author row")
+    safe = [
+        {
+            key: (
+                [criterion.model_dump(mode="json") for criterion in row.criteria]
+                if key == "criteria"
+                else getattr(row, key)
+            )
+            for key in (
+                "task_id",
+                "family_id",
+                "locale",
+                "domain",
+                "instruction",
+                "state",
+                "criteria",
+            )
+        }
+        for row in rows
+    ]
+    payload = _canonical({"tasks": safe}).decode("utf-8")
+    # This check protects future edits as well as the call site.
+    if any(
+        field in payload
+        for field in ("gold_position", "selected_criterion_id", "pair_id", "split", "axes")
+    ):
+        raise CorpusError("reviewer answer blindness violated")
+    return [
+        {
+            "role": "system",
+            "content": "Independently select one criterion or reject. Check natural language, internal sufficiency, exclusive options, fictionality, privacy, and sensitive patterns. For every task, independently state a language-neutral semantic equivalence attestation with a scenario, ordered criterion roles, and the selected role. You do not receive answer, pair, or split metadata.",
+        },
+        {"role": "user", "content": payload},
+    ]
+
+
+def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> UniversalTask:
+    try:
+        parsed = AuthorRecord.model_validate(record)
+    except ValidationError as error:
+        raise CorpusError("author record schema") from error
+    planned_fields = (
+        "task_id",
+        "family_id",
+        "locale",
+        "domain",
+        "axes",
+        "option_count",
+        "gold_position",
+    )
+    if any(getattr(parsed, field) != planned[field] for field in planned_fields):
+        raise CorpusError("author changed planner-owned field")
+    if parsed.gold_position >= parsed.option_count or len(parsed.criteria) != parsed.option_count:
+        raise CorpusError("author option cardinality")
+    if parsed.criteria[parsed.gold_position].id != parsed.selected_criterion_id:
+        raise CorpusError("author gold position mismatch")
+    attestation = parsed.cross_locale_attestation
+    if planned["pair_id"] is None:
+        if attestation is not None:
+            raise CorpusError("unpaired cross-locale attestation")
+    elif (
+        attestation is None
+        or attestation.pair_id != planned["pair_id"]
+        or len(attestation.criterion_roles) != parsed.option_count
+        or attestation.selected_role != attestation.criterion_roles[parsed.gold_position]
+    ):
+        raise CorpusError("cross-locale semantic attestation")
+    try:
+        task = UniversalTask(
+            task_id=parsed.task_id,
+            family_id=parsed.family_id,
+            locale=parsed.locale,
+            domain=parsed.domain,
+            instruction=parsed.instruction,
+            state=parsed.state,
+            criteria=tuple(parsed.criteria),
+            selected_criterion_id=parsed.selected_criterion_id,
+        )
+    except ValidationError as error:
+        raise CorpusError("author task contract") from error
+    return task
+
+
+def validate_author_rows(
+    records: Any, slots: Sequence[Mapping[str, Any]], counter: TokenCounter
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or len(records) != len(slots):
+        raise CorpusError("author record count")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping) or not isinstance(record.get("task_id"), str):
+            raise CorpusError("author record schema")
+        if record["task_id"] in by_id:
+            raise CorpusError("duplicate author task")
+        by_id[record["task_id"]] = record
+    if set(by_id) != {cast(str, slot["task_id"]) for slot in slots}:
+        raise CorpusError("author task identity")
+    result: list[dict[str, Any]] = []
+    for slot in slots:
+        task = _author_task(by_id[cast(str, slot["task_id"])], slot)
+        try:
+            validate_rendered_capacity(render_task(task), counter)
+        except CapacityError as error:
+            raise CorpusError("verified tokenizer capacity rejection") from error
+        rendered = task.model_dump(mode="json")
+        rendered["split"] = slot["split"]
+        rendered["pair_id"] = slot["pair_id"]
+        rendered["axes"] = slot["axes"]
+        rendered["cross_locale_attestation"] = (
+            task_attestation.model_dump(mode="json")
+            if (
+                task_attestation := AuthorRecord.model_validate(
+                    by_id[cast(str, slot["task_id"])]
+                ).cross_locale_attestation
+            )
+            is not None
+            else None
+        )
+        result.append(rendered)
+    return result
+
+
+def classify_author_rows(
+    records: Any, slots: Sequence[Mapping[str, Any]], counter: TokenCounter
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve each planned identity once; capacity failures retain their original split."""
+    if not isinstance(records, list) or len(records) != len(slots):
+        raise CorpusError("author record count")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping) or not isinstance(record.get("task_id"), str):
+            raise CorpusError("author record schema")
+        task_id = cast(str, record["task_id"])
+        if task_id in by_id:
+            raise CorpusError("duplicate author task")
+        by_id[task_id] = record
+    if set(by_id) != {cast(str, slot["task_id"]) for slot in slots}:
+        raise CorpusError("author task identity")
+    usable: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for slot in slots:
+        task = _author_task(by_id[cast(str, slot["task_id"])], slot)
+        try:
+            validate_rendered_capacity(render_task(task), counter)
+        except CapacityError:
+            rejected.append(
+                {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"}
+            )
+            continue
+        row = task.model_dump(mode="json")
+        row["split"] = slot["split"]
+        row["pair_id"] = slot["pair_id"]
+        row["axes"] = slot["axes"]
+        row["cross_locale_attestation"] = (
+            task_attestation.model_dump(mode="json")
+            if (
+                task_attestation := AuthorRecord.model_validate(
+                    by_id[cast(str, slot["task_id"])]
+                ).cross_locale_attestation
+            )
+            is not None
+            else None
+        )
+        usable.append(row)
+    return usable, rejected
+
+
+def validate_author_rows_with_verified_minilm(
+    records: Any, slots: Sequence[Mapping[str, Any]], snapshot: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve every planned slot with the verified MiniLM tokenizer.
+
+    Capacity is a planned-slot outcome, not an exceptional path in production:
+    an overflow is retained as an immutable rejection in its assigned split.
+    """
+    return classify_author_rows(records, slots, VerifiedMiniLMTokenizerReceipt.create(snapshot))
+
+
+def _normalized(row: Mapping[str, Any]) -> str:
+    value = _canonical({key: row[key] for key in ("instruction", "state", "criteria")}).decode(
+        "utf-8"
+    )
+    return " ".join(value.casefold().split())
+
+
+def _author_semantic_attestation(
+    attestation: CrossLocaleAttestation,
+) -> dict[str, Any]:
+    """Remove planner-only pair identity before comparing independent statements."""
+    return {
+        "scenario": attestation.scenario,
+        "criterion_roles": attestation.criterion_roles,
+        "selected_role": attestation.selected_role,
+    }
+
+
+def _cross_locale_attestation(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the author's language-neutral attestation for a paired row."""
+    try:
+        attestation = CrossLocaleAttestation.model_validate(row["cross_locale_attestation"])
+    except (KeyError, ValidationError) as error:
+        raise CorpusError("cross-locale semantic attestation") from error
+    if attestation.pair_id != row.get("pair_id"):
+        raise CorpusError("cross-locale semantic attestation")
+    return _author_semantic_attestation(attestation)
+
+
+def _reviewer_semantic_attestation(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the reviewer's independently emitted semantic statement."""
+    try:
+        review = ReviewerRecord.model_validate(row["review"])
+    except (KeyError, ValidationError) as error:
+        raise CorpusError("cross-locale reviewer attestation") from error
+    return review.semantic_equivalence_attestation.model_dump(mode="json")
+
+
+def _cross_locale_pair_is_attested(rows: Sequence[Mapping[str, Any]]) -> bool:
+    """Require matching author and reviewer semantics before pair acceptance."""
+    if len(rows) != 2 or {row.get("locale") for row in rows} != set(LOCALES):
+        return False
+    try:
+        author_attestations = [_canonical(_cross_locale_attestation(row)) for row in rows]
+        reviewer_attestations = [_canonical(_reviewer_semantic_attestation(row)) for row in rows]
+    except CorpusError:
+        return False
+    return (
+        author_attestations[0] == author_attestations[1]
+        and reviewer_attestations[0] == reviewer_attestations[1]
+        and author_attestations == reviewer_attestations
+    )
+
+
+def semantic_fingerprint(row: Mapping[str, Any]) -> str:
+    """Return the global content identity, excluding criterion IDs and order.
+
+    Family and split are deliberately absent: a semantic duplicate must be
+    rejected rather than moved into another family or partition.
+    """
+    criteria = row.get("criteria")
+    selected_id = row.get("selected_criterion_id")
+    if not isinstance(criteria, Sequence) or isinstance(criteria, (str, bytes)):
+        raise CorpusError("semantic fingerprint criteria")
+    descriptions: list[str] = []
+    selected_description: str | None = None
+    for criterion in criteria:
+        if not isinstance(criterion, Mapping):
+            raise CorpusError("semantic fingerprint criterion")
+        criterion_id = criterion.get("id")
+        description = criterion.get("description")
+        if not isinstance(criterion_id, str) or not isinstance(description, str):
+            raise CorpusError("semantic fingerprint criterion")
+        normalized_description = " ".join(description.casefold().split())
+        descriptions.append(normalized_description)
+        if criterion_id == selected_id:
+            selected_description = normalized_description
+    if not isinstance(row.get("instruction"), str) or selected_description is None:
+        raise CorpusError("semantic fingerprint task")
+    value = {
+        "instruction": " ".join(cast(str, row["instruction"]).casefold().split()),
+        "state": row.get("state"),
+        "criteria": sorted(descriptions),
+        "selected_criterion_description": selected_description,
+    }
+    return _sha(_canonical(value))
+
+
+def _privacy(row: Mapping[str, Any]) -> bool:
+    return bool(_SENSITIVE.search(_normalized(row)))
+
+
+def resolve_reviews(
+    rows: Sequence[Mapping[str, Any]], reviews: Any, prior_rows: Iterable[Mapping[str, Any]] = ()
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not isinstance(reviews, list) or len(reviews) != len(rows):
+        raise CorpusError("review record count")
+    by_id: dict[str, ReviewerRecord] = {}
+    for raw in reviews:
+        try:
+            review = ReviewerRecord.model_validate(raw)
+        except ValidationError as error:
+            raise CorpusError("review schema") from error
+        if review.task_id in by_id:
+            raise CorpusError("duplicate review task")
+        by_id[review.task_id] = review
+    if set(by_id) != {cast(str, row["task_id"]) for row in rows}:
+        raise CorpusError("review identity")
+    seen = {semantic_fingerprint(row) for row in prior_rows}
+    normalized_seen = [_normalized(row) for row in prior_rows]
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for row in rows:
+        review = by_id[cast(str, row["task_id"])]
+        reason: str | None = None
+        if (
+            review.status != "accepted"
+            or review.selected_criterion_id != row["selected_criterion_id"]
+        ):
+            reason = "review_disagreement"
+        elif not (review.natural_language and review.fictional and review.exclusive_options):
+            reason = "review_quality"
+        elif review.private_or_sensitive or _privacy(row):
+            reason = "privacy"
+        else:
+            fingerprint = semantic_fingerprint(row)
+            normalized = _normalized(row)
+            if fingerprint in seen:
+                reason = "semantic_duplicate"
+            elif any(
+                SequenceMatcher(None, normalized, item).ratio() >= 0.92 for item in normalized_seen
+            ):
+                reason = "near_duplicate"
+        if reason:
+            rejected.append({"task_id": row["task_id"], "split": row["split"], "reason": reason})
+        else:
+            review_payload = review.model_dump(mode="json")
+            accepted.append(
+                {
+                    **row,
+                    "synthetic_only": True,
+                    "review": review_payload,
+                    "review_sha256": _sha(_canonical(review_payload)),
+                }
+            )
+            seen.add(fingerprint)
+            normalized_seen.append(normalized)
+    paired: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in accepted:
+        if isinstance(row.get("pair_id"), str):
+            paired[cast(str, row["pair_id"])].append(row)
+    invalid_pair_task_ids = {
+        cast(str, row["task_id"])
+        for members in paired.values()
+        if len(members) == 2 and not _cross_locale_pair_is_attested(members)
+        for row in members
+    }
+    if invalid_pair_task_ids:
+        accepted = [row for row in accepted if row["task_id"] not in invalid_pair_task_ids]
+        rejected.extend(
+            {
+                "task_id": task_id,
+                "split": next(row["split"] for row in rows if row["task_id"] == task_id),
+                "reason": "cross_locale_semantic_attestation",
+            }
+            for task_id in sorted(invalid_pair_task_ids)
+        )
+    return accepted, rejected
+
+
+def _minimums(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    split = Counter(cast(str, row["split"]) for row in rows)
+    if (
+        len(rows) < 1200
+        or split["synthetic_train"] < 840
+        or split["synthetic_dev"] < 180
+        or split["synthetic_holdout"] < 180
+    ):
+        errors.append("global_or_split_minimum")
+    if len({row["domain"] for row in rows}) < 12:
+        errors.append("domain_minimum")
+    for part, floor in (("synthetic_train", 20), ("synthetic_dev", 10), ("synthetic_holdout", 10)):
+        if {row["domain"] for row in rows if row["split"] == part} != set(DOMAINS):
+            errors.append("split_domain_minimum")
+        if not any(
+            row["split"] == part
+            and row["axes"]["explicitness"] == "implicit"
+            and row["axes"]["negation"] == "present"
+            for row in rows
+        ):
+            errors.append("split_difficulty_minimum")
+        for locale in LOCALES:
+            for count in OPTION_COUNTS:
+                if (
+                    sum(
+                        row["split"] == part
+                        and row["locale"] == locale
+                        and row["criteria"]
+                        and len(row["criteria"]) == count
+                        for row in rows
+                    )
+                    < floor
+                ):
+                    errors.append("cell_minimum")
+                    break
+    for part in SPLITS:
+        families = {row["family_id"] for row in rows if row["split"] == part}
+        if len(families) < 100:
+            errors.append("family_minimum")
+    locale_count = Counter(cast(str, row["locale"]) for row in rows)
+    if locale_count["pt-BR"] * 100 < len(rows) * 60 or locale_count["en"] * 100 < len(rows) * 20:
+        errors.append("locale_minimum")
+    pair_families: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        if row.get("pair_id"):
+            pair_families[cast(str, row["pair_id"])].add(cast(str, row["locale"]))
+    if sum(locales == set(LOCALES) for locales in pair_families.values()) * 2 < 240:
+        errors.append("cross_locale_minimum")
+    return sorted(set(errors))
+
+
+def _validate_packet_resolution(
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    plan: Mapping[str, Any],
+) -> None:
+    slots = {
+        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    resolved = [*accepted, *rejected]
+    ids = [row.get("task_id") for row in resolved]
+    if len(ids) != len(set(ids)) or set(ids) != set(slots):
+        raise CorpusError("packet resolution coverage")
+    fingerprints: set[str] = set()
+    normalized_rows: list[str] = []
+    paired_accepted: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for raw_row in accepted:
+        try:
+            row = AcceptedPacketRow.model_validate(raw_row).model_dump(mode="json")
+        except ValidationError as error:
+            raise CorpusError("accepted packet row schema") from error
+        task_id = row["task_id"]
+        if not isinstance(task_id, str) or task_id not in slots:
+            raise CorpusError("packet task identity")
+        planned = slots[task_id]
+        if any(
+            row.get(key) != planned[key]
+            for key in ("family_id", "split", "locale", "domain", "axes", "pair_id")
+        ):
+            raise CorpusError("packet split or family mutation")
+        criteria = row.get("criteria")
+        if not isinstance(criteria, list) or len(criteria) != planned["option_count"]:
+            raise CorpusError("packet criterion cardinality")
+        position = planned["gold_position"]
+        if (
+            not isinstance(position, int)
+            or not isinstance(row.get("selected_criterion_id"), str)
+            or criteria[position].get("id") != row["selected_criterion_id"]
+        ):
+            raise CorpusError("packet gold position")
+        if _privacy(row):
+            raise CorpusError("packet privacy")
+        fingerprint = semantic_fingerprint(row)
+        if fingerprint in fingerprints:
+            raise CorpusError("packet semantic duplicate")
+        normalized = _normalized(row)
+        if normalized in normalized_rows:
+            raise CorpusError("packet normalized duplicate")
+        if any(SequenceMatcher(None, normalized, item).ratio() >= 0.92 for item in normalized_rows):
+            raise CorpusError("packet near duplicate")
+        fingerprints.add(fingerprint)
+        normalized_rows.append(normalized)
+        if planned["pair_id"] is not None:
+            paired_accepted[cast(str, planned["pair_id"])].append(row)
+    for members in paired_accepted.values():
+        if len(members) == 2 and not _cross_locale_pair_is_attested(members):
+            raise CorpusError("packet cross-locale semantic attestation")
+    for rejected_row in rejected:
+        if (
+            set(rejected_row) != {"task_id", "split", "reason"}
+            or rejected_row.get("task_id") not in slots
+        ):
+            raise CorpusError("packet rejection")
+        if rejected_row["split"] != slots[cast(str, rejected_row["task_id"])]["split"]:
+            raise CorpusError("packet rejected split mutation")
+
+
+def validate_accepted_packet(packet: Path) -> None:
+    """Validate an immutable accepted packet without provider/network access."""
+    expected = {"plan.json", "accepted.jsonl", "rejected.jsonl", "ledger.json", "packet.json"}
+    if not packet.is_dir() or {path.name for path in packet.iterdir()} != expected:
+        raise CorpusError("packet file set")
+    manifest_path = packet / "packet.json"
+    try:
+        manifest = json.loads(manifest_path.read_bytes())
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet manifest") from error
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != {"schema_version", "files", "sealed"}
+        or manifest["sealed"] is not True
+    ):
+        raise CorpusError("packet manifest shape")
+    files = cast(dict[str, str], manifest["files"])
+    if set(files) != expected - {"packet.json"}:
+        raise CorpusError("packet manifest files")
+    for name, digest in files.items():
+        if not isinstance(digest, str) or _sha((packet / name).read_bytes()) != digest:
+            raise CorpusError("packet digest")
+    plan = json.loads((packet / "plan.json").read_bytes())
+    validate_plan(plan)
+    rows = _read_jsonl(packet / "accepted.jsonl")
+    rejected = _read_jsonl(packet / "rejected.jsonl")
+    _validate_packet_resolution(rows, rejected, plan)
+    if _minimums(rows):
+        raise CorpusError("accepted corpus minimum")
+
+
+def _publish_packet_create_if_absent(staged: Path, packet: Path) -> None:
+    """Atomically publish a fully validated sibling directory without replacement."""
+    if packet.exists():
+        raise FileExistsError(f"benchmark artifact already exists: {packet.name}")
+    libc = CDLL(None, use_errno=True)
+    rename_exclusive = getattr(libc, "renameatx_np", None)
+    flag = 0x00000004  # Darwin RENAME_EXCL
+    if rename_exclusive is None:
+        rename_exclusive = getattr(libc, "renameat2", None)
+        flag = 1  # Linux RENAME_NOREPLACE
+    if rename_exclusive is None:
+        raise CorpusError("atomic directory publication is unavailable")
+    rename_exclusive.argtypes = (c_int, c_char_p, c_int, c_char_p, c_int)
+    rename_exclusive.restype = c_int
+    # Both APIs perform one same-volume exclusive rename. The initial exists
+    # check is only diagnostic; this final operation is the no-clobber guard.
+    set_errno(0)
+    if rename_exclusive(-2, os.fsencode(staged), -2, os.fsencode(packet), flag) != 0:
+        error_number = get_errno()
+        if error_number == EEXIST:
+            raise FileExistsError(f"benchmark artifact already exists: {packet.name}")
+        raise OSError(error_number, os.strerror(error_number), packet)
+
+
+def seal_packet(
+    packet: Path,
+    plan: Mapping[str, Any],
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    ledger: Mapping[str, Any],
+) -> Path:
+    """Atomically create the immutable corpus packet. Existing packets are never replaced."""
+    packet.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(prefix=f".{packet.name}.", dir=packet.parent))
+    os.chmod(staged, 0o700)
+    files = {
+        "plan.json": _canonical(plan) + b"\n",
+        "accepted.jsonl": _jsonl(accepted),
+        "rejected.jsonl": _jsonl(rejected),
+        "ledger.json": _canonical(ledger) + b"\n",
+    }
+    try:
+        for name, body in files.items():
+            atomic_create(staged / name, body)
+            os.chmod(staged / name, 0o600)
+        manifest = {
+            "schema_version": "phase4e-accepted-packet.v1",
+            "sealed": True,
+            "files": {name: _sha(body) for name, body in files.items()},
+        }
+        atomic_create(staged / "packet.json", _canonical(manifest) + b"\n")
+        os.chmod(staged / "packet.json", 0o600)
+        validate_accepted_packet(staged)
+        _publish_packet_create_if_absent(staged, packet)
+    except BaseException:
+        if staged.exists():
+            for child in staged.iterdir():
+                child.unlink()
+            staged.rmdir()
+        raise
+    return packet / "packet.json"
+
+
+def _jsonl(rows: Sequence[Mapping[str, Any]]) -> bytes:
+    return b"".join(_canonical(row) + b"\n" for row in rows)
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    try:
+        return [
+            cast(dict[str, Any], json.loads(line))
+            for line in path.read_bytes().splitlines()
+            if line
+        ]
+    except (OSError, ValueError) as error:
+        raise CorpusError("invalid jsonl") from error
+
+
+@dataclass
+class BudgetLedger:
+    """Parameterized four-stage ledger; the larger local/server debit wins."""
+
+    entries: list[dict[str, str]] = field(default_factory=list)
+
+    def spent(self, stage: str) -> Decimal:
+        return sum(
+            (Decimal(entry["debit_usd"]) for entry in self.entries if entry["stage"] == stage),
+            Decimal(),
+        )
+
+    def reserve(self, stage: str, local_worst_case: Decimal) -> None:
+        if stage not in STAGE_LIMITS or local_worst_case < 0:
+            raise CorpusError("budget stage")
+        if any(entry["status"] == "overspent" for entry in self.entries):
+            raise CorpusError("budget terminal overspend")
+        if self.spent(stage) + local_worst_case > STAGE_LIMITS[stage]:
+            raise CorpusError("stage budget exhausted")
+        if sum(
+            (Decimal(item["debit_usd"]) for item in self.entries), Decimal()
+        ) + local_worst_case > Decimal("2.00"):
+            raise CorpusError("total budget exhausted")
+
+    def reserve_request(self, stage: str, reservation_id: str, local_worst_case: Decimal) -> None:
+        """Charge a deterministic request reservation before transport starts."""
+        self.reserve(stage, local_worst_case)
+        if not re.fullmatch(r"reservation-[0-9a-f]{64}", reservation_id) or any(
+            entry["reservation_id"] == reservation_id for entry in self.entries
+        ):
+            raise CorpusError("duplicate budget reservation")
+        self.entries.append(
+            {
+                "stage": stage,
+                "reservation_id": reservation_id,
+                "request_id": reservation_id,
+                "local_worst_case_usd": str(local_worst_case),
+                "provider_cost_usd": "0",
+                "debit_usd": str(local_worst_case),
+                "response_sha256": "0" * 64,
+                "status": "reserved",
+            }
+        )
+
+    def settle_request(
+        self,
+        reservation_id: str,
+        request_id: str,
+        provider_cost: Decimal,
+        response_sha256: str,
+    ) -> None:
+        """Settle an already charged reservation without ever releasing it."""
+        entry = next(
+            (item for item in self.entries if item["reservation_id"] == reservation_id), None
+        )
+        if entry is None or entry["status"] != "reserved":
+            raise CorpusError("budget reservation")
+        if (
+            not request_id
+            or provider_cost < 0
+            or not re.fullmatch(r"[0-9a-f]{64}", response_sha256)
+            or any(
+                item["status"] == "settled" and item["request_id"] == request_id
+                for item in self.entries
+            )
+        ):
+            raise CorpusError("invalid provider cost")
+        local_worst_case = Decimal(entry["local_worst_case_usd"])
+        debit = max(local_worst_case, provider_cost)
+        entry.update(
+            request_id=request_id,
+            provider_cost_usd=str(provider_cost),
+            debit_usd=str(debit),
+            response_sha256=response_sha256,
+            status="settled",
+        )
+        if self.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]]:
+            entry["status"] = "overspent"
+            raise CorpusError("reported stage budget exhausted")
+        if sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) > Decimal("2.00"):
+            entry["status"] = "overspent"
+            raise CorpusError("reported total budget exhausted")
+
+    def record(
+        self,
+        stage: str,
+        request_id: str,
+        local_worst_case: Decimal,
+        provider_cost: Decimal,
+        response_sha256: str,
+    ) -> None:
+        self.reserve(stage, local_worst_case)
+        if (
+            provider_cost < 0
+            or not re.fullmatch(r"[0-9a-f]{64}", response_sha256)
+            or not request_id
+            or any(entry["request_id"] == request_id for entry in self.entries)
+        ):
+            raise CorpusError("invalid provider cost")
+        debit = max(local_worst_case, provider_cost)
+        entry = {
+            "stage": stage,
+            "reservation_id": "record-" + request_id,
+            "request_id": request_id,
+            "local_worst_case_usd": str(local_worst_case),
+            "provider_cost_usd": str(provider_cost),
+            "debit_usd": str(debit),
+            "response_sha256": response_sha256,
+            "status": "settled",
+        }
+        self.entries.append(entry)
+        if self.spent(stage) > STAGE_LIMITS[stage] or sum(
+            (Decimal(item["debit_usd"]) for item in self.entries), Decimal()
+        ) > Decimal("2.00"):
+            entry["status"] = "overspent"
+            raise CorpusError("reported budget exhausted")
+
+    def as_json(self, *, final: bool = False, stop_reason: str | None = None) -> dict[str, Any]:
+        return {
+            "schema_version": "phase4e-cost-ledger.v1",
+            "final": final,
+            "entries": self.entries,
+            "stop_reason": stop_reason,
+        }
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> BudgetLedger:
+        if set(value) != {"schema_version", "final", "entries", "stop_reason"}:
+            raise CorpusError("ledger shape")
+        if value["schema_version"] != "phase4e-cost-ledger.v1" or not isinstance(
+            value["entries"], list
+        ):
+            raise CorpusError("ledger identity")
+        ledger = cls()
+        required_entry = {
+            "stage",
+            "reservation_id",
+            "request_id",
+            "local_worst_case_usd",
+            "provider_cost_usd",
+            "debit_usd",
+            "response_sha256",
+            "status",
+        }
+        for raw_entry in value["entries"]:
+            if not isinstance(raw_entry, Mapping) or set(raw_entry) != required_entry:
+                raise CorpusError("ledger entry")
+            entry = {key: raw_entry[key] for key in required_entry}
+            if not all(isinstance(item, str) for item in entry.values()):
+                raise CorpusError("ledger entry")
+            try:
+                local_worst_case = Decimal(cast(str, entry["local_worst_case_usd"]))
+                provider_cost = Decimal(cast(str, entry["provider_cost_usd"]))
+                debit = Decimal(cast(str, entry["debit_usd"]))
+            except ArithmeticError as error:
+                raise CorpusError("ledger entry") from error
+            if (
+                entry["stage"] not in STAGE_LIMITS
+                or local_worst_case < 0
+                or provider_cost < 0
+                or debit != max(local_worst_case, provider_cost)
+                or entry["status"] not in {"reserved", "settled", "overspent"}
+                or not re.fullmatch(r"[0-9a-f]{64}", entry["response_sha256"])
+            ):
+                raise CorpusError("ledger entry")
+            if entry["status"] == "reserved":
+                if (
+                    entry["request_id"] != entry["reservation_id"]
+                    or provider_cost != 0
+                    or entry["response_sha256"] != "0" * 64
+                    or not re.fullmatch(r"reservation-[0-9a-f]{64}", entry["reservation_id"])
+                ):
+                    raise CorpusError("ledger reservation")
+            elif not entry["request_id"]:
+                raise CorpusError("ledger entry")
+            if any(item["reservation_id"] == entry["reservation_id"] for item in ledger.entries):
+                raise CorpusError("ledger entry")
+            ledger.entries.append(cast(dict[str, str], entry))
+            over_budget = ledger.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]] or sum(
+                (Decimal(item["debit_usd"]) for item in ledger.entries), Decimal()
+            ) > Decimal("2.00")
+            if over_budget != (entry["status"] == "overspent"):
+                raise CorpusError("ledger budget")
+        return ledger
+
+
+def write_ledger_snapshot(
+    directory: Path, ledger: BudgetLedger, *, stop_reason: str | None = None
+) -> Path:
+    """Append one immutable resume point; an existing sequence number is never overwritten."""
+    if directory.exists() and not directory.is_dir():
+        raise CorpusError("ledger directory")
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    snapshots = sorted(directory.glob("ledger-*.json"))
+    if snapshots:
+        previous = json.loads(snapshots[-1].read_bytes())
+        previous_ledger = BudgetLedger.from_json(previous)
+        if len(previous_ledger.entries) > len(ledger.entries):
+            raise CorpusError("ledger resume mismatch")
+        for earlier, current in zip(
+            previous_ledger.entries, ledger.entries[: len(previous_ledger.entries)], strict=True
+        ):
+            if earlier == current:
+                continue
+            mutable = {
+                "request_id",
+                "provider_cost_usd",
+                "debit_usd",
+                "response_sha256",
+                "status",
+            }
+            if (
+                earlier["status"] != "reserved"
+                or current["status"] not in {"settled", "overspent"}
+                or any(earlier[key] != current[key] for key in set(earlier) - mutable)
+                or Decimal(current["debit_usd"]) < Decimal(earlier["debit_usd"])
+            ):
+                raise CorpusError("ledger resume mismatch")
+    path = directory / f"ledger-{len(snapshots):04d}.json"
+    atomic_create(path, _canonical(ledger.as_json(stop_reason=stop_reason)) + b"\n")
+    os.chmod(path, 0o600)
+    return path
+
+
+def resume_ledger(directory: Path) -> BudgetLedger:
+    """Load the newest immutable ledger state; reservations remain charged."""
+    if not directory.exists():
+        return BudgetLedger()
+    if not directory.is_dir():
+        raise CorpusError("ledger directory")
+    snapshots = sorted(directory.glob("ledger-*.json"))
+    if not snapshots:
+        return BudgetLedger()
+    try:
+        return BudgetLedger.from_json(json.loads(snapshots[-1].read_bytes()))
+    except (OSError, ValueError) as error:
+        raise CorpusError("ledger resume") from error
+
+
+def request_worst_case(
+    stage: Literal["corpus_author", "corpus_reviewer"],
+    request_payload: bytes,
+    max_output_tokens: int,
+) -> Decimal:
+    if stage not in PRICES or not request_payload or max_output_tokens < 0:
+        raise CorpusError("budget request")
+    input_price, output_price = PRICES[stage]
+    # Reserve against the complete, canonical final provider request: messages,
+    # strict schema, provider controls, and every other input field are included.
+    return (
+        Decimal(len(request_payload) + 256) * input_price
+        + Decimal(max_output_tokens) * output_price
+    ) / Decimal(1_000_000)
+
+
+def wilson_lower_bound(successes: int, total: int) -> float:
+    if total <= 0 or successes < 0 or successes > total:
+        raise CorpusError("Wilson inputs")
+    z = 1.6448536269514722  # one-sided 95%
+    p = successes / total
+    denominator = 1 + z * z / total
+    return (
+        p + z * z / (2 * total) - z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
+    ) / denominator
+
+
+def stop_projection(resolved: Sequence[Mapping[str, Any]], plan: Mapping[str, Any]) -> str | None:
+    """Project every required cell at ten-batch boundaries, without relaxing a floor."""
+    if len(resolved) < 200:
+        return None
+    by_task = {cast(str, row["task_id"]): row for row in resolved}
+    slots = cast(list[Mapping[str, Any]], plan["slots"])
+
+    def project(planned: Sequence[Mapping[str, Any]], minimum: int) -> str | None:
+        done = [
+            by_task[cast(str, slot["task_id"])] for slot in planned if slot["task_id"] in by_task
+        ]
+        accepted = sum(row.get("status") == "accepted" for row in done)
+        unresolved = len(planned) - len(done)
+        if accepted + unresolved < minimum:
+            return "impossible_required_minimum"
+        # An unobserved target has no empirical rate.  Its deterministic
+        # capacity is still checked above, but Wilson must not invent a zero.
+        if (
+            done
+            and accepted + math.floor(unresolved * wilson_lower_bound(accepted, len(done)))
+            < minimum
+        ):
+            return "wilson_projected_minimum"
+        return None
+
+    if stop := project(slots, 1200):
+        return stop
+    for split, minimum in (
+        ("synthetic_train", 840),
+        ("synthetic_dev", 180),
+        ("synthetic_holdout", 180),
+    ):
+        if stop := project([slot for slot in slots if slot["split"] == split], minimum):
+            return stop
+    for split in SPLITS:
+        for locale in LOCALES:
+            for option_count in OPTION_COUNTS:
+                planned = [
+                    slot
+                    for slot in slots
+                    if slot["split"] == split
+                    and slot["locale"] == locale
+                    and slot["option_count"] == option_count
+                ]
+                minimum = 20 if split == "synthetic_train" else 10
+                if stop := project(planned, minimum):
+                    return stop
+    return None
+
+
+class OpenRouterCorpusClient:
+    """Injected transport boundary. It has no environment or credential lookup."""
+
+    def __init__(
+        self,
+        *,
+        transport: Transport | None = None,
+        allow_network: bool = False,
+        ledger: BudgetLedger | None = None,
+        ledger_directory: Path | None = None,
+    ) -> None:
+        if not allow_network or transport is None:
+            raise CorpusError("network requires explicit injected transport")
+        if ledger_directory is None:
+            raise CorpusError("network requires durable ledger")
+        self._transport = transport
+        self._ledger_directory = ledger_directory
+        resumed = resume_ledger(ledger_directory)
+        if (
+            ledger is not None
+            and ledger.entries
+            and resumed.entries
+            and ledger.entries != resumed.entries
+        ):
+            raise CorpusError("ledger resume mismatch")
+        self.ledger = resumed if resumed.entries else ledger or resumed
+
+    def author(
+        self,
+        *,
+        slots: Sequence[Mapping[str, Any]],
+        max_output_tokens: int,
+        api_key: str,
+    ) -> dict[str, Any]:
+        """Submit planned author slots using the fixed author protocol."""
+        _validate_author_batch(slots)
+        return self._request(
+            stage="corpus_author",
+            model=AUTHOR_MODEL,
+            messages=author_messages(slots),
+            response_schema=author_schema(slots),
+            max_output_tokens=max_output_tokens,
+            api_key=api_key,
+        )
+
+    def reviewer(
+        self,
+        *,
+        row: ValidatedAuthorRow,
+        max_output_tokens: int,
+        api_key: str,
+    ) -> dict[str, Any]:
+        """Submit exactly one locally validated row through the blind protocol."""
+        return self._request(
+            stage="corpus_reviewer",
+            model=REVIEWER_MODEL,
+            messages=reviewer_messages([row]),
+            response_schema=reviewer_schema(1),
+            max_output_tokens=max_output_tokens,
+            api_key=api_key,
+        )
+
+    def _request(
+        self,
+        *,
+        stage: Literal["corpus_author", "corpus_reviewer"],
+        model: str,
+        messages: Sequence[Mapping[str, str]],
+        response_schema: Mapping[str, Any],
+        max_output_tokens: int,
+        api_key: str,
+    ) -> dict[str, Any]:
+        if not api_key:
+            raise CorpusError("pinned provider request")
+        body = _canonical(
+            {
+                "model": model,
+                "messages": list(messages),
+                "max_tokens": max_output_tokens,
+                "temperature": 0,
+                "provider": {"data_collection": "deny", "zdr": True},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "strict": True,
+                        "schema": response_schema,
+                    },
+                },
+            }
+        )
+        worst = request_worst_case(stage, body, max_output_tokens)
+        reservation_id = "reservation-" + _sha(_canonical({"stage": stage, "body": body.hex()}))
+        self.ledger.reserve_request(stage, reservation_id, worst)
+        write_ledger_snapshot(self._ledger_directory, self.ledger)
+        result = self._transport(
+            "POST",
+            "https://openrouter.ai/api/v1/chat/completions",
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            body,
+        )
+        try:
+            status, _, raw = cast(tuple[int, Mapping[str, str], bytes], result)
+            response = cast(dict[str, Any], json.loads(raw))
+            cost = Decimal(str(response["usage"]["cost"]))
+            request_id = cast(str, response["id"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise CorpusError("provider response cost") from error
+        try:
+            self.ledger.settle_request(reservation_id, request_id, cost, _sha(raw))
+        except CorpusError:
+            write_ledger_snapshot(
+                self._ledger_directory, self.ledger, stop_reason="reported_provider_overspend"
+            )
+            raise
+        write_ledger_snapshot(self._ledger_directory, self.ledger)
+        if status != 200:
+            raise CorpusError("provider request failed")
+        return response

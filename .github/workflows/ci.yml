@@ -116,6 +116,6 @@ jobs:
       # Fake encoder and policy paths only: no MPS, model weights, provider,
       # snapshot, or optional ML dependency is present in this job.
       - run: uv sync --locked --dev
-      - run: uv run pytest -q tests/test_phase4e.py
+      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py
       - run: uv run python -m benchmarks.validate_manifests
       - run: uv run python benchmarks/validate_default_environment.py
