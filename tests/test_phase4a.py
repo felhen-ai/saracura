@@ -78,6 +78,7 @@ class _NonFixtureBackend:
             output_transform="test-softmax-v1",
         )
         self._capabilities = BackendCapabilities(
+            execution_tier="compiled",
             decision_types=frozenset({"choice"}),
             max_questions=1,
             max_criteria=20,
@@ -150,6 +151,7 @@ class _CliMiniLMBackend:
             output_transform="linear-logits-softmax-v1",
         )
         self._capabilities = BackendCapabilities(
+            execution_tier="compiled",
             decision_types=frozenset({"choice"}),
             max_questions=1,
             max_criteria=5,

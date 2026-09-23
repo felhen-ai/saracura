@@ -120,6 +120,7 @@ def test_ptbr_fixture_runs_end_to_end() -> None:
 
     assert response.api_version == "v1alpha1"
     assert response.answers[0].status == "fixture_only"
+    assert response.answers[0].calibration is not None
     assert response.answers[0].calibration.status == "fixture_only"
     assert response.answers[0].calibration.risk_policy_id is None
     assert sum(response.answers[0].probabilities.values()) == pytest.approx(1.0)

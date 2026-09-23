@@ -74,10 +74,37 @@ class Answer(ClosedModel):
     value: Identifier
     raw_scores: dict[str, float]
     probabilities: dict[str, float]
-    status: Literal["calibrated", "fixture_only"]
+    status: Literal["calibrated", "fixture_only", "uncalibrated"]
+    score_semantics: Literal["calibrated_confidence", "fixture_distribution", "ranking_weights"]
     abstained: bool
     reason: str | None
-    calibration: CalibrationReference
+    calibration: CalibrationReference | None
+
+    @model_validator(mode="after")
+    def consistent_research_semantics(self) -> Answer:
+        if self.status == "uncalibrated":
+            if (
+                self.score_semantics != "ranking_weights"
+                or not self.abstained
+                or self.reason != "uncalibrated_research"
+                or self.calibration is not None
+            ):
+                raise ValueError("uncalibrated answers must remain abstained ranking-only results")
+            return self
+
+        expected_semantics = (
+            "calibrated_confidence" if self.status == "calibrated" else "fixture_distribution"
+        )
+        expected_calibration_status = (
+            "verified_for_research" if self.status == "calibrated" else "fixture_only"
+        )
+        if (
+            self.score_semantics != expected_semantics
+            or self.calibration is None
+            or self.calibration.status != expected_calibration_status
+        ):
+            raise ValueError("answer status, semantics, and calibration must agree")
+        return self
 
 
 class ModelReference(ClosedModel):
@@ -105,6 +132,7 @@ class DecisionResponse(ClosedModel):
     model: ModelReference
     timing: Timing | None = None
     usage: Usage
+    automation_allowed: Literal[False] = False
 
 
 def closed_json_schema(model: type[BaseModel]) -> dict[str, Any]:

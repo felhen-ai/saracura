@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
-from saracura.contracts.models import ChoiceQuestion, ModelReference
+from saracura.contracts.models import ChoiceQuestion, DecisionRequest, ModelReference
+
+ExecutionTier = Literal["compiled", "universal"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +24,7 @@ class BackendCalibrationMetadata:
 
 @dataclass(frozen=True, slots=True)
 class BackendCapabilities:
+    execution_tier: ExecutionTier
     decision_types: frozenset[str]
     max_questions: int
     max_criteria: int
@@ -41,6 +44,7 @@ class EncodedState:
 class ScoredChoice:
     question_id: str
     raw_scores: dict[str, float]
+    input_tokens: int = 0
 
 
 class Backend(Protocol):
@@ -60,4 +64,21 @@ class Backend(Protocol):
         encoded_state: EncodedState,
         question: ChoiceQuestion,
         question_payload: bytes,
+    ) -> ScoredChoice: ...
+
+
+class UniversalBackend(Protocol):
+    """Question-conditioned backend for reviewed dynamic Choice workflows."""
+
+    @property
+    def capabilities(self) -> BackendCapabilities: ...
+
+    @property
+    def model(self) -> ModelReference: ...
+
+    def score_universal_choice(
+        self,
+        request: DecisionRequest,
+        question: ChoiceQuestion,
+        state_payload: bytes,
     ) -> ScoredChoice: ...
