@@ -471,14 +471,21 @@ class Registry(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["training-data-source-policies.v1"]
     sources: list[Policy] = Field(min_length=8, max_length=8)
-    exceptions: list[SyntheticExperimentException] = Field(min_length=1, max_length=1)
+    exceptions: list[SyntheticExperimentException | Phase4EUniversalSyntheticException] = Field(
+        min_length=2, max_length=2
+    )
 
     @model_validator(mode="after")
     def exact_ids(self) -> Registry:
         if {source.id for source in self.sources} != set(IDENTITY):
             raise ValueError("registry must contain exactly the eight fixed IDs")
-        if self.exceptions[0].id != "synthetic_experiment":
-            raise ValueError("registry must contain the synthetic experiment exception")
+        if tuple(exception.id for exception in self.exceptions) != (
+            "synthetic_experiment",
+            "phase4e_saracura_universal_synthetic",
+        ):
+            raise ValueError("registry must contain exactly the two reviewed exceptions")
+        if self.exceptions[0].model_dump(mode="json") != _PHASE3B_EXCEPTION:
+            raise ValueError("Phase 3B exception content is immutable")
         return self
 
 
@@ -509,6 +516,61 @@ class SyntheticExperimentException(BaseModel):
         return self
 
 
+class Phase4EUniversalSyntheticException(BaseModel):
+    """Second, non-inheriting exception for the planned Saracura-owned corpus."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: Literal["phase4e_saracura_universal_synthetic"]
+    workflow_revision: Literal["phase4e-saracura-universal-synthetic.v1"]
+    source_policy_id: Literal["provider-model-generated"]
+    allowed_splits: list[Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]]
+    allowed_uses: list[Literal["synthetic_only"]]
+    author_model: Literal["qwen/qwen3.5-9b"]
+    reviewer_model: Literal["mistralai/ministral-8b-2512"]
+    task_slots: Literal[1600]
+    spend_ceiling_usd: float
+    canonical_training_authorized: Literal[False]
+    calibration_authorized: Literal[False]
+    blind_test_authorized: Literal[False]
+    publication_authorized: Literal[False]
+    quality_claims_allowed: Literal[False]
+    automation_authorized: Literal[False]
+
+    @field_validator("spend_ceiling_usd", mode="before")
+    @classmethod
+    def exact_spend_ceiling_type(cls, value: object) -> object:
+        if type(value) is not float:
+            raise ValueError("Phase 4E synthetic spend ceiling must be a JSON float")
+        return value
+
+    @model_validator(mode="after")
+    def closed_exception(self) -> Phase4EUniversalSyntheticException:
+        if self.allowed_splits != ["synthetic_train", "synthetic_dev", "synthetic_holdout"]:
+            raise ValueError("Phase 4E synthetic split order is fixed")
+        if self.allowed_uses != ["synthetic_only"]:
+            raise ValueError("Phase 4E synthetic use is fixed")
+        if self.spend_ceiling_usd != 2.0:
+            raise ValueError("Phase 4E synthetic spend ceiling is fixed")
+        return self
+
+
+_PHASE3B_EXCEPTION = {
+    "id": "synthetic_experiment",
+    "workflow_revision": "phase3b-synthetic-research-training.v2",
+    "source_policy_id": "provider-model-generated",
+    "allowed_splits": ["synthetic_train", "synthetic_dev", "synthetic_holdout"],
+    "allowed_uses": ["synthetic_only"],
+    "author_model": "qwen/qwen3.5-9b",
+    "reviewer_model": "mistralai/ministral-8b-2512",
+    "canonical_training_authorized": False,
+    "calibration_authorized": False,
+    "blind_test_authorized": False,
+    "publication_authorized": False,
+    "quality_claims_allowed": False,
+    "automation_authorized": False,
+}
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -535,6 +597,7 @@ def load_bundled_registry() -> Registry:
 
 
 __all__ = [
+    "Phase4EUniversalSyntheticException",
     "Policy",
     "Registry",
     "SyntheticExperimentException",

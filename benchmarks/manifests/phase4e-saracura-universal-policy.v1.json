@@ -1,0 +1,13 @@
+{
+  "schema_version": "phase4e-saracura-universal-policy.v1",
+  "id": "phase4e-saracura-universal-synthetic",
+  "workflow_revision": "phase4e-saracura-universal-synthetic.v1",
+  "source_policy_exception_id": "phase4e_saracura_universal_synthetic",
+  "base_encoder": {"id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42", "frozen": true, "dimensions": 384},
+  "ranker": {"architecture_revision": "saracura-universal-ranker.v0", "projection_dimensions": 192, "criterion_batch_max": 20, "dynamic_label_bias": false},
+  "provider": {"host": "openrouter.ai", "author_model": "qwen/qwen3.5-9b", "reviewer_model": "mistralai/ministral-8b-2512", "zdr": true, "data_collection": "deny"},
+  "budget": {"total_usd": 2.0, "author_usd": 0.6, "reviewer_usd": 1.0, "comparison_author_usd": 0.15, "comparison_reviewer_usd": 0.25},
+  "capacity": {"context_tokens": 128, "criterion_tokens": 96, "state_codepoints": 200, "state_utf8_bytes": 800, "instruction_codepoints": 120, "instruction_utf8_bytes": 480, "criterion_codepoints": 120, "criterion_utf8_bytes": 480, "questions_min": 1, "questions_max": 10, "criteria_min": 2, "criteria_max": 8},
+  "planning": {"task_slots": 1600, "seed": "saracura-phase4e-universal-v1", "locales": ["pt-BR", "en"], "domains": ["email_triage", "customer_support", "finance", "accounting", "commerce", "operations", "scheduling", "document_routing", "browser_action", "security_triage", "content_moderation", "personal_productivity"]},
+  "authorizations": {"synthetic_generation_authorized": true, "synthetic_research_training_authorized": true, "real_checkpoint_present": false, "runtime_registration_authorized": false, "calibration_authorized": false, "publication_authorized": false, "quality_claims_allowed": false, "automation_authorized": false}
+}

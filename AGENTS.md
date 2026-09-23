@@ -28,8 +28,8 @@ Saracura is a standalone, local-first typed decision engine. This repository mus
 
 ## Current product boundary
 
-- `v1alpha1` is research-only and supports `choice` for known, versioned workflows plus the exact experimental `universal-choice@phase4d-laya.v1` dynamic workflow.
-- Boolean, ordinal, other dynamic-label product paths, HTTP serving, training, model downloads, and private adapters are out of scope until their own reviewed increments.
+- `v1alpha1` is research-only and supports `choice` for known, versioned workflows plus the exact experimental `universal-choice@phase4d-laya.v1` dynamic workflow. The planned `universal-choice@phase4e-saracura-ranker.v1` contract is unsupported until Phase 4E.3 seals a real checkpoint that passes its holdout gate.
+- Boolean, ordinal, other dynamic-label product paths, HTTP serving, training, model downloads, private adapters, and the planned `saracura-universal` backend are out of scope until their own reviewed increments.
 - The deterministic fixture backend is test infrastructure, not a model and not evidence of decision quality.
 - No result authorizes automation. Calibration status `verified_for_research` only describes compatibility with the declared research protocol.
 
@@ -56,6 +56,6 @@ Every new canonical Markdown file must include structural frontmatter with `titl
 - Normalize strings and keys with the versioned NFC transform before RFC 8785 canonicalization; reject post-normalization key collisions.
 - Preserve string values as data. Never reinterpret a string as JSON.
 - Frame semantic segments by byte length, never by ambiguous delimiters.
-- Compiled state encoding must not depend on questions or criteria and must execute once per request. The exact Phase 4D `laya-universal` backend is the only installed exception: it may jointly encode state, instruction, and ordered choices for `universal-choice@phase4d-laya.v1`, remains opt-in and research-only, rejects truncation, returns uncalibrated abstained rankings, and never authorizes automation. Other question-conditioned candidate adapters remain checkout-only until a separately reviewed increment updates this policy.
+- Compiled state encoding must not depend on questions or criteria and must execute once per request. The exact Phase 4D `laya-universal` backend is the only installed exception: it may jointly encode state, instruction, and ordered choices for `universal-choice@phase4d-laya.v1`, remains opt-in and research-only, rejects truncation, returns uncalibrated abstained rankings, and never authorizes automation. Phase 4E.1 may contain planned-only policy, renderer, ranker, checkpoint, and workflow contracts, but it must not register `saracura-universal` in the runtime or CLI; that remains unsupported until Phase 4E.3. Other question-conditioned candidate adapters remain checkout-only until a separately reviewed increment updates this policy.
 - Calibration compatibility is fail-closed across every declared axis. Immutable artifacts must use a sibling temporary file plus an atomic create-if-absent operation; an existing revision is never overwritten.
 - Never add telemetry, remote fallback, arbitrary model paths, or request-triggered downloads.

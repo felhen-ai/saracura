@@ -9,6 +9,16 @@ __pycache__/
 build/
 dist/
 .artifacts/
+phase4e-plan.json
+phase4e-accepted.jsonl
+phase4e-cost-ledger.json
+phase4e-training-manifest.json
+phase4e-checkpoint.safetensors
+phase4e-holdout-report.json
+phase4e-comparison-plan.json
+phase4e-comparison-accepted.jsonl
+phase4e-comparison-cost-ledger.json
+phase4e-comparison-report.json
 base-states.jsonl
 split-plan.json
 contributors.json

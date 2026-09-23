@@ -47,6 +47,9 @@ class FakeUniversalBackend:
             execution_boundary="deterministic-phase4d-test",
             cold_warm_semantics="no-load",
             quality_claims=False,
+            dynamic_workflows=frozenset(
+                {(UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION)}
+            ),
         )
 
     @property

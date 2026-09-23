@@ -100,3 +100,22 @@ jobs:
       - run: uv run pytest -q tests/test_universal_local.py
       - run: uv run python -m benchmarks.universal_local validate-registry
       - run: uv run python -m benchmarks.validate_manifests
+
+  phase4e-offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Fake encoder and policy paths only: no MPS, model weights, provider,
+      # snapshot, or optional ML dependency is present in this job.
+      - run: uv sync --locked --dev
+      - run: uv run pytest -q tests/test_phase4e.py
+      - run: uv run python -m benchmarks.validate_manifests
+      - run: uv run python benchmarks/validate_default_environment.py

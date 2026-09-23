@@ -9,7 +9,7 @@ status: current
 canonical: docs/README.pt-BR.md
 globalRef: qmd://saracura/docs/README.pt-BR.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-22
+lastReviewedAt: 2026-09-23
 sourceRefs: []
 related:
   - README.md
@@ -46,9 +46,10 @@ O inglês é o idioma canônico da documentação técnica. O quickstart, os exe
 - artefatos de calibração imutáveis e compatíveis de forma fail-closed;
 - runtime in-process e CLI locais;
 - um backend experimental opt-in `laya-universal` para o workflow Choice dinâmico exato;
-- trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos.
+- trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos;
+- contratos de política e ranker determinístico da Fase 4E somente planejados; nenhum runtime `saracura-universal` está instalado.
 
-Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos fora do workflow Choice experimental exato da Fase 4D, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
+Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, `saracura-universal`, labels dinâmicos fora do workflow Choice experimental exato da Fase 4D, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. O contrato planejado `universal-choice@phase4e-saracura-ranker.v1` não é suportado até a Fase 4E.3 selar um checkpoint real aprovado no gate de holdout. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
 
 ## Arquitetura de pesquisa em duas camadas
 
@@ -155,7 +156,7 @@ grupo opcional isolado de dependências, um snapshot Laya local e imutável
 fornecido pelo operador e um dispositivo CPU ou MPS explícito; nunca baixa,
 descobre nem contata um provedor de modelo. A requisição sintética em PT-BR em
 [`examples/ptbr-universal-request.json`](../examples/ptbr-universal-request.json)
-usa a triagem de e-mail somente como o próximo piloto em modo sombra e não
+usa a triagem de e-mail somente como futuro piloto da Fase 4F em modo sombra e não
 contém dados de caixa postal.
 
 ```bash
@@ -174,6 +175,18 @@ fazer qualquer outra alteração em e-mail. O candidato permanece
 `research_only_unresolved_provenance`; um smoke local bem-sucedido demonstra
 somente compatibilidade de execução, não qualidade, calibração, licenciamento
 ou prontidão para produção.
+
+## Checkpoint universal Saracura-owned planejado da Fase 4E
+
+A Fase 4E.1 adiciona somente contratos offline de política, renderização,
+ranker, checkpoint e compatibilidade entre backend/workflow para um futuro
+ranker universal Saracura-owned. Ela não baixa um snapshot MiniLM, não chama
+provedor, não gera corpus, não treina checkpoint nem registra
+`saracura-universal` no CLI ou runtime. Portanto, o futuro workflow
+`universal-choice@phase4e-saracura-ranker.v1` é planejado e não suportado até
+a Fase 4E.3 selar um checkpoint real sintético e ele passar pelo gate de
+holdout revisado. Laya continua sendo um controle externo, nunca professor,
+fonte de checkpoint ou modelo Saracura-owned.
 
 ## Gate de dados, licença e privacidade da Fase 2C
 

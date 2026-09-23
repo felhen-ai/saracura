@@ -9,7 +9,7 @@ status: current
 canonical: README.md
 globalRef: qmd://saracura/README.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-22
+lastReviewedAt: 2026-09-23
 sourceRefs: []
 related:
   - docs/README.pt-BR.md
@@ -47,8 +47,9 @@ English is the canonical language for technical documentation. The quickstart, p
 - local in-process runtime and CLI
 - one opt-in experimental `laya-universal` backend for the exact dynamic Choice workflow
 - opt-in research lanes for encoder acquisition, synthetic head training, human PT-BR calibration, and external controls
+- planned-only Phase 4E policy and deterministic ranker contracts; no `saracura-universal` runtime is installed
 
-Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels outside the exact experimental Phase 4D Choice workflow, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
+Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, `saracura-universal`, dynamic labels outside the exact experimental Phase 4D Choice workflow, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. The planned `universal-choice@phase4e-saracura-ranker.v1` contract is unsupported until Phase 4E.3 seals a real checkpoint that passes its holdout gate. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
 ## Two-tier research architecture
 
@@ -158,7 +159,7 @@ isolated optional dependency group, an operator-supplied immutable local Laya
 snapshot, and an explicit CPU or MPS device; it never downloads, discovers, or
 contacts a model provider. The synthetic PT-BR request in
 [`examples/ptbr-universal-request.json`](examples/ptbr-universal-request.json)
-uses e-mail triage only as the next shadow-mode pilot and contains no mailbox
+uses e-mail triage only as a future Phase 4F shadow-mode pilot and contains no mailbox
 data.
 
 ```bash
@@ -177,6 +178,17 @@ any other mailbox change. The candidate remains
 `research_only_unresolved_provenance`; a successful local smoke demonstrates
 execution compatibility only, not quality, calibration, licensing, or
 production readiness.
+
+## Phase 4E planned Saracura-owned universal checkpoint
+
+Phase 4E.1 adds only offline policy, rendering, ranker, checkpoint, and
+backend/workflow compatibility contracts for a future Saracura-owned universal
+ranker. It does not download a MiniLM snapshot, call a provider, generate a
+corpus, train a checkpoint, or register `saracura-universal` in the CLI or
+runtime. The future `universal-choice@phase4e-saracura-ranker.v1` workflow is
+therefore planned and unsupported until Phase 4E.3 seals a real synthetic-only
+checkpoint and it passes the reviewed holdout gate. Laya remains an external
+control, never a teacher, checkpoint source, or Saracura-owned model.
 
 ## Phase 2C data and privacy gate
 

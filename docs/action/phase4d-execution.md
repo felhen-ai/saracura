@@ -77,4 +77,4 @@ The real smoke uses the exact model revision `052592a15d198d9ad47da779604259b10b
 
 ## Rollback and next gate
 
-Rollback is a Git revert of the Phase 4D merge; local snapshots remain operator-managed and are not deleted. The next separately reviewed increment is Phase 4E: read-only shadow e-mail triage with minimized retention and operator agree/correct feedback. No mailbox mutation is authorized.
+Rollback is a Git revert of the Phase 4D merge; local snapshots remain operator-managed and are not deleted. The next separately reviewed increment is Phase 4E: an independently trained Saracura-owned universal checkpoint and blind Laya control comparison. Phase 4E.1 adds offline contracts only; it does not call a provider, acquire a model, train a checkpoint, or register `saracura-universal`. Until Phase 4E.3 seals a real synthetic-only checkpoint that passes the holdout gate, `universal-choice@phase4e-saracura-ranker.v1` and `saracura-universal` are planned and unsupported. The read-only e-mail shadow pilot moves to Phase 4F; no mailbox mutation is authorized.

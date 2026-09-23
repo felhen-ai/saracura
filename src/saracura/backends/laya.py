@@ -393,6 +393,7 @@ class LayaUniversalBackend:
                 execution_boundary="explicit-verified-local-laya",
                 cold_warm_semantics="one-process-resident-model",
                 quality_claims=False,
+                dynamic_workflows=frozenset({("universal-choice", "phase4d-laya.v1")}),
             )
             self._reference = ModelReference(
                 id=candidate.model_id,
