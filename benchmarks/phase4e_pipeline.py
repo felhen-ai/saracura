@@ -73,7 +73,11 @@ def _provider_body(
             "provider": {"data_collection": "deny", "zdr": True},
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"strict": True, "schema": response_schema},
+                "json_schema": {
+                    "name": corpus.RESPONSE_SCHEMA_NAME,
+                    "strict": True,
+                    "schema": response_schema,
+                },
             },
         }
     )

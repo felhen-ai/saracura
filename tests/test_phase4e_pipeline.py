@@ -87,6 +87,10 @@ def test_fake_transport_has_pinned_shape_and_does_not_store_secret(
     assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured["body"]["model"] == corpus.AUTHOR_MODEL
     assert captured["body"]["provider"] == {"data_collection": "deny", "zdr": True}
+    assert (
+        captured["body"]["response_format"]["json_schema"]["name"]
+        == corpus.RESPONSE_SCHEMA_NAME
+    )
     assert "phase4e-test-secret" not in json.dumps(captured["body"])
     assert (
         "phase4e-test-secret" not in (tmp_path / "work" / "ledger" / "ledger-0000.json").read_text()

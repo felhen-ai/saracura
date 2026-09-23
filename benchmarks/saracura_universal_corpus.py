@@ -66,6 +66,7 @@ PRICES = {
 }
 AUTHOR_MODEL = "qwen/qwen3.5-9b"
 REVIEWER_MODEL = "mistralai/ministral-8b-2512"
+RESPONSE_SCHEMA_NAME = "saracura_phase4e_response"
 _SENSITIVE = re.compile(r"(?:\b\d{3}[.]?\d{3}[.]?\d{3}-?\d{2}\b|\b\d{13,16}\b|@|https?://)", re.I)
 
 
@@ -2102,6 +2103,7 @@ class OpenRouterCorpusClient:
                 "response_format": {
                     "type": "json_schema",
                     "json_schema": {
+                        "name": RESPONSE_SCHEMA_NAME,
                         "strict": True,
                         "schema": response_schema,
                     },

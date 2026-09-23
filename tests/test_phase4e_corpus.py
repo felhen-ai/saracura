@@ -567,6 +567,10 @@ def test_reservation_uses_complete_body_including_response_schema(tmp_path: Path
         )
 
     assert captured[0][0]["response_format"] != captured[1][0]["response_format"]
+    assert all(
+        body["response_format"]["json_schema"]["name"] == corpus.RESPONSE_SCHEMA_NAME
+        for body, _ in captured
+    )
     assert captured[0][1]["reservation_id"] != captured[1][1]["reservation_id"]
     assert Decimal(captured[0][1]["local_worst_case_usd"]) != Decimal(
         captured[1][1]["local_worst_case_usd"]
