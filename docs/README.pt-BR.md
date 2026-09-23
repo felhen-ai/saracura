@@ -45,9 +45,10 @@ O inglês é o idioma canônico da documentação técnica. O quickstart, os exe
 - chaves de cache de schema fail-closed com os bytes canônicos completos e eixos de revisão;
 - artefatos de calibração imutáveis e compatíveis de forma fail-closed;
 - runtime in-process e CLI locais;
+- um backend experimental opt-in `laya-universal` para o workflow Choice dinâmico exato;
 - trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos.
 
-Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
+Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos fora do workflow Choice experimental exato da Fase 4D, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
 
 ## Arquitetura de pesquisa em duas camadas
 
@@ -145,6 +146,34 @@ revisão imutável do modelo. O artefato de identidade da Fase 4A continua
 fixture_only: não tem ajuste, avaliação, limiar ou autorização de automação.
 MPS da Apple é uma escolha explícita do operador e não tem fallback automático
 para CPU.
+
+## Choice universal experimental da Fase 4D
+
+`laya-universal` é um backend local, opt-in e somente para pesquisa para o
+único workflow Choice dinâmico `universal-choice@phase4d-laya.v1`. Ele exige o
+grupo opcional isolado de dependências, um snapshot Laya local e imutável
+fornecido pelo operador e um dispositivo CPU ou MPS explícito; nunca baixa,
+descobre nem contata um provedor de modelo. A requisição sintética em PT-BR em
+[`examples/ptbr-universal-request.json`](../examples/ptbr-universal-request.json)
+usa a triagem de e-mail somente como o próximo piloto em modo sombra e não
+contém dados de caixa postal.
+
+```bash
+uv sync --locked --dev --extra universal-local
+uv run saracura describe-backend --backend laya-universal \
+  --model-snapshot <snapshot-local-laya-verificado> --device cpu
+uv run saracura decide --backend laya-universal \
+  --request examples/ptbr-universal-request.json \
+  --model-snapshot <snapshot-local-laya-verificado> --device cpu
+```
+
+A resposta é explicitamente `uncalibrated`, `abstained` e
+`automation_allowed=false`. Seus valores normalizados são pesos de ranking, não
+confiança ou permissão para arquivar, apagar, mover, responder, encaminhar ou
+fazer qualquer outra alteração em e-mail. O candidato permanece
+`research_only_unresolved_provenance`; um smoke local bem-sucedido demonstra
+somente compatibilidade de execução, não qualidade, calibração, licenciamento
+ou prontidão para produção.
 
 ## Gate de dados, licença e privacidade da Fase 2C
 

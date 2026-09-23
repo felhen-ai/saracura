@@ -10,7 +10,12 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from saracura.backends.base import Backend, BackendCalibrationMetadata
+from saracura.backends.base import (
+    Backend,
+    BackendCalibrationMetadata,
+    ExecutionTier,
+    UniversalBackend,
+)
 from saracura.backends.fixture import (
     FIXTURE_ARCHITECTURE_SHA256,
     FIXTURE_OUTPUT_TRANSFORM,
@@ -203,7 +208,7 @@ class DecisionEngine:
     def __init__(
         self,
         *,
-        backend: Backend,
+        backend: Backend | UniversalBackend,
         workflows: WorkflowRegistry,
         calibrations: Mapping[str, AnyCalibrationArtifact],
         calibration_profiles: Mapping[str, CalibrationDatasetProfile] | None = None,
@@ -215,9 +220,16 @@ class DecisionEngine:
 
     def decide(self, request: DecisionRequest, *, include_timing: bool = False) -> DecisionResponse:
         started = perf_counter()
-        self._validate_backend_and_request(request)
-        self._workflows.validate(request)
-        resolved_calibrations = self._resolve_calibrations(request)
+        execution_tier = self._validate_backend_and_request(request)
+        if execution_tier == "universal" and self._calibrations:
+            raise SaracuraError(
+                ErrorCode.CALIBRATION_INCOMPATIBLE,
+                "Universal research backends reject calibration artifacts.",
+                "/calibration",
+            )
+        self._workflows.validate(request, execution_tier)
+        if execution_tier == "universal":
+            cast(UniversalBackend, self._backend).validate_request(request)
 
         encoding_started = perf_counter()
         state_payload = serialize_state(request)
@@ -228,43 +240,77 @@ class DecisionEngine:
                 "/state",
                 details={"max_bytes": MAX_STATE_PAYLOAD_BYTES},
             )
-        encoded_state = self._backend.encode_state(state_payload)
-        encoding_finished = perf_counter()
-
         answers: list[Answer] = []
-        for question, artifact in resolved_calibrations:
-            scored = self._backend.score_choice(
-                encoded_state,
-                question,
-                serialize_question(question),
-            )
-            self._validate_scored_choice(question, scored.question_id, scored.raw_scores)
-            probabilities = _probabilities(
-                scored.raw_scores,
-                artifact.parameters.temperature,
-            )
-            value = max(probabilities, key=probabilities.__getitem__)
-            answers.append(
-                Answer(
-                    question_id=question.id,
-                    type="choice",
-                    value=value,
-                    raw_scores=scored.raw_scores,
-                    probabilities=probabilities,
-                    status=(
-                        "calibrated"
-                        if artifact.status == "verified_for_research"
-                        else "fixture_only"
-                    ),
-                    abstained=False,
-                    reason=None,
-                    calibration=CalibrationReference(
-                        id=artifact.calibration_id,
-                        status=artifact.status,
-                        risk_policy_id=None,
-                    ),
+        input_tokens = 0
+        if execution_tier == "compiled":
+            compiled_backend = cast(Backend, self._backend)
+            resolved_calibrations = self._resolve_calibrations(request, compiled_backend)
+            encoded_state = compiled_backend.encode_state(state_payload)
+            encoding_finished = perf_counter()
+            for question, artifact in resolved_calibrations:
+                scored = compiled_backend.score_choice(
+                    encoded_state,
+                    question,
+                    serialize_question(question),
                 )
-            )
+                self._validate_scored_choice(question, scored.question_id, scored.raw_scores)
+                probabilities = _probabilities(
+                    scored.raw_scores,
+                    artifact.parameters.temperature,
+                )
+                value = max(probabilities, key=probabilities.__getitem__)
+                answers.append(
+                    Answer(
+                        question_id=question.id,
+                        type="choice",
+                        value=value,
+                        raw_scores=scored.raw_scores,
+                        probabilities=probabilities,
+                        status=(
+                            "calibrated"
+                            if artifact.status == "verified_for_research"
+                            else "fixture_only"
+                        ),
+                        score_semantics=(
+                            "calibrated_confidence"
+                            if artifact.status == "verified_for_research"
+                            else "fixture_distribution"
+                        ),
+                        abstained=False,
+                        reason=None,
+                        calibration=CalibrationReference(
+                            id=artifact.calibration_id,
+                            status=artifact.status,
+                            risk_policy_id=None,
+                        ),
+                    )
+                )
+            input_tokens = self._input_tokens(encoded_state.input_tokens)
+        else:
+            universal_backend = cast(UniversalBackend, self._backend)
+            encoding_finished = perf_counter()
+            for question in request.questions:
+                scored = universal_backend.score_universal_choice(request, question, state_payload)
+                self._validate_scored_choice(question, scored.question_id, scored.raw_scores)
+                raw_scores = {
+                    criterion.id: scored.raw_scores[criterion.id] for criterion in question.criteria
+                }
+                probabilities = _probabilities(raw_scores, temperature=1.0)
+                answers.append(
+                    Answer(
+                        question_id=question.id,
+                        type="choice",
+                        value=max(probabilities, key=probabilities.__getitem__),
+                        raw_scores=raw_scores,
+                        probabilities=probabilities,
+                        status="uncalibrated",
+                        score_semantics="ranking_weights",
+                        abstained=True,
+                        reason="uncalibrated_research",
+                        calibration=None,
+                    )
+                )
+                input_tokens += self._input_tokens(scored.input_tokens)
         finished = perf_counter()
 
         timing = None
@@ -281,14 +327,15 @@ class DecisionEngine:
             model=self._backend.model,
             timing=timing,
             usage=Usage(
-                input_tokens=self._input_tokens(encoded_state.input_tokens),
+                input_tokens=input_tokens,
                 questions=len(request.questions),
                 criteria=sum(len(question.criteria) for question in request.questions),
             ),
+            automation_allowed=False,
         )
 
     def _resolve_calibrations(
-        self, request: DecisionRequest
+        self, request: DecisionRequest, backend: Backend
     ) -> tuple[tuple[ChoiceQuestion, AnyCalibrationArtifact], ...]:
         """Resolve and compare every axis before state serialization or device work."""
 
@@ -321,7 +368,7 @@ class DecisionEngine:
                 request,
                 question.id,
                 len(question.criteria),
-                self._backend,
+                backend,
                 profile,
             )
             actual = artifact.context().model_dump(mode="json")
@@ -347,8 +394,17 @@ class DecisionEngine:
             )
         return value
 
-    def _validate_backend_and_request(self, request: DecisionRequest) -> None:
-        _calibration_metadata(self._backend)
+    def _validate_backend_and_request(self, request: DecisionRequest) -> ExecutionTier:
+        capabilities = self._backend.capabilities
+        execution_tier = capabilities.execution_tier
+        if execution_tier not in ("compiled", "universal"):
+            raise SaracuraError(
+                ErrorCode.BACKEND_UNAVAILABLE,
+                "Backend declares an unsupported execution tier.",
+                "/model",
+            )
+        if execution_tier == "compiled":
+            _calibration_metadata(cast(Backend, self._backend))
         if request.model != self._backend.model.revision:
             code = (
                 ErrorCode.MODEL_ALIAS_FORBIDDEN
@@ -360,27 +416,27 @@ class DecisionEngine:
                 "The immutable model revision is not available.",
                 "/model",
             )
-        if len(request.questions) > self._backend.capabilities.max_questions:
+        if len(request.questions) > capabilities.max_questions:
             raise SaracuraError(
                 ErrorCode.CARDINALITY_EXCEEDED,
                 "Question count exceeds backend capabilities.",
                 "/questions",
             )
-        if "choice" not in self._backend.capabilities.decision_types:
+        if "choice" not in capabilities.decision_types:
             raise SaracuraError(
                 ErrorCode.BACKEND_UNAVAILABLE,
                 "Backend does not support choice decisions.",
                 "/model",
             )
         if any(
-            len(question.criteria) > self._backend.capabilities.max_criteria
-            for question in request.questions
+            len(question.criteria) > capabilities.max_criteria for question in request.questions
         ):
             raise SaracuraError(
                 ErrorCode.CARDINALITY_EXCEEDED,
                 "Choice cardinality exceeds backend capabilities.",
                 "/questions/*/criteria",
             )
+        return execution_tier
 
     @staticmethod
     def _validate_scored_choice(

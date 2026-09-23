@@ -36,6 +36,7 @@ class DeterministicFixtureBackend:
             checkpoint_sha256=FIXTURE_CHECKPOINT_SHA256,
         )
         self._capabilities = BackendCapabilities(
+            execution_tier="compiled",
             decision_types=frozenset({"choice"}),
             max_questions=50,
             max_criteria=20,

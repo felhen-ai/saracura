@@ -1,0 +1,17 @@
+{
+  "schema_version": "laya-candidate.v1",
+  "candidate": "laya-multilingual",
+  "model_id": "convaiinnovations/laya-multilingual",
+  "model_revision": "052592a15d198d9ad47da779604259b10b47b7aa",
+  "upstream_source_revision": "573e5b62696ba441230cd6be71d593331b5d23af",
+  "acquisition_contract_digest": "be1356e4d2a771830e44b899d1ddd8fc2f30b36943d6becb321afdfecc5b638d",
+  "conformance_vector_digest": "14f2eba88e45d9b9138c3c4ceabc5413a5bdb069f838a6480b4071a9d94fa3b7",
+  "runtime_disposition": "research_only_unresolved_provenance",
+  "files": [
+    {"path": "encoder/config.json", "bytes": 1938, "sha256": "83f6916d13ef0f556ac461f28308dc2bffa7ebeadee8ec9e2db5812020ea5bb4"},
+    {"path": "rl_agent_config.json", "bytes": 472, "sha256": "25061739243b617ad88d1219ba6f8a9c86c5881ca28df024fa2d9b3b2fcc30c6"},
+    {"path": "tokenizer/tokenizer_config.json", "bytes": 502, "sha256": "424b69444bf7b5809dc2cd2e36d0bd71b8055124dd24274d6db3c655d38205e7"},
+    {"path": "tokenizer/tokenizer.json", "bytes": 34363188, "sha256": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f"},
+    {"path": "model.safetensors", "bytes": 643835514, "sha256": "9d628fd971b700382ac6f65920a86f149777b2e748e0c955fb3b19695aa8f204"}
+  ]
+}

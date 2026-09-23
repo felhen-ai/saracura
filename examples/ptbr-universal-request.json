@@ -1,0 +1,40 @@
+{
+  "api_version": "v1alpha1",
+  "model": "052592a15d198d9ad47da779604259b10b47b7aa",
+  "mode": "research",
+  "locale": "pt-BR",
+  "domain": "email-triage",
+  "workflow": {
+    "id": "universal-choice",
+    "revision": "phase4d-laya.v1"
+  },
+  "state": {
+    "subject": "Aviso sintético de renovação",
+    "body": "Mensagem fictícia para demonstrar a classificação local sem acessar caixa postal."
+  },
+  "questions": [
+    {
+      "id": "triage",
+      "type": "choice",
+      "instruction": "Classifique a mensagem na categoria mais apropriada.",
+      "criteria": [
+        {
+          "id": "action_required",
+          "description": "Exige acompanhamento manual."
+        },
+        {
+          "id": "billing_or_accounting",
+          "description": "Trata de cobrança, pagamento ou contabilidade."
+        },
+        {
+          "id": "marketing_or_newsletter",
+          "description": "É comunicação comercial ou newsletter."
+        },
+        {
+          "id": "low_value_or_spam",
+          "description": "Tem baixo valor ou aparenta spam."
+        }
+      ]
+    }
+  ]
+}

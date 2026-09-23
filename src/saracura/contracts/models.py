@@ -8,6 +8,14 @@ from typing import Annotated, Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]*$")]
+ModelIdentifier = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)?$",
+    ),
+]
 Revision = Annotated[str, Field(min_length=1, max_length=256)]
 Locale = Annotated[
     str, Field(min_length=2, max_length=35, pattern=r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
@@ -74,14 +82,41 @@ class Answer(ClosedModel):
     value: Identifier
     raw_scores: dict[str, float]
     probabilities: dict[str, float]
-    status: Literal["calibrated", "fixture_only"]
+    status: Literal["calibrated", "fixture_only", "uncalibrated"]
+    score_semantics: Literal["calibrated_confidence", "fixture_distribution", "ranking_weights"]
     abstained: bool
     reason: str | None
-    calibration: CalibrationReference
+    calibration: CalibrationReference | None
+
+    @model_validator(mode="after")
+    def consistent_research_semantics(self) -> Answer:
+        if self.status == "uncalibrated":
+            if (
+                self.score_semantics != "ranking_weights"
+                or not self.abstained
+                or self.reason != "uncalibrated_research"
+                or self.calibration is not None
+            ):
+                raise ValueError("uncalibrated answers must remain abstained ranking-only results")
+            return self
+
+        expected_semantics = (
+            "calibrated_confidence" if self.status == "calibrated" else "fixture_distribution"
+        )
+        expected_calibration_status = (
+            "verified_for_research" if self.status == "calibrated" else "fixture_only"
+        )
+        if (
+            self.score_semantics != expected_semantics
+            or self.calibration is None
+            or self.calibration.status != expected_calibration_status
+        ):
+            raise ValueError("answer status, semantics, and calibration must agree")
+        return self
 
 
 class ModelReference(ClosedModel):
-    id: Identifier
+    id: ModelIdentifier
     revision: Revision
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -105,6 +140,7 @@ class DecisionResponse(ClosedModel):
     model: ModelReference
     timing: Timing | None = None
     usage: Usage
+    automation_allowed: Literal[False] = False
 
 
 def closed_json_schema(model: type[BaseModel]) -> dict[str, Any]:

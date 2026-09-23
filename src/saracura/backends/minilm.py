@@ -122,6 +122,7 @@ class MiniLMRoutingBackend:
                 checkpoint_sha256=hashlib.sha256(verified.checkpoint_bytes).hexdigest(),
             )
             self._capabilities = BackendCapabilities(
+                execution_tier="compiled",
                 decision_types=frozenset({"choice"}),
                 max_questions=1,
                 max_criteria=5,

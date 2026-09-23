@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 FORBIDDEN = (".bin", ".pkl", ".pickle", ".so", ".dylib", ".dll", ".pyc", ".pt", ".pth", ".jsonl")
 PACKAGE_RESOURCES = {
     "saracura/encoder-candidates.v1.json",
+    "saracura/laya-candidate.v1.json",
     "saracura/minilm-conformance.v1.json",
     "saracura/research-trust-keys.v1.json",
 }

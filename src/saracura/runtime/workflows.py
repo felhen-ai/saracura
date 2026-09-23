@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.contracts.models import ChoiceCriterion, ChoiceQuestion, DecisionRequest
@@ -17,6 +18,9 @@ MINILM_ROUTING_LABELS = (
     "subscription_cancellation",
     "order_delivery",
 )
+UNIVERSAL_CHOICE_WORKFLOW_ID = "universal-choice"
+UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4d-laya.v1"
+_UNIVERSAL_CHOICE_LOCALES = frozenset({"pt-BR", "en"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,10 +37,16 @@ class WorkflowRegistry:
     def __init__(self, schemas: tuple[WorkflowSchema, ...]) -> None:
         self._schemas = {(schema.id, schema.revision): schema for schema in schemas}
 
-    def validate(self, request: DecisionRequest) -> WorkflowSchema:
+    def validate(
+        self,
+        request: DecisionRequest,
+        execution_tier: Literal["compiled", "universal"] = "compiled",
+    ) -> WorkflowSchema:
         key = (request.workflow.id, request.workflow.revision)
         schema = self._schemas.get(key)
         if schema is None:
+            if key == (UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION):
+                return self._validate_universal_choice(request, execution_tier)
             raise SaracuraError(
                 ErrorCode.WORKFLOW_UNSUPPORTED,
                 "Workflow id or immutable revision is not supported.",
@@ -70,6 +80,43 @@ class WorkflowRegistry:
                     details={"question_id": question.id},
                 )
         return schema
+
+    @staticmethod
+    def _validate_universal_choice(
+        request: DecisionRequest, execution_tier: Literal["compiled", "universal"]
+    ) -> WorkflowSchema:
+        if execution_tier != "universal":
+            raise SaracuraError(
+                ErrorCode.WORKFLOW_UNSUPPORTED,
+                "The dynamic workflow requires a universal backend.",
+                "/workflow",
+            )
+        if request.locale not in _UNIVERSAL_CHOICE_LOCALES:
+            raise SaracuraError(
+                ErrorCode.LOCALE_UNVERIFIED,
+                "The dynamic workflow is not verified for the requested locale.",
+                "/locale",
+            )
+        if len(request.questions) > 10:
+            raise SaracuraError(
+                ErrorCode.CARDINALITY_EXCEEDED,
+                "Dynamic universal workflows support at most ten questions.",
+                "/questions",
+            )
+        if any(len(question.criteria) > 20 for question in request.questions):
+            raise SaracuraError(
+                ErrorCode.CARDINALITY_EXCEEDED,
+                "Dynamic universal workflows support at most twenty criteria per question.",
+                "/questions/*/criteria",
+            )
+        return WorkflowSchema(
+            id=UNIVERSAL_CHOICE_WORKFLOW_ID,
+            revision=UNIVERSAL_CHOICE_WORKFLOW_REVISION,
+            locale=request.locale,
+            domain=request.domain,
+            questions={},
+            criteria_order_semantic=True,
+        )
 
 
 def _scaling_question(index: int) -> ChoiceQuestion:
