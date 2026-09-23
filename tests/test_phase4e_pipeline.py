@@ -6,12 +6,19 @@ import json
 import socket
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from benchmarks import phase4e_pipeline as pipeline
 from benchmarks import saracura_universal_corpus as corpus
+
+
+@pytest.fixture
+def bypass_aggregate_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep single-request transport tests focused below the plan-wide gate."""
+    monkeypatch.setattr(pipeline, "_aggregate_preflight", lambda *args: {})
 
 
 def test_plan_is_no_clobber_and_constructs_no_socket(
@@ -56,7 +63,7 @@ def test_corpus_requires_literal_network_opt_in_before_environment_or_io(
 
 
 def test_fake_transport_has_pinned_shape_and_does_not_store_secret(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
     pipeline.write_plan(plan)
@@ -86,12 +93,9 @@ def test_fake_transport_has_pinned_shape_and_does_not_store_secret(
     assert captured["method"] == "POST"
     assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured["body"]["model"] == corpus.AUTHOR_MODEL
-    assert captured["body"]["provider"] == {"data_collection": "deny", "zdr": True}
+    assert captured["body"]["provider"] == corpus.provider_preferences("corpus_author")
     assert captured["body"]["reasoning_effort"] == "none"
-    assert (
-        captured["body"]["response_format"]["json_schema"]["name"]
-        == corpus.RESPONSE_SCHEMA_NAME
-    )
+    assert captured["body"]["response_format"]["json_schema"]["name"] == corpus.RESPONSE_SCHEMA_NAME
     assert "phase4e-test-secret" not in json.dumps(captured["body"])
     assert (
         "phase4e-test-secret" not in (tmp_path / "work" / "ledger" / "ledger-0000.json").read_text()
@@ -128,7 +132,7 @@ def test_resume_refuses_unresolved_pre_send_reservation(
 
 
 def test_resume_refuses_settled_author_response_after_author_validation_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
     pipeline.write_plan(plan)
@@ -194,7 +198,7 @@ def test_resume_refuses_settled_author_response_after_author_validation_failure(
 
 
 def test_resume_refuses_settled_reviewer_response_after_validation_or_persistence_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
     pipeline.write_plan(plan)
@@ -227,12 +231,6 @@ def test_resume_refuses_settled_reviewer_response_after_validation_or_persistenc
             task = json.loads(request["messages"][1]["content"])["tasks"][0]
             source = authored[task["task_id"]]
             selected = source["selected_criterion_id"]
-            position = next(
-                index
-                for index, criterion in enumerate(task["criteria"])
-                if criterion["id"] == selected
-            )
-            roles = [f"role-{index}" for index in range(len(task["criteria"]))]
             content = json.dumps(
                 {
                     "reviews": [
@@ -245,11 +243,9 @@ def test_resume_refuses_settled_reviewer_response_after_validation_or_persistenc
                             "fictional": True,
                             "exclusive_options": True,
                             "private_or_sensitive": False,
-                            "semantic_equivalence_attestation": {
-                                "scenario": "fictional scenario",
-                                "criterion_roles": roles,
-                                "selected_role": roles[position],
-                            },
+                            "semantic_equivalence_attestation": source[
+                                "semantic_equivalence_attestation"
+                            ],
                         }
                     ]
                 }
@@ -303,7 +299,7 @@ def test_resume_refuses_settled_reviewer_response_after_validation_or_persistenc
 
 
 def test_resume_refuses_settled_reviewer_response_after_reviewer_validation_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
     pipeline.write_plan(plan)
@@ -374,7 +370,7 @@ def test_resume_refuses_settled_reviewer_response_after_reviewer_validation_fail
 
 
 def test_capacity_resolution_uses_task_identity_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
     pipeline.write_plan(plan)
@@ -424,6 +420,59 @@ def test_conservative_preflight_refuses_stage_overage() -> None:
         pipeline._preflight_request("corpus_author", b"x", 10_000_000)
 
 
+def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = corpus.build_plan()
+    totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
+    assert totals == {
+        "corpus_author": Decimal("4.4416999"),
+        "corpus_reviewer": Decimal("9.42617229"),
+    }
+
+    plan_path = tmp_path / "plan.json"
+    pipeline.write_plan(plan_path)
+    monkeypatch.setattr(
+        corpus,
+        "STAGE_LIMITS",
+        {"corpus_author": Decimal("4.44"), "corpus_reviewer": Decimal("10.00")},
+    )
+    monkeypatch.setattr(corpus, "TOTAL_BUDGET", Decimal("17.00"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    called = False
+
+    def transport(*args: object, **kwargs: object) -> tuple[int, dict[str, str], bytes]:
+        nonlocal called
+        del args, kwargs
+        called = True
+        return 500, {}, b"{}"
+
+    with pytest.raises(corpus.CorpusError, match="stage budget exhausted"):
+        pipeline.run_corpus(
+            plan_path,
+            tmp_path / "snapshot",
+            tmp_path / "work",
+            tmp_path / "packet",
+            allow_network=True,
+            transport=transport,
+        )
+    assert not called
+
+
+def test_aggregate_preflight_adds_ledger_spend_for_only_unresolved_plan() -> None:
+    plan = corpus.build_plan()
+    pending = next(slot for slot in plan["slots"] if slot["pair_id"] is None)
+    resolved = {
+        slot["task_id"]: {"status": "accepted"}
+        for slot in plan["slots"]
+        if slot["task_id"] != pending["task_id"]
+    }
+    ledger = corpus.BudgetLedger()
+    ledger.record("corpus_author", "previous", Decimal("4.9999"), Decimal(), "a" * 64)
+    with pytest.raises(corpus.CorpusError, match="stage budget exhausted"):
+        pipeline._aggregate_preflight(plan, resolved, ledger)
+
+
 def test_wilson_boundary_persists_full_projection_in_ledger_directory(tmp_path: Path) -> None:
     plan = corpus.build_plan()
     resolved = [{"task_id": slot["task_id"], "status": "accepted"} for slot in plan["slots"][:200]]
@@ -435,6 +484,103 @@ def test_wilson_boundary_persists_full_projection_in_ledger_directory(tmp_path: 
         payload["projections"]
     )
     assert len(payload["projections"]) == 46
+
+
+@pytest.mark.parametrize("failure", ("pre_holdout_binding", "training_verification"))
+def test_verify_never_opens_holdout_before_a_claim_or_after_training_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    calls: list[str] = []
+
+    def full_validator(_packet: Path) -> None:
+        raise AssertionError("run_verify must not open the accepted holdout")
+
+    monkeypatch.setattr(corpus, "validate_accepted_packet", full_validator)
+    if failure == "pre_holdout_binding":
+        monkeypatch.setattr(
+            pipeline.training,
+            "validate_accepted_packet_binding",
+            lambda _packet: (_ for _ in ()).throw(RuntimeError("no training claim")),
+        )
+        with pytest.raises(RuntimeError, match="no training claim"):
+            pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
+        return
+
+    binding = object()
+    monkeypatch.setattr(
+        pipeline.training,
+        "validate_accepted_packet_binding",
+        lambda _packet: calls.append("binding") or binding,
+    )
+    monkeypatch.setattr(
+        pipeline.training,
+        "validate_embedding_capsule",
+        lambda _embeddings, received: (
+            calls.append("embeddings")
+            if received is binding
+            else (_ for _ in ()).throw(AssertionError("binding changed"))
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline.training,
+        "verify_training_capsule",
+        lambda _training: (_ for _ in ()).throw(RuntimeError("training verification failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="training verification failed"):
+        pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
+    assert calls == ["binding", "embeddings"]
+
+
+@pytest.mark.parametrize("field", ("packet_receipt_sha256", "embedding_descriptor_sha256"))
+def test_verify_rejects_cross_mixed_embedding_and_training_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    binding = object()
+    capsule = SimpleNamespace(
+        manifest={"packet_receipt_sha256": "a" * 64}, descriptor_sha256="b" * 64
+    )
+    manifest = {
+        "packet_receipt_sha256": "a" * 64,
+        "embedding_descriptor_sha256": "b" * 64,
+    }
+    manifest[field] = "c" * 64
+    monkeypatch.setattr(pipeline.training, "validate_accepted_packet_binding", lambda _: binding)
+    monkeypatch.setattr(
+        pipeline.training,
+        "validate_embedding_capsule",
+        lambda _, received: (
+            capsule if received is binding else pytest.fail("packet binding changed")
+        ),
+    )
+    monkeypatch.setattr(pipeline.training, "verify_training_capsule", lambda _: manifest)
+
+    with pytest.raises(pipeline.training.TrainingError, match="lineage binding"):
+        pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
+
+
+def test_verify_accepts_matching_embedding_and_training_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding = object()
+    capsule = SimpleNamespace(
+        manifest={"packet_receipt_sha256": "a" * 64}, descriptor_sha256="b" * 64
+    )
+    manifest = {
+        "packet_receipt_sha256": "a" * 64,
+        "embedding_descriptor_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(pipeline.training, "validate_accepted_packet_binding", lambda _: binding)
+    monkeypatch.setattr(
+        pipeline.training,
+        "validate_embedding_capsule",
+        lambda _, received: (
+            capsule if received is binding else pytest.fail("packet binding changed")
+        ),
+    )
+    monkeypatch.setattr(pipeline.training, "verify_training_capsule", lambda _: manifest)
+
+    pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
 
 
 class _Counter:
@@ -451,6 +597,22 @@ def _record(slot: dict[str, Any]) -> dict[str, Any]:
         {"id": f"route-{index}", "description": f"Fictional route {index}."}
         for index in range(slot["option_count"])
     ]
+    roles = [
+        "matches_rule",
+        "contradicts_rule",
+        "irrelevant_to_rule",
+        "insufficient_evidence",
+        "unsafe_action",
+        "premature_action",
+        "overbroad_action",
+        "duplicate_action",
+    ][: slot["option_count"]]
+    roles[0], roles[slot["gold_position"]] = roles[slot["gold_position"]], roles[0]
+    semantic_attestation = {
+        "scenario": "topic_routing",
+        "criterion_roles": roles,
+        "selected_role": "matches_rule",
+    }
     record = {
         **{
             key: slot[key]
@@ -468,13 +630,11 @@ def _record(slot: dict[str, Any]) -> dict[str, Any]:
         "state": {"summary": "Fictional only."},
         "criteria": criteria,
         "selected_criterion_id": criteria[slot["gold_position"]]["id"],
+        "semantic_equivalence_attestation": semantic_attestation,
     }
     if slot["pair_id"] is not None:
-        roles = [f"role-{index}" for index in range(slot["option_count"])]
         record["cross_locale_attestation"] = {
             "pair_id": slot["pair_id"],
-            "scenario": "fictional shared scenario",
-            "criterion_roles": roles,
-            "selected_role": roles[slot["gold_position"]],
+            **semantic_attestation,
         }
     return record

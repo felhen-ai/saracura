@@ -148,9 +148,7 @@ def _fixture(
         training._identity_rows(tasks),
     )
     monkeypatch.setattr(training, "validate_accepted_packet_binding", lambda _: binding)
-    monkeypatch.setattr(
-        training, "validate_full_accepted_packet_binding", lambda _packet, _binding: binding
-    )
+    monkeypatch.setattr(training, "validate_accepted_packet", lambda _: None)
     return tmp_path / "capsule", packet, snapshot, binding
 
 
@@ -248,7 +246,11 @@ def test_postclaim_derives_holdout_in_memory_and_seals_conformance(
     original = training.derive_holdout_embeddings_in_memory
 
     def after_claim(*args: object, **kwargs: object) -> training._Rows:
-        assert list(registry.glob("*.json"))
+        claims = list(registry.glob("*.json"))
+        assert len(claims) == 1
+        claim = json.loads(claims[0].read_bytes())
+        assert claim["checkpoint_sha256"] == args[5]
+        assert claim["pre_holdout_gate_descriptor_sha256"] == args[6]
         return original(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(training, "derive_holdout_embeddings_in_memory", after_claim)
@@ -259,6 +261,84 @@ def test_postclaim_derives_holdout_in_memory_and_seals_conformance(
         "conformance-manifest.json",
         "dependency-versions.json",
     } <= {item.name for item in output.iterdir()}
+
+
+def test_direct_holdout_derivation_requires_exact_immutable_claim_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule_path, packet, snapshot, binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule_path, packet, snapshot)
+    capsule = training.validate_embedding_capsule(capsule_path, binding)
+    registry = tmp_path / "registry"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: registry)
+    checkpoint_sha256 = "b" * 64
+    gate_descriptor_sha256 = "c" * 64
+    holdout = (packet / "accepted-holdout.jsonl").resolve()
+    original = Path.read_bytes
+    reads: list[Path] = []
+
+    def guard(path: Path) -> bytes:
+        if path.resolve() == holdout:
+            reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guard)
+    with pytest.raises(training.TrainingError, match="holdout release claim"):
+        training.derive_holdout_embeddings_in_memory(
+            capsule,
+            packet,
+            binding,
+            snapshot,
+            "cpu",
+            checkpoint_sha256,
+            gate_descriptor_sha256,
+        )
+    assert not reads
+
+    training._claim_holdout_once(binding, capsule, checkpoint_sha256, gate_descriptor_sha256)
+    with pytest.raises(training.TrainingError, match="holdout release claim binding"):
+        training.derive_holdout_embeddings_in_memory(
+            capsule,
+            packet,
+            binding,
+            snapshot,
+            "cpu",
+            "d" * 64,
+            gate_descriptor_sha256,
+        )
+    assert not reads
+
+    claim = registry / f"{training._holdout_release_claim_key(binding.packet_json_sha256)}.json"
+    claim.write_bytes(
+        training._holdout_release_payload(binding, capsule, checkpoint_sha256, "e" * 64)
+    )
+    with pytest.raises(training.TrainingError, match="holdout release claim binding"):
+        training.derive_holdout_embeddings_in_memory(
+            capsule,
+            packet,
+            binding,
+            snapshot,
+            "cpu",
+            checkpoint_sha256,
+            gate_descriptor_sha256,
+        )
+    assert not reads
+
+    claim.write_bytes(
+        training._holdout_release_payload(
+            binding, capsule, checkpoint_sha256, gate_descriptor_sha256
+        )
+    )
+    holdout_rows = training.derive_holdout_embeddings_in_memory(
+        capsule,
+        packet,
+        binding,
+        snapshot,
+        "cpu",
+        checkpoint_sha256,
+        gate_descriptor_sha256,
+    )
+    assert holdout_rows.rows and reads
 
 
 def test_packet_only_claim_blocks_different_capsule_before_holdout(

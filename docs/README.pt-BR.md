@@ -225,8 +225,8 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
 ```
 
 As requisições de corpus são fixadas em HTTPS do OpenRouter, sem redirects e
-proxies. O limite revisado é USD 5,00 não fungíveis: USD 1,00 para autor, USD
-3,00 para revisor, USD 0,35 para autor da comparação e USD 0,65 para revisor da
+proxies. O limite revisado é USD 17,00 não fungíveis: USD 5,00 para autor, USD
+10,00 para revisor, USD 0,75 para autor da comparação e USD 1,25 para revisor da
 comparação. Uma reserva durável pré-envio que permaneça sem resolução bloqueia
 o resume; o comando não repete uma cobrança possivelmente efetuada.
 

@@ -14,13 +14,17 @@ from benchmarks.data_policy_registry import (
 
 ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json"
+AUTHOR_MODEL = "google/gemini-2.5-flash"
+REVIEWER_MODEL = "meta-llama/llama-3.3-70b-instruct"
+AUTHOR_PROVIDER = "Google"
+REVIEWER_PROVIDER = "CoreWeave"
 STAGE_LIMITS = {
-    "corpus_author": Decimal("2.00"),
-    "corpus_reviewer": Decimal("6.00"),
+    "corpus_author": Decimal("5.00"),
+    "corpus_reviewer": Decimal("10.00"),
     "comparison_author": Decimal("0.75"),
     "comparison_reviewer": Decimal("1.25"),
 }
-TOTAL_BUDGET = Decimal("10.00")
+TOTAL_BUDGET = Decimal("17.00")
 
 
 class Phase4EPolicyError(ValueError):
@@ -95,16 +99,20 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         raise Phase4EPolicyError("training policy is invalid")
     if policy["provider"] != {
         "host": "openrouter.ai",
-        "author_model": "qwen/qwen3.5-9b",
-        "reviewer_model": "mistralai/ministral-8b-2512",
+        "author_model": AUTHOR_MODEL,
+        "author_provider": AUTHOR_PROVIDER,
+        "reviewer_model": REVIEWER_MODEL,
+        "reviewer_provider": REVIEWER_PROVIDER,
+        "allow_fallbacks": False,
+        "require_parameters": True,
         "zdr": True,
         "data_collection": "deny",
     }:
         raise Phase4EPolicyError("provider policy is invalid")
     if policy["budget"] != {
-        "total_usd": 10.0,
-        "author_usd": 2.0,
-        "reviewer_usd": 6.0,
+        "total_usd": 17.0,
+        "author_usd": 5.0,
+        "reviewer_usd": 10.0,
         "comparison_author_usd": 0.75,
         "comparison_reviewer_usd": 1.25,
     }:
@@ -149,7 +157,7 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
             "distractor_overlap": ["low", "high"],
             "urgency": ["normal", "urgent"],
         },
-        "cross_locale_pairs": 120,
+        "cross_locale_pairs": 300,
     }:
         raise Phase4EPolicyError("planning policy is invalid")
     if policy["authorizations"] != {
@@ -170,12 +178,19 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         or exception.id != policy["source_policy_exception_id"]
     ):
         raise Phase4EPolicyError("source-policy exception is not bound")
+    if (
+        exception.author_model != AUTHOR_MODEL
+        or exception.reviewer_model != REVIEWER_MODEL
+        or policy["provider"]["author_model"] != exception.author_model
+        or policy["provider"]["reviewer_model"] != exception.reviewer_model
+    ):
+        raise Phase4EPolicyError("source-policy model lineage is invalid")
     budget = policy["budget"]
     manifest_total = budget["total_usd"]
     stage_total = sum(STAGE_LIMITS.values())
     if (
         type(manifest_total) is not float
-        or exception.spend_ceiling_usd != 10.0
+        or exception.spend_ceiling_usd != 17.0
         or manifest_total != exception.spend_ceiling_usd
         or stage_total != TOTAL_BUDGET
         or Decimal(str(manifest_total)) != stage_total

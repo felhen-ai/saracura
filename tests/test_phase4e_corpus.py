@@ -53,6 +53,23 @@ def _record(slot: Mapping[str, Any]) -> dict[str, Any]:
         {"id": f"route-{index}", "description": f"Route criterion {index}."}
         for index in range(int(slot["option_count"]))
     ]
+    roles = [
+        "matches_rule",
+        "contradicts_rule",
+        "irrelevant_to_rule",
+        "insufficient_evidence",
+        "unsafe_action",
+        "premature_action",
+        "overbroad_action",
+        "duplicate_action",
+    ][: int(slot["option_count"])]
+    gold = int(slot["gold_position"])
+    roles[0], roles[gold] = roles[gold], roles[0]
+    semantic_attestation = {
+        "scenario": "topic_routing",
+        "criterion_roles": roles,
+        "selected_role": "matches_rule",
+    }
     record = {
         **{
             key: slot[key]
@@ -70,36 +87,19 @@ def _record(slot: Mapping[str, Any]) -> dict[str, Any]:
         "state": {"summary": "A fictional request."},
         "criteria": criteria,
         "selected_criterion_id": criteria[int(slot["gold_position"])]["id"],
+        "semantic_equivalence_attestation": semantic_attestation,
     }
     if isinstance(slot["pair_id"], str):
-        roles = [f"role-{index}" for index in range(int(slot["option_count"]))]
         record["cross_locale_attestation"] = {
             "pair_id": slot["pair_id"],
-            "scenario": "shared fictional routing scenario",
-            "criterion_roles": roles,
-            "selected_role": roles[int(slot["gold_position"])],
+            **semantic_attestation,
         }
     return record
 
 
 def _review(row: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
-    criteria = row["criteria"]
     selected_id = row["selected_criterion_id"]
-    selected_position = next(
-        index for index, item in enumerate(criteria) if item["id"] == selected_id
-    )
-    author_attestation = row.get("cross_locale_attestation")
-    if isinstance(author_attestation, Mapping):
-        semantic_attestation = {
-            key: author_attestation[key] for key in ("scenario", "criterion_roles", "selected_role")
-        }
-    else:
-        roles = [f"role-{index}" for index in range(len(criteria))]
-        semantic_attestation = {
-            "scenario": "fictional routing scenario",
-            "criterion_roles": roles,
-            "selected_role": roles[selected_position],
-        }
+    semantic_attestation = row["semantic_equivalence_attestation"]
     return {
         "task_id": row["task_id"],
         "status": "accepted",
@@ -166,8 +166,11 @@ def test_plan_is_preprovider_text_free_balanced_and_cross_locale_isolated() -> N
     for row in plan["slots"]:
         if row["pair_id"]:
             pairs.setdefault(row["pair_id"], []).append(row)
-    assert len(pairs) == 120
+    assert len(pairs) == 300
     assert all({row["locale"] for row in pair} == {"pt-BR", "en"} for pair in pairs.values())
+    assert {
+        split: sum(1 for pair in pairs.values() if pair[0]["split"] == split) for split in SPLITS
+    } == {"synthetic_train": 210, "synthetic_dev": 45, "synthetic_holdout": 45}
 
 
 def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
@@ -192,6 +195,7 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     with pytest.raises(CorpusError, match="author record schema"):
         validate_author_rows([changed, _record(slots[1])], slots, _Counter())
     assert "gold_position" in json.dumps(author_messages(slots))
+    assert "sole top-level key is records" in author_messages(slots)[0]["content"]
 
 
 def test_reviewer_blindness_is_structural_and_preserves_legitimate_text() -> None:
@@ -206,6 +210,7 @@ def test_reviewer_blindness_is_structural_and_preserves_legitimate_text() -> Non
     )
 
     payload = json.loads(reviewer_messages([row])[1]["content"])
+    assert "sole top-level key is reviews" in reviewer_messages([row])[0]["content"]
     task = payload["tasks"][0]
     assert set(task) == {
         "task_id",
@@ -224,6 +229,20 @@ def test_reviewer_blindness_is_structural_and_preserves_legitimate_text() -> Non
     assert "pair_id" not in task
     assert "axes" not in task
     assert "gold_position" not in task
+    assert "semantic_equivalence_attestation" not in task
+
+    corpus._validate_reviewer_task_view(task)
+    for field, value in (
+        ("synthetic_provenance", True),
+        ("selected_criterion_id", "criterion-0"),
+        ("semantic_equivalence_attestation", {"scenario": "topic_routing"}),
+    ):
+        with pytest.raises(CorpusError, match="reviewer transport fields"):
+            corpus._validate_reviewer_task_view({**task, field: value})
+
+    prompt = reviewer_messages([row])[0]["content"]
+    assert "Independently judge fictionality from the supplied content" in prompt
+    assert "do not treat provenance or stated synthetic intent as proof" in prompt
 
     cast(dict[str, Any], row.state)["invalid"] = object()
     with pytest.raises(CorpusError, match="reviewer transport value"):
@@ -255,13 +274,182 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
     schema = author_schema(pair)
     records = schema["properties"]["records"]
     assert records["minItems"] == records["maxItems"] == 2
-    assert records["items"] is False
-    assert [item["properties"]["locale"]["const"] for item in records["prefixItems"]] == [
-        "pt-BR",
-        "en",
-    ]
+    assert "$defs" in schema and "$defs" not in records["items"]
+    assert set(records["items"]["properties"]) == {
+        "instruction",
+        "state",
+        "criteria",
+        "selected_index",
+        "semantic_equivalence_attestation",
+    }
     with pytest.raises(CorpusError, match="cross-locale author batch"):
         author_schema(pair[:1])
+
+    review = corpus.reviewer_schema(1)
+    assert "$defs" in review
+    assert set(review["properties"]["reviews"]["items"]["properties"]) == {
+        "status",
+        "selected_criterion_id",
+        "reason_codes",
+        "natural_language",
+        "fictional",
+        "exclusive_options",
+        "private_or_sensitive",
+        "semantic_equivalence_attestation",
+    }
+
+
+def test_generated_author_choice_is_reordered_to_planned_gold_position() -> None:
+    slot = next(
+        slot
+        for slot in build_plan()["slots"]
+        if slot["pair_id"] is None and slot["option_count"] == 2
+    )
+    selected_index = 1 - int(slot["gold_position"])
+    generated = {
+        "instruction": "Choose the route supported by the fictional state.",
+        "state": {"summary": "Only route B satisfies the stated rule."},
+        "criteria": [
+            {"description": "Route A does not satisfy the rule."},
+            {"description": "Route B satisfies the rule."},
+        ],
+        "selected_index": 1,
+        "semantic_equivalence_attestation": {
+            "scenario": "topic_routing",
+            "criterion_roles": ["contradicts_rule", "matches_rule"],
+            "selected_role": "matches_rule",
+        },
+    }
+    if selected_index == 0:
+        generated["criteria"].reverse()
+        generated["selected_index"] = 0
+        generated["semantic_equivalence_attestation"]["criterion_roles"].reverse()
+    row = validate_author_rows([generated], [slot], _Counter())[0]
+    gold = int(slot["gold_position"])
+    assert row["selected_criterion_id"] == f"criterion-{gold}"
+    assert "satisfies the rule" in row["criteria"][gold]["description"]
+    assert row["semantic_equivalence_attestation"]["criterion_roles"][gold] == "matches_rule"
+
+
+def test_semantic_attestations_are_provider_emitted_not_position_derived() -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    row = validate_author_rows([_record(slot)], [slot], _Counter())[0]
+    typed = ValidatedAuthorRow.model_validate(row)
+    generated_review = {
+        "status": "accepted",
+        "selected_criterion_id": row["selected_criterion_id"],
+        "reason_codes": [],
+        "natural_language": True,
+        "fictional": True,
+        "exclusive_options": True,
+        "private_or_sensitive": False,
+    }
+    with pytest.raises(CorpusError, match="review record schema"):
+        corpus.materialize_reviewer_record(generated_review, typed)
+
+    attestation = {
+        "scenario": "topic_routing",
+        "criterion_roles": row["semantic_equivalence_attestation"]["criterion_roles"],
+        "selected_role": "matches_rule",
+    }
+    materialized = corpus.materialize_reviewer_record(
+        {**generated_review, "semantic_equivalence_attestation": attestation}, typed
+    )
+    assert materialized["semantic_equivalence_attestation"] == attestation
+
+
+def test_same_gold_position_with_different_closed_author_semantics_rejects_pair() -> None:
+    plan = build_plan()
+    pair_id = next(slot["pair_id"] for slot in plan["slots"] if slot["pair_id"])
+    slots = [slot for slot in plan["slots"] if slot["pair_id"] == pair_id]
+    rows = validate_author_rows(_paired_records(slots), slots, _Counter())
+    assert rows[0]["selected_criterion_id"] == f"route-{slots[0]['gold_position']}"
+    assert rows[1]["selected_criterion_id"] == f"route-{slots[1]['gold_position']}"
+    rows[1]["semantic_equivalence_attestation"] = {
+        **rows[1]["semantic_equivalence_attestation"],
+        "scenario": "deadline_risk",
+    }
+    rows[1]["cross_locale_attestation"] = {
+        **rows[1]["cross_locale_attestation"],
+        "scenario": "deadline_risk",
+    }
+    accepted, rejected = resolve_reviews(rows, [_review(row) for row in rows])
+    assert accepted == []
+    assert {row["reason"] for row in rejected} == {"cross_locale_semantic_attestation"}
+
+    role_rows = validate_author_rows(_paired_records(slots), slots, _Counter())
+    roles = list(role_rows[1]["semantic_equivalence_attestation"]["criterion_roles"])
+    non_selected = next(index for index, role in enumerate(roles) if role != "matches_rule")
+    roles[non_selected] = next(
+        role
+        for role in (
+            "contradicts_rule",
+            "irrelevant_to_rule",
+            "insufficient_evidence",
+            "unsafe_action",
+            "premature_action",
+            "overbroad_action",
+            "duplicate_action",
+        )
+        if role not in roles
+    )
+    role_rows[1]["semantic_equivalence_attestation"] = {
+        **role_rows[1]["semantic_equivalence_attestation"],
+        "criterion_roles": roles,
+    }
+    role_rows[1]["cross_locale_attestation"] = {
+        **role_rows[1]["cross_locale_attestation"],
+        "criterion_roles": roles,
+    }
+    accepted, rejected = resolve_reviews(role_rows, [_review(row) for row in role_rows])
+    assert accepted == []
+    assert {row["reason"] for row in rejected} == {"cross_locale_semantic_attestation"}
+
+
+def test_generated_author_text_is_preserved_and_invalid_content_rejects() -> None:
+    slot = next(
+        slot
+        for slot in build_plan()["slots"]
+        if slot["pair_id"] is None and slot["option_count"] == 2
+    )
+    generated = {
+        "instruction": "Choose  the supported fictional route. ",
+        "state": {"summary": " A fictional request with  two spaces. "},
+        "criteria": [
+            {"description": " Route  A conflicts with the rule. "},
+            {"description": " Route  B satisfies the rule. "},
+        ],
+        "selected_index": 0,
+        "semantic_equivalence_attestation": {
+            "scenario": "topic_routing",
+            "criterion_roles": ["matches_rule", "contradicts_rule"],
+            "selected_role": "matches_rule",
+        },
+    }
+    original = json.dumps(generated, ensure_ascii=False, sort_keys=True)
+    row = validate_author_rows([generated], [slot], _Counter())[0]
+    assert json.dumps(generated, ensure_ascii=False, sort_keys=True) == original
+    assert row["instruction"] == generated["instruction"]
+    assert row["state"] == generated["state"]
+    assert {item["description"] for item in row["criteria"]} == {
+        item["description"] for item in generated["criteria"]
+    }
+
+    over_limit = {**generated, "instruction": "x" * 121}
+    over_limit_original = json.dumps(over_limit, ensure_ascii=False, sort_keys=True)
+    with pytest.raises(CorpusError, match="author record schema"):
+        validate_author_rows([over_limit], [slot], _Counter())
+    assert json.dumps(over_limit, ensure_ascii=False, sort_keys=True) == over_limit_original
+
+    non_nfc = {**generated, "instruction": "Cafe\u0301 fictional route."}
+    non_nfc_original = json.dumps(non_nfc, ensure_ascii=False, sort_keys=True)
+    with pytest.raises(CorpusError, match="author task contract"):
+        validate_author_rows([non_nfc], [slot], _Counter())
+    assert json.dumps(non_nfc, ensure_ascii=False, sort_keys=True) == non_nfc_original
+
+    state_over_final_limit = {**generated, "state": {"summary": "x" * 190}}
+    with pytest.raises(CorpusError, match="author task contract"):
+        validate_author_rows([state_over_final_limit], [slot], _Counter())
 
 
 def test_review_rejects_disagreement_privacy_and_normalized_duplicates() -> None:
@@ -456,11 +644,14 @@ def test_cross_locale_acceptance_requires_matching_author_and_reviewer_attestati
     tampered = [_review(row) for row in rows]
     tampered[1]["semantic_equivalence_attestation"] = {
         **tampered[1]["semantic_equivalence_attestation"],
-        "scenario": "a different fictional scenario",
+        "scenario": "deadline_risk",
     }
     accepted, rejected = resolve_reviews(rows, tampered)
     assert accepted == []
-    assert {row["reason"] for row in rejected} == {"cross_locale_semantic_attestation"}
+    assert {row["reason"] for row in rejected} == {
+        "semantic_attestation_disagreement",
+        "cross_locale_semantic_attestation",
+    }
     assert {row["task_id"] for row in rejected} == {row["task_id"] for row in rows}
 
 
@@ -469,7 +660,7 @@ def test_budget_uses_larger_debit_and_never_borrows_stage_budget() -> None:
     ledger.record("corpus_author", "request-a", Decimal("0.01"), Decimal("0.02"), "a" * 64)
     assert ledger.spent("corpus_author") == Decimal("0.02")
     with pytest.raises(CorpusError, match="stage budget"):
-        ledger.reserve("corpus_author", Decimal("1.99"))
+        ledger.reserve("corpus_author", corpus.STAGE_LIMITS["corpus_author"] - Decimal("0.01"))
     with pytest.raises(CorpusError, match="network"):
         OpenRouterCorpusClient()
 
@@ -590,7 +781,12 @@ def test_reported_cost_and_terminal_overspend_are_persisted_before_raising(tmp_p
         method: str, url: str, headers: Mapping[str, str], body: bytes
     ) -> tuple[int, dict[str, str], bytes]:
         del method, url, headers, body
-        return 429, {}, b'{"id":"charged-request","usage":{"cost":"2.01"}}'
+        charged = corpus.STAGE_LIMITS["corpus_author"] + Decimal("0.01")
+        return (
+            429,
+            {},
+            json.dumps({"id": "charged-request", "usage": {"cost": str(charged)}}).encode(),
+        )
 
     ledger_directory = tmp_path / "ledger"
     client = OpenRouterCorpusClient(
@@ -604,8 +800,9 @@ def test_reported_cost_and_terminal_overspend_are_persisted_before_raising(tmp_p
         )
     snapshot = json.loads(sorted(ledger_directory.glob("ledger-*.json"))[-1].read_bytes())
     entry = snapshot["entries"][0]
-    assert entry["provider_cost_usd"] == "2.01"
-    assert entry["debit_usd"] == "2.01"
+    expected_charge = str(corpus.STAGE_LIMITS["corpus_author"] + Decimal("0.01"))
+    assert entry["provider_cost_usd"] == expected_charge
+    assert entry["debit_usd"] == expected_charge
     assert entry["status"] == "overspent"
     assert snapshot["stop_reason"] == "reported_provider_overspend"
     with pytest.raises(CorpusError, match="terminal overspend"):
@@ -679,12 +876,18 @@ def test_preholdout_packet_validator_never_opens_or_parses_holdout_payload(
         for slot in plan["slots"]
         if slot["split"] == "synthetic_holdout" and slot["pair_id"] is None
     )
+    rejected_slot = next(
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_dev" and slot["pair_id"] is None
+    )
     train = _accepted_row(train_slot)
     holdout = _accepted_row(holdout_slot)
     packet = tmp_path / "packet"
     packet.mkdir()
     files = {
-        "plan.json": corpus._canonical({"slots": [train_slot, holdout_slot]}) + b"\n",
+        "plan.json": corpus._canonical({"slots": [train_slot, rejected_slot, holdout_slot]})
+        + b"\n",
         "accepted-train-dev.jsonl": corpus._jsonl([train]),
         "accepted-holdout.jsonl": corpus._jsonl([holdout]),
         "holdout-identities.json": corpus._canonical(
@@ -694,7 +897,18 @@ def test_preholdout_packet_validator_never_opens_or_parses_holdout_payload(
             }
         )
         + b"\n",
-        "rejected.jsonl": b"",
+        "rejected.jsonl": corpus._jsonl(
+            [
+                {
+                    "task_id": rejected_slot["task_id"],
+                    "split": rejected_slot["split"],
+                    "reason": "capacity",
+                    "author_response_sha256": "a" * 64,
+                    "author_reservation_id": "reservation-" + "a" * 64,
+                    "author_request_id": "author-rejected",
+                }
+            ]
+        ),
         "ledger.json": corpus._canonical(corpus.BudgetLedger().as_json()) + b"\n",
     }
     for name, raw in files.items():
@@ -727,11 +941,37 @@ def test_preholdout_packet_validator_never_opens_or_parses_holdout_payload(
 
     monkeypatch.setattr(corpus, "validate_plan", lambda _plan: None)
     monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
-    monkeypatch.setattr(corpus, "_validate_provider_lineage", lambda *args: None)
+    captured_rejections: list[list[dict[str, Any]]] = []
+    monkeypatch.setattr(
+        corpus,
+        "_validate_provider_lineage",
+        lambda _ledger, _accepted, rejected, _resolved: captured_rejections.append(list(rejected)),
+    )
     monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
     monkeypatch.setattr(json, "loads", guarded_json_loads)
     corpus.validate_accepted_packet_pre_holdout(packet)
     assert not opened
+    assert captured_rejections[0][0]["author_request_id"] == "author-rejected"
+
+
+def test_rejected_lineage_shape_rejects_partial_or_unbound_fields() -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    slots = {slot["task_id"]: slot}
+    valid = {
+        "task_id": slot["task_id"],
+        "split": slot["split"],
+        "reason": "capacity",
+        "author_response_sha256": "a" * 64,
+        "author_reservation_id": "reservation-" + "a" * 64,
+        "author_request_id": "author-rejected",
+    }
+    corpus._validate_rejected_row(valid, slots)
+    with pytest.raises(CorpusError, match="packet rejection"):
+        corpus._validate_rejected_row({**valid, "unexpected": True}, slots)
+
+    ledger = BudgetLedger()
+    with pytest.raises(CorpusError, match="rejected provider lineage"):
+        corpus._validate_provider_lineage(ledger, [], [valid], {slot["task_id"]})
 
 
 @pytest.mark.parametrize("kind", ["failure", "timeout", "invalid"])
@@ -795,13 +1035,13 @@ def test_fake_transport_is_pinned_resumable_and_never_needs_socket(
         api_key="test-only",
     )
     assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
-    assert captured["body"]["provider"] == {"data_collection": "deny", "zdr": True}
+    assert captured["body"]["provider"] == corpus.provider_preferences("corpus_author")
     assert "test-only" not in json.dumps(captured["body"])
     assert client.ledger.entries[0]["request_id"] == "fake-request"
     assert client.ledger.entries[0]["status"] == "settled"
 
 
-def test_reviewer_transport_accepts_only_one_validated_blind_author_row(
+def test_reviewer_transport_omits_unsupported_reasoning_effort_and_is_answer_blind(
     tmp_path: Path,
 ) -> None:
     slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
@@ -821,6 +1061,9 @@ def test_reviewer_transport_accepts_only_one_validated_blind_author_row(
     )
     client.reviewer(row=row, max_output_tokens=1, api_key="test-only")
 
+    assert captured["body"]["provider"] == corpus.provider_preferences("corpus_reviewer")
+    # CoreWeave's pinned Llama endpoint does not advertise this parameter.
+    assert "reasoning_effort" not in captured["body"]
     messages = captured["body"]["messages"]
     assert messages == reviewer_messages([row])
     reviewer_prompt = messages[1]["content"]
@@ -831,6 +1074,7 @@ def test_reviewer_transport_accepts_only_one_validated_blind_author_row(
         "axes",
         "pair_id",
         "cross_locale_attestation",
+        "semantic_equivalence_attestation",
         "author_reasoning",
     ):
         assert field not in reviewer_prompt
@@ -850,13 +1094,63 @@ def test_reviewer_transport_accepts_only_one_validated_blind_author_row(
     assert "INJECT_GOLD" not in reviewer_prompt
 
 
-def test_wilson_stop_projection_fails_before_a_required_cell_can_be_minted() -> None:
+def _resolved_with_cohort_outcomes(
+    plan: Mapping[str, Any], cohort: list[Mapping[str, Any]], observed: int, accepted: int
+) -> list[dict[str, Any]]:
+    cohort_ids = {slot["task_id"] for slot in cohort}
+    observed_ids = {slot["task_id"] for slot in cohort[:observed]}
+    accepted_ids = {slot["task_id"] for slot in cohort[:accepted]}
+    return [
+        {
+            "task_id": slot["task_id"],
+            "status": (
+                "accepted"
+                if slot["task_id"] not in cohort_ids or slot["task_id"] in accepted_ids
+                else "rejected"
+            ),
+        }
+        for slot in plan["slots"]
+        if slot["task_id"] not in cohort_ids or slot["task_id"] in observed_ids
+    ]
+
+
+def test_wilson_projection_is_not_authoritative_for_four_accepted_of_eight() -> None:
     plan = build_plan()
-    resolved = [{"task_id": slot["task_id"], "status": "rejected"} for slot in plan["slots"][:200]]
-    assert stop_projection(resolved, plan) in {
-        "impossible_required_minimum",
-        "wilson_projected_minimum",
-    }
+    cohort = [
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_train"
+        and slot["locale"] == "pt-BR"
+        and slot["option_count"] == 2
+    ]
+    resolved = _resolved_with_cohort_outcomes(plan, cohort, observed=8, accepted=4)
+    assert stop_projection(resolved, plan) is None
+
+
+def test_wilson_projection_becomes_authoritative_at_twenty_outcomes() -> None:
+    plan = build_plan()
+    cohort = [
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_train"
+        and slot["locale"] == "pt-BR"
+        and slot["option_count"] == 2
+    ]
+    resolved = _resolved_with_cohort_outcomes(plan, cohort, observed=20, accepted=4)
+    assert stop_projection(resolved, plan) == "wilson_projected_minimum"
+
+
+def test_impossible_capacity_remains_authoritative_below_wilson_eligibility() -> None:
+    plan = build_plan()
+    cohort = [
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_dev"
+        and slot["locale"] == "pt-BR"
+        and slot["option_count"] == 2
+    ]
+    resolved = _resolved_with_cohort_outcomes(plan, cohort, observed=12, accepted=0)
+    assert stop_projection(resolved, plan) == "impossible_required_minimum"
 
 
 def test_wilson_skips_unobserved_cells_but_enforces_global_and_split_minima() -> None:

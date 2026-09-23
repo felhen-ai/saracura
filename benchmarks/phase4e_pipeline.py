@@ -15,18 +15,23 @@ import os
 import ssl
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from benchmarks import saracura_universal_corpus as corpus
 from benchmarks import saracura_universal_training as training
 from benchmarks.io import atomic_create
+from saracura.contracts.models import ChoiceCriterion
 
-_AUTHOR_MAX_OUTPUT_TOKENS = 1024
-_REVIEWER_MAX_OUTPUT_TOKENS = 512
+_AUTHOR_SINGLE_MAX_OUTPUT_TOKENS = 640
+_AUTHOR_PAIR_MAX_OUTPUT_TOKENS = 1024
+_REVIEWER_MAX_OUTPUT_TOKENS = 192
 _OPENROUTER_HOST = "openrouter.ai"
 _OPENROUTER_PATH = "/api/v1/chat/completions"
 _WORK_SCHEMA = "phase4e-corpus-work.v1"
+_BOUNDARY_TEXT = "\U0001f9ea"
+_BOUNDARY_STATE_SUMMARY_CODEPOINTS = 186
 
 Transport = Callable[[str, str, Mapping[str, str], bytes], tuple[int, Mapping[str, str], bytes]]
 
@@ -59,29 +64,30 @@ def write_plan(output: Path) -> Path:
 
 def _provider_body(
     *,
+    stage: Literal["corpus_author", "corpus_reviewer"],
     model: str,
     messages: Sequence[Mapping[str, str]],
     response_schema: Mapping[str, Any],
     max_output_tokens: int,
 ) -> bytes:
-    return _canonical(
-        {
-            "model": model,
-            "messages": list(messages),
-            "max_tokens": max_output_tokens,
-            "reasoning_effort": "none",
-            "temperature": 0,
-            "provider": {"data_collection": "deny", "zdr": True},
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": corpus.RESPONSE_SCHEMA_NAME,
-                    "strict": True,
-                    "schema": response_schema,
-                },
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": list(messages),
+        "max_tokens": max_output_tokens,
+        "temperature": 0,
+        "provider": corpus.provider_preferences(stage),
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": corpus.RESPONSE_SCHEMA_NAME,
+                "strict": True,
+                "schema": response_schema,
             },
-        }
-    )
+        },
+    }
+    if stage == "corpus_author" and model == corpus.AUTHOR_MODEL:
+        request["reasoning_effort"] = "none"
+    return _canonical(request)
 
 
 def _preflight_request(
@@ -115,12 +121,113 @@ def _author_batches(plan: Mapping[str, Any]) -> list[list[Mapping[str, Any]]]:
     return batches
 
 
+def _author_max_output_tokens(slots: Sequence[Mapping[str, Any]]) -> int:
+    return _AUTHOR_PAIR_MAX_OUTPUT_TOKENS if len(slots) == 2 else _AUTHOR_SINGLE_MAX_OUTPUT_TOKENS
+
+
+def _boundary_reviewer_row(slot: Mapping[str, Any]) -> corpus.ValidatedAuthorRow:
+    """Create a text-free, capacity-saturating reviewer transport fixture.
+
+    It contains only public reviewer fields and planner-owned identities.  The
+    state value reserves the canonical state envelope, while every textual
+    field uses a four-byte NFC scalar so the byte ceiling, not an ASCII-only
+    approximation, drives the conservative debit.
+    """
+    option_count = cast(int, slot["option_count"])
+    return corpus.ValidatedAuthorRow.model_construct(
+        task_id=slot["task_id"],
+        family_id=slot["family_id"],
+        locale=slot["locale"],
+        domain=slot["domain"],
+        instruction=_BOUNDARY_TEXT * 120,
+        state={"summary": _BOUNDARY_TEXT * _BOUNDARY_STATE_SUMMARY_CODEPOINTS},
+        criteria=[
+            ChoiceCriterion.model_construct(
+                id=f"criterion-{index}", description=_BOUNDARY_TEXT * 120
+            )
+            for index in range(option_count)
+        ],
+        selected_criterion_id="criterion-0",
+        split=slot["split"],
+        pair_id=slot["pair_id"],
+        axes=slot["axes"],
+        semantic_equivalence_attestation={},
+        cross_locale_attestation=None,
+    )
+
+
+def _aggregate_preflight(
+    plan: Mapping[str, Any],
+    resolved: Mapping[str, Mapping[str, Any]],
+    ledger: corpus.BudgetLedger,
+) -> dict[str, Decimal]:
+    """Fail before transport if every unresolved planned call cannot fit.
+
+    Individual reservations still protect each send.  This separate,
+    non-mutating calculation prevents starting a plan that cannot finish under
+    its nonfungible stage limits, including durable spend from a resumed run.
+    """
+    completed = set(resolved)
+    author_total = Decimal()
+    reviewer_total = Decimal()
+    for slots in _author_batches(plan):
+        task_ids = {cast(str, slot["task_id"]) for slot in slots}
+        if task_ids <= completed:
+            continue
+        if task_ids & completed:
+            raise corpus.CorpusError("partial author family resume")
+        max_output_tokens = _author_max_output_tokens(slots)
+        author_total += corpus.request_worst_case(
+            "corpus_author",
+            _provider_body(
+                stage="corpus_author",
+                model=corpus.AUTHOR_MODEL,
+                messages=corpus.author_messages(slots),
+                response_schema=corpus.author_schema(slots),
+                max_output_tokens=max_output_tokens,
+            ),
+            max_output_tokens,
+        )
+        for slot in slots:
+            row = _boundary_reviewer_row(slot)
+            reviewer_total += corpus.request_worst_case(
+                "corpus_reviewer",
+                _provider_body(
+                    stage="corpus_reviewer",
+                    model=corpus.REVIEWER_MODEL,
+                    messages=corpus.reviewer_messages([row]),
+                    response_schema=corpus.reviewer_schema(1),
+                    max_output_tokens=_REVIEWER_MAX_OUTPUT_TOKENS,
+                ),
+                _REVIEWER_MAX_OUTPUT_TOKENS,
+            )
+    totals = {"corpus_author": author_total, "corpus_reviewer": reviewer_total}
+    for stage, total in totals.items():
+        ledger.reserve(stage, total)
+    if (
+        sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
+        + sum(totals.values(), Decimal())
+        > corpus.TOTAL_BUDGET
+    ):
+        raise corpus.CorpusError("total budget exhausted")
+    return totals
+
+
 def _response_content(response: Mapping[str, Any]) -> dict[str, Any]:
     try:
-        content = response["choices"][0]["message"]["content"]
-        value = json.loads(cast(str, content))
-    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise corpus.CorpusError("provider response content") from error
+        choice = response["choices"][0]
+        content = choice["message"]["content"]
+        finish_reason = choice.get("finish_reason", "unknown")
+    except (KeyError, IndexError, TypeError) as error:
+        raise corpus.CorpusError("provider response content (missing)") from error
+    if not isinstance(content, str):
+        raise corpus.CorpusError(
+            f"provider response content ({type(content).__name__}, {finish_reason})"
+        )
+    try:
+        value = json.loads(content)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise corpus.CorpusError(f"provider response JSON ({finish_reason})") from error
     if not isinstance(value, dict):
         raise corpus.CorpusError("provider response content")
     return cast(dict[str, Any], value)
@@ -282,6 +389,7 @@ def _review_one(
     _preflight_request(
         "corpus_reviewer",
         _provider_body(
+            stage="corpus_reviewer",
             model=corpus.REVIEWER_MODEL,
             messages=messages,
             response_schema=corpus.reviewer_schema(1),
@@ -295,7 +403,10 @@ def _review_one(
     reviews = payload.get("reviews")
     if not isinstance(reviews, list) or len(reviews) != 1 or not isinstance(reviews[0], dict):
         raise corpus.CorpusError("review response")
-    return cast(dict[str, Any], reviews[0]), client.last_journal("corpus_reviewer")
+    return (
+        corpus.materialize_reviewer_record(cast(dict[str, Any], reviews[0]), typed),
+        client.last_journal("corpus_reviewer"),
+    )
 
 
 def run_corpus(
@@ -322,6 +433,7 @@ def run_corpus(
     resolved = _load_resolved(work_dir, plan)
     ledger = _load_ledger_or_fail_closed(work_dir)
     _require_settled_task_resolution(ledger, resolved)
+    _aggregate_preflight(plan, resolved, ledger)
     client = corpus.OpenRouterCorpusClient(
         transport=cast(corpus.Transport, transport or _openrouter_transport()),
         allow_network=True,
@@ -346,18 +458,20 @@ def run_corpus(
         if any(cast(str, slot["task_id"]) in completed for slot in slots):
             raise corpus.CorpusError("partial author family resume")
         messages = corpus.author_messages(slots)
+        author_max_output_tokens = _author_max_output_tokens(slots)
         _preflight_request(
             "corpus_author",
             _provider_body(
+                stage="corpus_author",
                 model=corpus.AUTHOR_MODEL,
                 messages=messages,
                 response_schema=corpus.author_schema(slots),
-                max_output_tokens=_AUTHOR_MAX_OUTPUT_TOKENS,
+                max_output_tokens=author_max_output_tokens,
             ),
-            _AUTHOR_MAX_OUTPUT_TOKENS,
+            author_max_output_tokens,
         )
         author_response = _response_content(
-            client.author(slots=slots, max_output_tokens=_AUTHOR_MAX_OUTPUT_TOKENS, api_key=api_key)
+            client.author(slots=slots, max_output_tokens=author_max_output_tokens, api_key=api_key)
         )
         author_lineage = corpus.lineage_from_journal(client.last_journal("corpus_author"), "author")
         authored = author_response.get("records")
@@ -430,10 +544,14 @@ def run_train(
 
 
 def run_verify(packet: Path, embeddings: Path, training_path: Path) -> None:
-    corpus.validate_accepted_packet(packet)
     binding = training.validate_accepted_packet_binding(packet)
-    training.validate_embedding_capsule(embeddings, binding)
-    training.verify_training_capsule(training_path)
+    capsule = training.validate_embedding_capsule(embeddings, binding)
+    manifest = training.verify_training_capsule(training_path)
+    if (
+        manifest.get("packet_receipt_sha256") != capsule.manifest["packet_receipt_sha256"]
+        or manifest.get("embedding_descriptor_sha256") != capsule.descriptor_sha256
+    ):
+        raise training.TrainingError("training and embedding lineage binding")
 
 
 def _parser() -> argparse.ArgumentParser:

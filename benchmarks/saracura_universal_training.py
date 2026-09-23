@@ -322,10 +322,20 @@ def validate_accepted_packet_binding(packet: Path) -> AcceptedPacketBinding:
 
 
 def validate_full_accepted_packet_binding(
-    packet: Path, expected: AcceptedPacketBinding
+    packet: Path,
+    expected: AcceptedPacketBinding,
+    capsule: EmbeddingCapsule,
+    checkpoint_sha256: str,
+    pre_holdout_gate_descriptor_sha256: str,
 ) -> AcceptedPacketBinding:
     """Open and bind accepted holdout content only after its release claim."""
 
+    _validate_holdout_release_claim(
+        expected,
+        capsule,
+        checkpoint_sha256,
+        pre_holdout_gate_descriptor_sha256,
+    )
     try:
         validate_accepted_packet(packet)
         holdout_raw = (packet / "accepted-holdout.jsonl").read_bytes()
@@ -964,10 +974,18 @@ def derive_holdout_embeddings_in_memory(
     binding: AcceptedPacketBinding,
     snapshot: Path,
     device: str,
+    checkpoint_sha256: str,
+    pre_holdout_gate_descriptor_sha256: str,
 ) -> _Rows:
     """Open holdout exactly after claim and return its transient tensors only."""
 
-    validate_full_accepted_packet_binding(packet, binding)
+    validate_full_accepted_packet_binding(
+        packet,
+        binding,
+        capsule,
+        checkpoint_sha256,
+        pre_holdout_gate_descriptor_sha256,
+    )
 
     sections, metadata = _derive_descriptor_bound_embeddings(
         packet, binding, snapshot, device, parts=("holdout",)
@@ -992,10 +1010,20 @@ def verify_holdout_descriptor_bound_embeddings(
     binding: AcceptedPacketBinding,
     snapshot: Path,
     device: str,
+    checkpoint_sha256: str,
+    pre_holdout_gate_descriptor_sha256: str,
 ) -> None:
     """Compatibility verifier; never persists or compares a holdout capsule."""
 
-    derive_holdout_embeddings_in_memory(capsule, packet, binding, snapshot, device)
+    derive_holdout_embeddings_in_memory(
+        capsule,
+        packet,
+        binding,
+        snapshot,
+        device,
+        checkpoint_sha256,
+        pre_holdout_gate_descriptor_sha256,
+    )
 
 
 def _decode_embedding_tensors(
@@ -1871,6 +1899,30 @@ def _claim_holdout_once(
         raise TrainingError("holdout was already released") from error
 
 
+def _validate_holdout_release_claim(
+    accepted_packet: AcceptedPacketBinding,
+    capsule: EmbeddingCapsule,
+    checkpoint_sha256: str,
+    pre_holdout_gate_descriptor_sha256: str,
+) -> None:
+    """Require the canonical immutable claim before any holdout payload access."""
+
+    registry = _holdout_release_registry_directory()
+    claim = registry / f"{_holdout_release_claim_key(accepted_packet.packet_json_sha256)}.json"
+    expected = _holdout_release_payload(
+        accepted_packet,
+        capsule,
+        checkpoint_sha256,
+        pre_holdout_gate_descriptor_sha256,
+    )
+    try:
+        actual = claim.read_bytes()
+    except OSError as error:
+        raise TrainingError("holdout release claim") from error
+    if actual != expected:
+        raise TrainingError("holdout release claim binding")
+
+
 def _holdout_release(
     accepted_packet: AcceptedPacketBinding,
     capsule: EmbeddingCapsule,
@@ -2123,7 +2175,13 @@ def train_and_seal(
     # Now that retry or reselection is impossible, verify every descriptor,
     # digest, token, mask, and embedding before constructing any score.
     holdout = derive_holdout_embeddings_in_memory(
-        capsule, accepted_packet_path, accepted_packet, snapshot_path, device
+        capsule,
+        accepted_packet_path,
+        accepted_packet,
+        snapshot_path,
+        device,
+        checkpoint_sha256,
+        gate_descriptor_sha256,
     )
     if families & {row["family_id"] for row in holdout.rows}:
         raise TrainingError("holdout family overlap")

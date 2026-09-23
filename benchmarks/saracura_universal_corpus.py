@@ -29,7 +29,15 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, m
 from benchmarks.encoder_loader import VerifiedSnapshot, load_encoder
 from benchmarks.encoder_registry import get_candidate
 from benchmarks.io import atomic_create
-from benchmarks.saracura_universal_policy import STAGE_LIMITS, TOTAL_BUDGET, validate_phase4e_policy
+from benchmarks.saracura_universal_policy import (
+    AUTHOR_MODEL,
+    AUTHOR_PROVIDER,
+    REVIEWER_MODEL,
+    REVIEWER_PROVIDER,
+    STAGE_LIMITS,
+    TOTAL_BUDGET,
+    validate_phase4e_policy,
+)
 from saracura.contracts.models import ChoiceCriterion
 from saracura.serialization import canonical_json_bytes
 from saracura.universal.rendering import CapacityError, render_task, validate_rendered_capacity
@@ -59,15 +67,28 @@ AXES: dict[str, tuple[str, str]] = {
     "urgency": ("normal", "urgent"),
 }
 SPLIT_SIZES = {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240}
-PAIR_COUNTS = {"synthetic_train": 84, "synthetic_dev": 18, "synthetic_holdout": 18}
+PAIR_COUNTS = {"synthetic_train": 210, "synthetic_dev": 45, "synthetic_holdout": 45}
 PRICES = {
-    "corpus_author": (Decimal("0.12"), Decimal("0.20")),
-    "corpus_reviewer": (Decimal("0.20"), Decimal("0.60")),
+    "corpus_author": (Decimal("0.30"), Decimal("2.50")),
+    "corpus_reviewer": (Decimal("0.71"), Decimal("0.71")),
 }
-AUTHOR_MODEL = "qwen/qwen3.5-9b"
-REVIEWER_MODEL = "mistralai/ministral-8b-2512"
 RESPONSE_SCHEMA_NAME = "saracura_phase4e_response"
 _SENSITIVE = re.compile(r"(?:\b\d{3}[.]?\d{3}[.]?\d{3}-?\d{2}\b|\b\d{13,16}\b|@|https?://)", re.I)
+
+
+def provider_preferences(
+    stage: Literal["corpus_author", "corpus_reviewer"],
+) -> dict[str, Any]:
+    """Pin a provider proven to honor the stage's exact request contract."""
+
+    provider = AUTHOR_PROVIDER if stage == "corpus_author" else REVIEWER_PROVIDER
+    return {
+        "order": [provider],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
 
 
 class CorpusError(ValueError):
@@ -229,7 +250,7 @@ def validate_plan(value: Mapping[str, Any]) -> None:
             pairs[cast(str, pair)].append(row)
     if any(len(splits) != 1 for splits in families.values()):
         raise CorpusError("family split isolation")
-    if len(pairs) != 120 or any(len(rows) != 2 for rows in pairs.values()):
+    if len(pairs) != 300 or any(len(rows) != 2 for rows in pairs.values()):
         raise CorpusError("cross-locale plan")
     for pair_id, rows in pairs.items():
         if (
@@ -259,6 +280,36 @@ class _Closed(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+ScenarioCode = Literal[
+    "action_required",
+    "informational_only",
+    "suspected_abuse",
+    "missing_information",
+    "deadline_risk",
+    "policy_violation",
+    "duplicate_record",
+    "topic_routing",
+    "rule_eligibility",
+    "urgency_priority",
+    "threshold_approval",
+    "reconciliation_mismatch",
+    "fulfillment_exception",
+    "access_risk",
+    "schedule_conflict",
+    "content_safety",
+]
+CriterionRole = Literal[
+    "matches_rule",
+    "contradicts_rule",
+    "irrelevant_to_rule",
+    "insufficient_evidence",
+    "unsafe_action",
+    "premature_action",
+    "overbroad_action",
+    "duplicate_action",
+]
+
+
 class AuthorRecord(_Closed):
     task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
     family_id: str = Field(pattern=r"^family-[0-9a-f]{64}$")
@@ -271,22 +322,23 @@ class AuthorRecord(_Closed):
     state: dict[str, Any] = Field(min_length=1, max_length=64)
     criteria: list[ChoiceCriterion] = Field(min_length=2, max_length=8)
     selected_criterion_id: str
+    semantic_equivalence_attestation: SemanticEquivalenceAttestation
     cross_locale_attestation: CrossLocaleAttestation | None = None
 
 
 class SemanticEquivalenceAttestation(_Closed):
     """Language-neutral semantics independently stated by an actor."""
 
-    scenario: str = Field(min_length=1, max_length=120)
-    criterion_roles: list[str] = Field(min_length=2, max_length=8)
-    selected_role: str = Field(min_length=1, max_length=120)
+    scenario: ScenarioCode
+    criterion_roles: list[CriterionRole] = Field(min_length=2, max_length=8)
+    selected_role: CriterionRole
 
     @model_validator(mode="after")
     def distinct_roles_and_selected_role(self) -> SemanticEquivalenceAttestation:
         if len(set(self.criterion_roles)) != len(self.criterion_roles):
             raise ValueError("cross-locale criterion roles must be distinct")
-        if self.selected_role not in self.criterion_roles:
-            raise ValueError("cross-locale selected role must be declared")
+        if self.selected_role != "matches_rule" or self.selected_role not in self.criterion_roles:
+            raise ValueError("cross-locale selected role must match the rule")
         return self
 
 
@@ -294,6 +346,35 @@ class CrossLocaleAttestation(SemanticEquivalenceAttestation):
     """Author's semantic contract bound to one planned locale pair."""
 
     pair_id: str = Field(pattern=r"^family-[0-9a-f]{64}$")
+
+
+class AuthorGeneratedState(_Closed):
+    summary: str = Field(min_length=1, max_length=200)
+
+
+class AuthorGeneratedCriterion(_Closed):
+    description: str = Field(min_length=1, max_length=120)
+
+
+class AuthorGeneratedRecord(_Closed):
+    """Only fields the remote author is allowed to generate."""
+
+    instruction: str = Field(min_length=1, max_length=120)
+    state: AuthorGeneratedState
+    criteria: list[AuthorGeneratedCriterion] = Field(min_length=2, max_length=8)
+    selected_index: int = Field(ge=0, le=7)
+    semantic_equivalence_attestation: SemanticEquivalenceAttestation
+
+
+class ReviewerGeneratedRecord(_Closed):
+    status: Literal["accepted", "rejected"]
+    selected_criterion_id: str | None
+    reason_codes: list[str] = Field(max_length=8)
+    natural_language: bool
+    fictional: bool
+    exclusive_options: bool
+    private_or_sensitive: bool
+    semantic_equivalence_attestation: SemanticEquivalenceAttestation
 
 
 class ReviewerRecord(_Closed):
@@ -327,6 +408,7 @@ class ValidatedAuthorRow(_Closed):
     split: Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]
     pair_id: str | None
     axes: dict[str, str]
+    semantic_equivalence_attestation: SemanticEquivalenceAttestation
     cross_locale_attestation: CrossLocaleAttestation | None
     author_response_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     author_reservation_id: str | None = Field(default=None, pattern=r"^reservation-[0-9a-f]{64}$")
@@ -408,6 +490,7 @@ class AcceptedPacketRow(_Closed):
     split: Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]
     pair_id: str | None
     axes: dict[str, str]
+    semantic_equivalence_attestation: SemanticEquivalenceAttestation
     cross_locale_attestation: CrossLocaleAttestation | None
     synthetic_only: Literal[True]
     review: ReviewerRecord
@@ -449,24 +532,30 @@ class AcceptedPacketRow(_Closed):
             raise ValueError("accepted review does not match task")
         if self.review_sha256 != _sha(_canonical(review)):
             raise ValueError("accepted review integrity")
+        selected_position = next(
+            index
+            for index, criterion in enumerate(self.criteria)
+            if criterion.id == self.selected_criterion_id
+        )
+        author_attestation = self.semantic_equivalence_attestation
+        if (
+            len(author_attestation.criterion_roles) != len(self.criteria)
+            or author_attestation.selected_role
+            != author_attestation.criterion_roles[selected_position]
+            or _canonical(author_attestation.model_dump(mode="json"))
+            != _canonical(self.review.semantic_equivalence_attestation.model_dump(mode="json"))
+        ):
+            raise ValueError("author and reviewer semantic attestations do not match")
         if self.pair_id is None:
             if self.cross_locale_attestation is not None:
                 raise ValueError("unpaired task cannot have a cross-locale attestation")
         else:
             attestation = self.cross_locale_attestation
-            reviewer_attestation = self.review.semantic_equivalence_attestation
-            selected_position = next(
-                index
-                for index, criterion in enumerate(self.criteria)
-                if criterion.id == self.selected_criterion_id
-            )
             if (
                 attestation is None
                 or attestation.pair_id != self.pair_id
-                or len(attestation.criterion_roles) != len(self.criteria)
-                or attestation.selected_role != attestation.criterion_roles[selected_position]
                 or _canonical(_author_semantic_attestation(attestation))
-                != _canonical(reviewer_attestation.model_dump(mode="json"))
+                != _canonical(author_attestation.model_dump(mode="json"))
             ):
                 raise ValueError("cross-locale attestation does not bind task semantics")
         return self
@@ -485,18 +574,8 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
     }
     if not required <= set(slot):
         raise CorpusError("author batch slot")
-    schema = AuthorRecord.model_json_schema()
+    schema = AuthorGeneratedRecord.model_json_schema()
     properties = cast(dict[str, dict[str, Any]], schema["properties"])
-    for name in (
-        "task_id",
-        "family_id",
-        "locale",
-        "domain",
-        "axes",
-        "option_count",
-        "gold_position",
-    ):
-        properties[name] = {**properties[name], "const": slot[name]}
     option_count = slot["option_count"]
     if not isinstance(option_count, int) or not 2 <= option_count <= 8:
         raise CorpusError("author batch option count")
@@ -505,16 +584,10 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
         "minItems": option_count,
         "maxItems": option_count,
     }
-    if slot["pair_id"] is None:
-        properties["cross_locale_attestation"] = {
-            **properties["cross_locale_attestation"],
-            "const": None,
-        }
-    else:
-        properties["cross_locale_attestation"] = {
-            **properties["cross_locale_attestation"],
-            "type": "object",
-        }
+    properties["selected_index"] = {
+        **properties["selected_index"],
+        "maximum": option_count - 1,
+    }
     return schema
 
 
@@ -541,7 +614,12 @@ def author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """
 
     _validate_author_batch(slots)
-    return {
+    first = slots[0]
+    if any(slot["option_count"] != first["option_count"] for slot in slots):
+        raise CorpusError("author batch option count")
+    item_schema = _author_slot_schema(first)
+    definitions = item_schema.pop("$defs", {})
+    result: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "required": ["records"],
@@ -550,18 +628,21 @@ def author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 "type": "array",
                 "minItems": len(slots),
                 "maxItems": len(slots),
-                "prefixItems": [_author_slot_schema(slot) for slot in slots],
-                "items": False,
+                "items": item_schema,
             }
         },
     }
+    if definitions:
+        result["$defs"] = definitions
+    return result
 
 
 def reviewer_schema(batch_size: int) -> dict[str, Any]:
     if batch_size < 1:
         raise CorpusError("invalid reviewer batch")
-    schema = ReviewerRecord.model_json_schema()
-    return {
+    schema = ReviewerGeneratedRecord.model_json_schema()
+    definitions = schema.pop("$defs", {})
+    result: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "required": ["reviews"],
@@ -574,13 +655,16 @@ def reviewer_schema(batch_size: int) -> dict[str, Any]:
             }
         },
     }
+    if definitions:
+        result["$defs"] = definitions
+    return result
 
 
 def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": "Create fictional decision tasks only. Echo every planned field exactly. The selected criterion must occupy gold_position. For a cross-locale pair, provide the same language-neutral scenario and ordered criterion-role attestation in both records, with selected_role at gold_position. Do not use personal data, credentials, real organizations, URLs, or private records.",
+            "content": "Return only one JSON object whose sole top-level key is records; never return or echo a slots wrapper. Create exactly one generated-content record for each planned slot, in the same order as the supplied slots. Each record contains only instruction, state, criteria, selected_index, and semantic_equivalence_attestation; every criterion contains only description. Independently emit the closed scenario code and the ordered closed criterion-role attestation. The selected role must be matches_rule and must be at selected_index. Make state.summary contain an objective decision rule plus all facts needed to apply it. Make criteria distinct actions or labels that are logically mutually exclusive: exactly one must be correct, every distractor must conflict with the rule, and no two options may both apply. Distractor overlap may be lexical but never logical. Set selected_index to the sole correct criterion's current zero-based index. Avoid subjective preferences, ties, conditional alternatives, compound options, and catch-all wording. The local pipeline binds planner metadata and criterion IDs, then moves the selected criterion and its authored role together to gold_position. Create synthetic tasks using only generic roles and generic entities; never use proper names. Keep instruction and every criterion description at most 120 characters and state.summary at most 200 characters. For a cross-locale pair, use equivalent meanings and exactly the same semantic attestation in both languages. Do not use personal data, credentials, real organizations, URLs, identifiers, the @ character, or digit sequences longer than four digits.",
         },
         {"role": "user", "content": _canonical({"slots": list(slots)}).decode("utf-8")},
     ]
@@ -601,7 +685,7 @@ def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]
     return [
         {
             "role": "system",
-            "content": "Independently select one criterion or reject. Check natural language, internal sufficiency, exclusive options, fictionality, privacy, and sensitive patterns. For every task, independently state a language-neutral semantic equivalence attestation with a scenario, ordered criterion roles, and the selected role. You do not receive answer, pair, or split metadata.",
+            "content": "Return only one JSON object whose sole top-level key is reviews; never return or echo a tasks wrapper. Produce exactly one generated review containing only status, the chosen criterion ID, reason codes, the four quality flags for natural language, fictionality, exclusive options, and private or sensitive content, and an independently emitted closed semantic_equivalence_attestation. The attestation must state one closed scenario code, an ordered distinct closed criterion-role list, and selected_role=matches_rule at the chosen criterion position. Independently select one criterion or reject. Independently judge fictionality from the supplied content; do not treat provenance or stated synthetic intent as proof. Set fictional=true only when the content itself is fictional and contains no identifiable real person, organization, account, URL, credential, or private record. Set exclusive_options=true only when exactly one criterion is best under the supplied facts. Check natural language, internal sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
         },
         {"role": "user", "content": payload},
     ]
@@ -671,6 +755,142 @@ def _validate_reviewer_task_view(value: object) -> None:
             raise CorpusError("reviewer transport criterion")
 
 
+def _materialize_author_record(
+    record: Mapping[str, Any], planned: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Bind model-generated content to immutable local planner metadata."""
+
+    planner_fields = (
+        "task_id",
+        "family_id",
+        "locale",
+        "domain",
+        "axes",
+        "option_count",
+        "gold_position",
+    )
+    if any(field in record for field in planner_fields):
+        try:
+            parsed_full = AuthorRecord.model_validate(record)
+        except ValidationError as error:
+            details = ",".join(
+                f"{'.'.join(str(part) for part in item['loc'])}:{item['type']}"
+                for item in error.errors(include_input=False, include_url=False)[:8]
+            )
+            raise CorpusError(f"author record schema ({details})") from error
+        if any(getattr(parsed_full, field) != planned[field] for field in planner_fields):
+            raise CorpusError("author changed planner-owned field")
+        return parsed_full.model_dump(mode="json")
+    try:
+        generated = AuthorGeneratedRecord.model_validate(record).model_dump(mode="json")
+    except ValidationError as error:
+        details = ",".join(
+            f"{'.'.join(str(part) for part in item['loc'])}:{item['type']}"
+            for item in error.errors(include_input=False, include_url=False)[:8]
+        )
+        raise CorpusError(f"author record schema ({details})") from error
+    state = generated["state"]
+    if not isinstance(state, dict) or not isinstance(state.get("summary"), str):
+        raise CorpusError("author state schema")
+    criteria = generated["criteria"]
+    selected_index = generated.pop("selected_index")
+    semantic_attestation = generated["semantic_equivalence_attestation"]
+    option_count = planned["option_count"]
+    gold_position = planned["gold_position"]
+    if (
+        not isinstance(criteria, list)
+        or not isinstance(option_count, int)
+        or len(criteria) != option_count
+        or not isinstance(selected_index, int)
+        or not 0 <= selected_index < option_count
+        or not isinstance(semantic_attestation, dict)
+        or not isinstance(semantic_attestation.get("criterion_roles"), list)
+        or len(semantic_attestation["criterion_roles"]) != option_count
+        or semantic_attestation.get("selected_role") != "matches_rule"
+        or semantic_attestation["criterion_roles"][selected_index]
+        != semantic_attestation["selected_role"]
+        or not isinstance(gold_position, int)
+        or not 0 <= gold_position < option_count
+    ):
+        raise CorpusError("author option cardinality")
+    selected_criterion = criteria.pop(selected_index)
+    criteria.insert(gold_position, selected_criterion)
+    selected_role = semantic_attestation["criterion_roles"].pop(selected_index)
+    semantic_attestation["criterion_roles"].insert(gold_position, selected_role)
+    criteria = [
+        {
+            "id": f"criterion-{index}",
+            "description": criterion["description"],
+        }
+        for index, criterion in enumerate(criteria)
+    ]
+    generated["criteria"] = criteria
+    selected = criteria[gold_position]
+    if not isinstance(selected, dict) or not isinstance(selected.get("id"), str):
+        raise CorpusError("author criterion identity")
+    generated["selected_criterion_id"] = selected["id"]
+    generated["cross_locale_attestation"] = (
+        None
+        if planned["pair_id"] is None
+        else {
+            "pair_id": planned["pair_id"],
+            **semantic_attestation,
+        }
+    )
+    return {**{field: planned[field] for field in planner_fields}, **generated}
+
+
+def _materialize_author_rows(
+    records: Any, slots: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or len(records) != len(slots):
+        raise CorpusError("author record count")
+    if not all(isinstance(record, Mapping) for record in records):
+        raise CorpusError("author record schema")
+    typed = cast(list[Mapping[str, Any]], records)
+    has_identity = ["task_id" in record for record in typed]
+    if any(has_identity) and not all(has_identity):
+        raise CorpusError("author record schema")
+    if all(has_identity):
+        by_id: dict[str, Mapping[str, Any]] = {}
+        for record in typed:
+            task_id = record.get("task_id")
+            if not isinstance(task_id, str):
+                raise CorpusError("author record schema")
+            if task_id in by_id:
+                raise CorpusError("duplicate author task")
+            by_id[task_id] = record
+        if set(by_id) != {cast(str, slot["task_id"]) for slot in slots}:
+            raise CorpusError("author task identity")
+        return [
+            _materialize_author_record(by_id[cast(str, slot["task_id"])], slot) for slot in slots
+        ]
+    return [
+        _materialize_author_record(record, slot) for record, slot in zip(typed, slots, strict=True)
+    ]
+
+
+def materialize_reviewer_record(
+    record: Mapping[str, Any], row: ValidatedAuthorRow
+) -> dict[str, Any]:
+    """Bind a blind provider review to local identity without deriving semantics."""
+
+    if "task_id" in record:
+        try:
+            full = ReviewerRecord.model_validate(record)
+        except ValidationError as error:
+            raise CorpusError("review record schema") from error
+        if full.task_id != row.task_id:
+            raise CorpusError("review task identity")
+        return full.model_dump(mode="json")
+    try:
+        generated = ReviewerGeneratedRecord.model_validate(record).model_dump(mode="json")
+    except ValidationError as error:
+        raise CorpusError("review record schema") from error
+    generated["task_id"] = row.task_id
+    return generated
+
+
 def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> UniversalTask:
     try:
         parsed = AuthorRecord.model_validate(record)
@@ -691,6 +911,18 @@ def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> Unive
         raise CorpusError("author option cardinality")
     if parsed.criteria[parsed.gold_position].id != parsed.selected_criterion_id:
         raise CorpusError("author gold position mismatch")
+    semantic_attestation = parsed.semantic_equivalence_attestation
+    selected_position = next(
+        index
+        for index, criterion in enumerate(parsed.criteria)
+        if criterion.id == parsed.selected_criterion_id
+    )
+    if (
+        len(semantic_attestation.criterion_roles) != parsed.option_count
+        or semantic_attestation.selected_role
+        != semantic_attestation.criterion_roles[selected_position]
+    ):
+        raise CorpusError("author semantic attestation")
     attestation = parsed.cross_locale_attestation
     if planned["pair_id"] is None:
         if attestation is not None:
@@ -698,8 +930,8 @@ def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> Unive
     elif (
         attestation is None
         or attestation.pair_id != planned["pair_id"]
-        or len(attestation.criterion_roles) != parsed.option_count
-        or attestation.selected_role != attestation.criterion_roles[parsed.gold_position]
+        or _canonical(_author_semantic_attestation(attestation))
+        != _canonical(semantic_attestation.model_dump(mode="json"))
     ):
         raise CorpusError("cross-locale semantic attestation")
     try:
@@ -714,27 +946,21 @@ def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> Unive
             selected_criterion_id=parsed.selected_criterion_id,
         )
     except ValidationError as error:
-        raise CorpusError("author task contract") from error
+        details = ",".join(
+            f"{'.'.join(str(part) for part in item['loc'])}:{item['type']}"
+            for item in error.errors(include_input=False, include_url=False)[:8]
+        )
+        raise CorpusError(f"author task contract ({details})") from error
     return task
 
 
 def validate_author_rows(
     records: Any, slots: Sequence[Mapping[str, Any]], counter: TokenCounter
 ) -> list[dict[str, Any]]:
-    if not isinstance(records, list) or len(records) != len(slots):
-        raise CorpusError("author record count")
-    by_id: dict[str, Mapping[str, Any]] = {}
-    for record in records:
-        if not isinstance(record, Mapping) or not isinstance(record.get("task_id"), str):
-            raise CorpusError("author record schema")
-        if record["task_id"] in by_id:
-            raise CorpusError("duplicate author task")
-        by_id[record["task_id"]] = record
-    if set(by_id) != {cast(str, slot["task_id"]) for slot in slots}:
-        raise CorpusError("author task identity")
+    materialized = _materialize_author_rows(records, slots)
     result: list[dict[str, Any]] = []
-    for slot in slots:
-        task = _author_task(by_id[cast(str, slot["task_id"])], slot)
+    for record, slot in zip(materialized, slots, strict=True):
+        task = _author_task(record, slot)
         try:
             validate_rendered_capacity(render_task(task), counter)
         except CapacityError as error:
@@ -743,13 +969,12 @@ def validate_author_rows(
         rendered["split"] = slot["split"]
         rendered["pair_id"] = slot["pair_id"]
         rendered["axes"] = slot["axes"]
+        rendered["semantic_equivalence_attestation"] = AuthorRecord.model_validate(
+            record
+        ).semantic_equivalence_attestation.model_dump(mode="json")
         rendered["cross_locale_attestation"] = (
             task_attestation.model_dump(mode="json")
-            if (
-                task_attestation := AuthorRecord.model_validate(
-                    by_id[cast(str, slot["task_id"])]
-                ).cross_locale_attestation
-            )
+            if (task_attestation := AuthorRecord.model_validate(record).cross_locale_attestation)
             is not None
             else None
         )
@@ -761,22 +986,11 @@ def classify_author_rows(
     records: Any, slots: Sequence[Mapping[str, Any]], counter: TokenCounter
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Resolve each planned identity once; capacity failures retain their original split."""
-    if not isinstance(records, list) or len(records) != len(slots):
-        raise CorpusError("author record count")
-    by_id: dict[str, Mapping[str, Any]] = {}
-    for record in records:
-        if not isinstance(record, Mapping) or not isinstance(record.get("task_id"), str):
-            raise CorpusError("author record schema")
-        task_id = cast(str, record["task_id"])
-        if task_id in by_id:
-            raise CorpusError("duplicate author task")
-        by_id[task_id] = record
-    if set(by_id) != {cast(str, slot["task_id"]) for slot in slots}:
-        raise CorpusError("author task identity")
+    materialized = _materialize_author_rows(records, slots)
     usable: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for slot in slots:
-        task = _author_task(by_id[cast(str, slot["task_id"])], slot)
+    for record, slot in zip(materialized, slots, strict=True):
+        task = _author_task(record, slot)
         try:
             validate_rendered_capacity(render_task(task), counter)
         except CapacityError:
@@ -788,13 +1002,12 @@ def classify_author_rows(
         row["split"] = slot["split"]
         row["pair_id"] = slot["pair_id"]
         row["axes"] = slot["axes"]
+        row["semantic_equivalence_attestation"] = AuthorRecord.model_validate(
+            record
+        ).semantic_equivalence_attestation.model_dump(mode="json")
         row["cross_locale_attestation"] = (
             task_attestation.model_dump(mode="json")
-            if (
-                task_attestation := AuthorRecord.model_validate(
-                    by_id[cast(str, slot["task_id"])]
-                ).cross_locale_attestation
-            )
+            if (task_attestation := AuthorRecord.model_validate(record).cross_locale_attestation)
             is not None
             else None
         )
@@ -961,13 +1174,30 @@ def resolve_reviews(
         }:
             raise CorpusError("reviewer provider lineage")
         reason: str | None = None
-        if (
-            review.status != "accepted"
-            or review.selected_criterion_id != row["selected_criterion_id"]
-        ):
+        if review.status != "accepted":
+            reason = "review_rejected"
+        elif review.selected_criterion_id != row["selected_criterion_id"]:
             reason = "review_disagreement"
-        elif not (review.natural_language and review.fictional and review.exclusive_options):
-            reason = "review_quality"
+        elif (
+            len(review.semantic_equivalence_attestation.criterion_roles) != len(row["criteria"])
+            or review.semantic_equivalence_attestation.selected_role
+            != review.semantic_equivalence_attestation.criterion_roles[
+                next(
+                    index
+                    for index, criterion in enumerate(row["criteria"])
+                    if criterion["id"] == review.selected_criterion_id
+                )
+            ]
+            or _canonical(row["semantic_equivalence_attestation"])
+            != _canonical(review.semantic_equivalence_attestation.model_dump(mode="json"))
+        ):
+            reason = "semantic_attestation_disagreement"
+        elif not review.natural_language:
+            reason = "review_quality_natural_language"
+        elif not review.fictional:
+            reason = "review_quality_fictional"
+        elif not review.exclusive_options:
+            reason = "review_quality_exclusive_options"
         elif review.private_or_sensitive or _privacy(row):
             reason = "privacy"
         else:
@@ -1003,15 +1233,23 @@ def resolve_reviews(
             )
             seen.add(fingerprint)
             normalized_seen.append(normalized)
-    paired: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in accepted:
+    paired: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
         if isinstance(row.get("pair_id"), str):
             paired[cast(str, row["pair_id"])].append(row)
+    accepted_by_task = {cast(str, row["task_id"]): row for row in accepted}
     invalid_pair_task_ids = {
         cast(str, row["task_id"])
         for members in paired.values()
-        if len(members) == 2 and not _cross_locale_pair_is_attested(members)
+        if len(members) == 2
+        and (
+            any(cast(str, row["task_id"]) not in accepted_by_task for row in members)
+            or not _cross_locale_pair_is_attested(
+                [accepted_by_task[cast(str, row["task_id"])] for row in members]
+            )
+        )
         for row in members
+        if cast(str, row["task_id"]) in accepted_by_task
     }
     if invalid_pair_task_ids:
         paired_lineages = {
@@ -1197,6 +1435,32 @@ def _minimums(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     return sorted(set(errors))
 
 
+_REJECTED_LINEAGE_FIELDS = frozenset(
+    {
+        "author_response_sha256",
+        "author_reservation_id",
+        "author_request_id",
+        "reviewer_response_sha256",
+        "reviewer_reservation_id",
+        "reviewer_request_id",
+    }
+)
+
+
+def _validate_rejected_row(
+    rejected_row: Mapping[str, Any], slots: Mapping[str, Mapping[str, Any]]
+) -> None:
+    if (
+        not {"task_id", "split", "reason"} <= set(rejected_row)
+        or set(rejected_row) - ({"task_id", "split", "reason"} | _REJECTED_LINEAGE_FIELDS)
+        or rejected_row.get("task_id") not in slots
+    ):
+        raise CorpusError("packet rejection")
+    task_id = cast(str, rejected_row["task_id"])
+    if rejected_row["split"] != slots[task_id]["split"]:
+        raise CorpusError("packet rejected split mutation")
+
+
 def _validate_packet_resolution(
     accepted: Sequence[Mapping[str, Any]],
     rejected: Sequence[Mapping[str, Any]],
@@ -1254,25 +1518,7 @@ def _validate_packet_resolution(
         if len(members) == 2 and not _cross_locale_pair_is_attested(members):
             raise CorpusError("packet cross-locale semantic attestation")
     for rejected_row in rejected:
-        if (
-            not {"task_id", "split", "reason"} <= set(rejected_row)
-            or set(rejected_row)
-            - {
-                "task_id",
-                "split",
-                "reason",
-                "author_response_sha256",
-                "author_reservation_id",
-                "author_request_id",
-                "reviewer_response_sha256",
-                "reviewer_reservation_id",
-                "reviewer_request_id",
-            }
-            or rejected_row.get("task_id") not in slots
-        ):
-            raise CorpusError("packet rejection")
-        if rejected_row["split"] != slots[cast(str, rejected_row["task_id"])]["split"]:
-            raise CorpusError("packet rejected split mutation")
+        _validate_rejected_row(rejected_row, slots)
 
 
 def _validate_provider_lineage(
@@ -1443,12 +1689,7 @@ def _validate_packet_pre_holdout(
     if len(resolved) != len(set(resolved)) or set(resolved) != set(slots):
         raise CorpusError("packet resolution coverage")
     for rejected_row in rejected:
-        if (
-            set(rejected_row) != {"task_id", "split", "reason"}
-            or rejected_row.get("task_id") not in slots
-            or rejected_row["split"] != slots[cast(str, rejected_row["task_id"])]["split"]
-        ):
-            raise CorpusError("packet rejection")
+        _validate_rejected_row(rejected_row, slots)
     _validate_provider_lineage(ledger, train_dev, rejected, set(cast(list[str], resolved)))
     if _minimums(accepted_identities):
         raise CorpusError("accepted corpus minimum")
@@ -1973,10 +2214,11 @@ def stop_projection(resolved: Sequence[Mapping[str, Any]], plan: Mapping[str, An
         unresolved = len(planned) - len(done)
         if accepted + unresolved < minimum:
             return "impossible_required_minimum"
-        # An unobserved target has no empirical rate.  Its deterministic
-        # capacity is still checked above, but Wilson must not invent a zero.
+        # The deterministic capacity check above is always authoritative. A
+        # Wilson projection needs a minimally informative cohort, however:
+        # smaller cohorts record their descriptive rate but cannot stop work.
         if (
-            done
+            len(done) >= 20
             and accepted + math.floor(unresolved * wilson_lower_bound(accepted, len(done)))
             < minimum
         ):
@@ -2093,24 +2335,24 @@ class OpenRouterCorpusClient:
     ) -> dict[str, Any]:
         if not api_key:
             raise CorpusError("pinned provider request")
-        body = _canonical(
-            {
-                "model": model,
-                "messages": list(messages),
-                "max_tokens": max_output_tokens,
-                "reasoning_effort": "none",
-                "temperature": 0,
-                "provider": {"data_collection": "deny", "zdr": True},
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": RESPONSE_SCHEMA_NAME,
-                        "strict": True,
-                        "schema": response_schema,
-                    },
+        request: dict[str, Any] = {
+            "model": model,
+            "messages": list(messages),
+            "max_tokens": max_output_tokens,
+            "temperature": 0,
+            "provider": provider_preferences(stage),
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": RESPONSE_SCHEMA_NAME,
+                    "strict": True,
+                    "schema": response_schema,
                 },
-            }
-        )
+            },
+        }
+        if stage == "corpus_author" and model == AUTHOR_MODEL:
+            request["reasoning_effort"] = "none"
+        body = _canonical(request)
         worst = request_worst_case(stage, body, max_output_tokens)
         reservation_id = "reservation-" + _sha(_canonical({"stage": stage, "body": body.hex()}))
         self.ledger.reserve_request(stage, reservation_id, worst)
@@ -2124,9 +2366,28 @@ class OpenRouterCorpusClient:
         try:
             status, _, raw = cast(tuple[int, Mapping[str, str], bytes], result)
             response = cast(dict[str, Any], json.loads(raw))
+            response_error = response.get("error")
+            if isinstance(response_error, dict):
+                error_message = " ".join(str(response_error.get("message", "")).split())[:240]
+                metadata = response_error.get("metadata")
+                if error_message == "Provider returned error" and isinstance(metadata, dict):
+                    error_message = " ".join(str(metadata.get("raw", "")).split())[:240]
+                raise CorpusError(
+                    f"provider response error ({response_error.get('code', 'unknown')}): "
+                    f"{error_message or 'no message'}"
+                )
             cost = Decimal(str(response["usage"]["cost"]))
             request_id = cast(str, response["id"])
+        except CorpusError:
+            raise
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            if "status" in locals() and status != 200:
+                try:
+                    error_payload = json.loads(raw)
+                    error_code = error_payload.get("error", {}).get("code", "unknown")
+                except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                    error_code = "invalid"
+                raise CorpusError(f"provider HTTP {status} ({error_code})") from error
             raise CorpusError("provider response cost") from error
         try:
             self.ledger.settle_request(reservation_id, request_id, cost, _sha(raw))
@@ -2148,5 +2409,11 @@ class OpenRouterCorpusClient:
         write_ledger_snapshot(self._ledger_directory, self.ledger)
         self._last_journal = dict(self.ledger.provider_journal[-1])
         if status != 200:
-            raise CorpusError("provider request failed")
+            response_error = response.get("error")
+            error_code = (
+                response_error.get("code", "unknown")
+                if isinstance(response_error, dict)
+                else "unknown"
+            )
+            raise CorpusError(f"provider HTTP {status} ({error_code})")
         return response

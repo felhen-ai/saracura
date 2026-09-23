@@ -15,6 +15,8 @@ import pytest
 from pydantic import ValidationError
 
 import saracura.cli as cli
+from benchmarks import saracura_universal_corpus as corpus
+from benchmarks import saracura_universal_policy as universal_policy
 from benchmarks.data_policy_registry import (
     Phase4EUniversalSyntheticException,
     bundled_registry_path,
@@ -235,7 +237,9 @@ def _request(revision: str) -> DecisionRequest:
     )
 
 
-def test_phase4e_policy_and_phase3b_exception_are_closed_and_bound() -> None:
+def test_phase4e_policy_and_phase3b_exception_are_closed_and_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     policy = validate_phase4e_policy()
     registry = load_registry(bundled_registry_path().read_bytes())
     phase3b = registry.exceptions[0].model_dump(mode="json")
@@ -247,13 +251,39 @@ def test_phase4e_policy_and_phase3b_exception_are_closed_and_bound() -> None:
 
     assert policy["source_policy_exception_id"] == registry.exceptions[1].id
     assert isinstance(registry.exceptions[1], Phase4EUniversalSyntheticException)
-    assert registry.exceptions[1].spend_ceiling_usd == 10.0
-    assert policy["budget"]["total_usd"] == 10.0
-    assert sum(STAGE_LIMITS.values()) == TOTAL_BUDGET == Decimal("10.00")
+    assert registry.exceptions[1].author_model == policy["provider"]["author_model"]
+    assert registry.exceptions[1].reviewer_model == policy["provider"]["reviewer_model"]
+    assert registry.exceptions[1].author_model == corpus.AUTHOR_MODEL
+    assert registry.exceptions[1].reviewer_model == corpus.REVIEWER_MODEL
+    assert registry.exceptions[1].spend_ceiling_usd == 17.0
+    assert policy["budget"] == {
+        "total_usd": 17.0,
+        "author_usd": 5.0,
+        "reviewer_usd": 10.0,
+        "comparison_author_usd": 0.75,
+        "comparison_reviewer_usd": 1.25,
+    }
+    assert {
+        "corpus_author": Decimal("5.00"),
+        "corpus_reviewer": Decimal("10.00"),
+        "comparison_author": Decimal("0.75"),
+        "comparison_reviewer": Decimal("1.25"),
+    } == STAGE_LIMITS
+    assert sum(STAGE_LIMITS.values()) == TOTAL_BUDGET == Decimal("17.00")
     assert phase3b["workflow_revision"] == synthetic_policy["workflow_revision"]
     assert phase3b["author_model"] == synthetic_policy["author_model"]
     assert phase3b["reviewer_model"] == synthetic_policy["reviewer_model"]
     assert phase3b["canonical_training_authorized"] is False
+
+    divergent_exception = registry.exceptions[1].model_copy(
+        update={"author_model": "qwen/qwen3.5-9b"}
+    )
+    divergent_registry = registry.model_copy(
+        update={"exceptions": [registry.exceptions[0], divergent_exception]}
+    )
+    monkeypatch.setattr(universal_policy, "load_bundled_registry", lambda: divergent_registry)
+    with pytest.raises(Phase4EPolicyError, match="source-policy model lineage"):
+        validate_phase4e_policy()
 
 
 @pytest.mark.parametrize(
@@ -301,7 +331,7 @@ def test_phase4e_policy_and_registry_reject_duplicate_or_unknown_exceptions(tmp_
         load_registry(json.dumps(registry_payload).encode())
 
     registry_payload = json.loads(bundled_registry_path().read_text(encoding="utf-8"))
-    registry_payload["exceptions"][1]["spend_ceiling_usd"] = 2
+    registry_payload["exceptions"][1]["spend_ceiling_usd"] = 2.0
     with pytest.raises(ValueError, match="invalid data policy registry"):
         load_registry(json.dumps(registry_payload).encode())
 

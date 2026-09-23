@@ -525,8 +525,8 @@ class Phase4EUniversalSyntheticException(BaseModel):
     source_policy_id: Literal["provider-model-generated"]
     allowed_splits: list[Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]]
     allowed_uses: list[Literal["synthetic_only"]]
-    author_model: Literal["qwen/qwen3.5-9b"]
-    reviewer_model: Literal["mistralai/ministral-8b-2512"]
+    author_model: Literal["google/gemini-2.5-flash"]
+    reviewer_model: Literal["meta-llama/llama-3.3-70b-instruct"]
     task_slots: Literal[1600]
     spend_ceiling_usd: float
     canonical_training_authorized: Literal[False]
@@ -549,7 +549,7 @@ class Phase4EUniversalSyntheticException(BaseModel):
             raise ValueError("Phase 4E synthetic split order is fixed")
         if self.allowed_uses != ["synthetic_only"]:
             raise ValueError("Phase 4E synthetic use is fixed")
-        if self.spend_ceiling_usd != 10.0:
+        if self.spend_ceiling_usd != 17.0:
             raise ValueError("Phase 4E synthetic spend ceiling is fixed")
         return self
 

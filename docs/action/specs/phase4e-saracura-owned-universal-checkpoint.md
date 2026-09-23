@@ -13,8 +13,9 @@ lastReviewedAt: 2026-09-23
 sourceRefs:
   - https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   - https://github.com/huggingface/sentence-transformers
-  - https://openrouter.ai/qwen/qwen3.5-9b/pricing
-  - https://openrouter.ai/mistralai/ministral-8b-2512
+  - https://openrouter.ai/google/gemini-2.5-flash
+  - https://openrouter.ai/meta-llama/llama-3.3-70b-instruct
+  - https://openrouter.ai/api/v1/models/meta-llama/llama-3.3-70b-instruct/endpoints
   - https://openrouter.ai/terms
 related:
   - AGENTS.md
@@ -177,13 +178,18 @@ route the new manifest by its exact schema version.
 The Phase 4E exception uses the same already authorized OpenRouter author and
 reviewer identities unless a current preflight invalidates their availability,
 pricing ceiling, or provider policy. The operator's current authorization for
-this execution is bounded to the USD 10.00 new-spend safety envelope below.
+this execution is bounded to the USD 17.00 new-spend safety envelope below.
 This guards against runaway spend; it is not a product budget or a reason to
 abandon useful work. It may be increased by explicit operator agreement when
 execution evidence shows that more is needed:
 
-- author: `qwen/qwen3.5-9b`;
-- reviewer: `mistralai/ministral-8b-2512`.
+- author: `google/gemini-2.5-flash`;
+- reviewer: `meta-llama/llama-3.3-70b-instruct`.
+
+Provider routing is pinned to `Google` for the author and `CoreWeave` for
+the reviewer, with `allow_fallbacks=false` and `require_parameters=true`.
+OpenRouter must not silently route a request to an endpoint that ignores the
+reviewed structured-output contract.
 
 Before any provider request, an immutable public-seed plan assigns every task
 ID, scenario-family ID, split, locale, domain, difficulty axes, option count,
@@ -201,20 +207,40 @@ The exact domains are `email_triage`, `customer_support`, `finance`,
 option count (2–8). The planner balances gold position within every
 locale/option-count cell.
 
-The author receives planned identities and axes and produces fictional decision
-content: instruction, state, 2–8 criterion IDs/descriptions, and the selected
-criterion ID matching the planned gold position. The response must echo all
-planner-owned fields exactly. The reviewer receives only `task_id`,
-`family_id`, locale, domain, instruction, state, and the ordered criterion
-IDs/descriptions. It does not receive split, gold position, selected criterion,
-difficulty axes, pair metadata, author reasoning, or any field derived from the
-answer. It independently selects one criterion or rejects the task, and
-validates natural language, internal sufficiency, option exclusivity,
-fictionality, privacy, and absence of sensitive patterns. Only exact
-author/reviewer agreement is accepted; the reviewer output never rewrites the
-row.
+The author receives planned identities and axes and produces only fictional
+decision content plus a closed semantic attestation: instruction, state, 2–8
+criterion descriptions, selected index, one scenario code, one ordered logical
+role per criterion, and the selected role. The scenario code is selected from
+`action_required`, `informational_only`, `suspected_abuse`,
+`missing_information`, `deadline_risk`, `policy_violation`,
+`duplicate_record`, `topic_routing`, `rule_eligibility`, `urgency_priority`,
+`threshold_approval`, `reconciliation_mismatch`, `fulfillment_exception`,
+`access_risk`, `schedule_conflict`, and `content_safety`. Criterion roles are a
+distinct ordered subset of `matches_rule`, `contradicts_rule`,
+`irrelevant_to_rule`, `insufficient_evidence`, `unsafe_action`,
+`premature_action`, `overbroad_action`, and `duplicate_action`; the selected
+role is always `matches_rule`. Paired PT-BR/English outputs must emit the same
+attestation before local reordering. The local pipeline binds every
+planner-owned field, moves the authored selected criterion and its authored role
+together to the planned gold position, and derives the selected criterion ID;
+it never fabricates a semantic attestation. Legacy full records are accepted
+only when those fields match exactly.
 
-The planner creates 1,600 candidate task slots. Generation proceeds in seeded
+The reviewer receives only `task_id`, `family_id`, locale, domain, instruction,
+state, and the ordered criterion IDs/descriptions. It does not receive split,
+gold position, selected criterion, difficulty axes, pair metadata, the author's
+attestation or reasoning, or any field derived from the answer. It independently
+selects one criterion or rejects the task and independently emits the same
+closed semantic attestation shape. It also validates natural language, internal
+sufficiency, option exclusivity, fictionality, privacy, and absence of sensitive
+patterns. Only exact answer agreement and exact author/reviewer attestation
+agreement are accepted; the reviewer output never rewrites the row. A paired
+family counts only when the two author attestations and two independent reviewer
+attestations are byte-equivalent after canonicalization.
+
+The planner creates 1,600 candidate task slots, including 300 cross-locale
+paired families distributed proportionally across train, dev, and holdout.
+Generation proceeds in seeded
 plan order until every slot is resolved or a budget fails. Every accepted task
 remains in its preassigned split; no accepted task is discarded because a
 minimum was already reached. The corpus gate requires at least 1,200 accepted
@@ -246,36 +272,49 @@ visible.
 At each ten-batch boundary after at least 200 tasks are resolved, the runner
 computes for the global corpus, every split, and every locale × option-count
 cell: current accepted count, unresolved planned slots, observed acceptance,
-and the one-sided 95% Wilson lower bound. It stops early when either (a) current
-accepted plus all unresolved slots cannot meet a required minimum, or (b)
-current accepted plus `floor(unresolved * Wilson lower bound)` cannot meet it
-within the remaining stage budget. The calculation and stop reason enter the
-immutable ledger; no target is weakened after a stop.
+and the one-sided 95% Wilson lower bound. The deterministic capacity check is
+always active: current accepted plus all unresolved slots must still be able to
+meet every required minimum. A cohort-specific Wilson projection becomes
+authoritative only after that cohort has at least 20 resolved outcomes; an
+unobserved or smaller cohort records its descriptive rate but cannot trigger a
+Wilson stop. Once eligible, the runner stops early when current accepted plus
+`floor(unresolved * Wilson lower bound)` cannot meet the minimum within the
+remaining stage budget. The calculation, cohort observation count, eligibility,
+and stop reason enter the immutable ledger; no target is weakened after a stop.
 
 Each planned cross-locale family is authored in one provider request containing
 both task IDs, shared semantic axes, and separate locale slots. The author must
 produce semantically equivalent, independently natural PT-BR and English tasks;
-neither task is declared a translation of the other. Each member is then sent
-alone to the reviewer without pair ID or sibling content. Both remain in the
-same split even if only one is accepted, and the pair counts toward the paired
-minimum only when both are accepted.
+neither task is declared a translation of the other. The two authored semantic
+attestations must match exactly. Each member is then sent alone to the reviewer
+without the author attestation, pair ID, or sibling content, and its independent
+reviewer attestation must match the authored one. Both remain in the same split
+even if only one is accepted, and the pair counts toward the paired minimum only
+when both are accepted. The 300 planned pairs provide rejection headroom; the
+fixed acceptance minimum remains 120 complete pairs.
 
 The provider lane keeps explicit network authorization, ZDR/data-collection
 controls, no secrets in argv/logs/artifacts, atomic no-clobber writes, resumable
 cost ledger, bounded retries, and record-level author/reviewer response hashes.
-Both provider requests disable optional model reasoning with
-`reasoning_effort=none`; the task is constrained generation and independent
-review, not chain-of-thought collection, and hidden reasoning must not consume
-the response budget or turn a bounded batch into an unbounded wait.
-The current Phase 4E execution has a USD 10.00 new-spend safety envelope,
-partitioned into four nonfungible stages: USD 2.00 corpus author, USD 6.00
+The Gemini author request disables optional model reasoning with
+`reasoning_effort=none`; constrained generation must not spend the bounded
+response budget on hidden reasoning. The pinned CoreWeave Llama reviewer route
+is a non-reasoning endpoint and does not advertise `reasoning_effort`, so its
+request omits that unsupported parameter while `require_parameters=true`
+prevents silent rerouting. Neither response may contain or persist a reasoning
+trace.
+The current Phase 4E execution has a USD 17.00 new-spend safety envelope,
+partitioned into four nonfungible stages: USD 5.00 corpus author, USD 10.00
 corpus reviewer, USD 0.75 comparison author, and USD 1.25 comparison reviewer.
 This envelope prevents an unattended runaway; it is not a hard project ceiling
 and may be raised through explicit operator agreement. At the reviewed ceilings
-of USD 0.12/M input and USD 0.20/M output for the author, and USD 0.20/M input
-and USD 0.60/M output for the reviewer, the planned maximum payload and retry
+of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
+and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
-request.
+request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
+preflight is currently USD 4.4416999 for the author and USD 9.42617229 for the
+reviewer. These whole-run bounds must fit before transport begins; request-level
+checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the
 new Phase 4E ledger; the larger debit governs. Prior Phase 3B/4C spend remains
 immutable historical evidence and is not reset or charged to this new

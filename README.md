@@ -226,8 +226,8 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
 ```
 
 Corpus requests are pinned to OpenRouter HTTPS with redirects and proxies
-disabled. It uses the reviewed nonfungible USD 5.00 ceiling: USD 1.00 author,
-USD 3.00 reviewer, USD 0.35 comparison author, and USD 0.65 comparison
+disabled. It uses the reviewed nonfungible USD 17.00 ceiling: USD 5.00 author,
+USD 10.00 reviewer, USD 0.75 comparison author, and USD 1.25 comparison
 reviewer. A durable pre-send reservation that cannot be resolved stops resume
 instead of repeating a potentially charged request.
 
