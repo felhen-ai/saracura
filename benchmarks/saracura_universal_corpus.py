@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, m
 from benchmarks.encoder_loader import VerifiedSnapshot, load_encoder
 from benchmarks.encoder_registry import get_candidate
 from benchmarks.io import atomic_create
-from benchmarks.saracura_universal_policy import validate_phase4e_policy
+from benchmarks.saracura_universal_policy import STAGE_LIMITS, TOTAL_BUDGET, validate_phase4e_policy
 from saracura.contracts.models import ChoiceCriterion
 from saracura.serialization import canonical_json_bytes
 from saracura.universal.rendering import CapacityError, render_task, validate_rendered_capacity
@@ -60,12 +60,6 @@ AXES: dict[str, tuple[str, str]] = {
 }
 SPLIT_SIZES = {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240}
 PAIR_COUNTS = {"synthetic_train": 84, "synthetic_dev": 18, "synthetic_holdout": 18}
-STAGE_LIMITS = {
-    "corpus_author": Decimal("0.60"),
-    "corpus_reviewer": Decimal("1.00"),
-    "comparison_author": Decimal("0.15"),
-    "comparison_reviewer": Decimal("0.25"),
-}
 PRICES = {
     "corpus_author": (Decimal("0.12"), Decimal("0.20")),
     "corpus_reviewer": (Decimal("0.20"), Decimal("0.60")),
@@ -222,16 +216,26 @@ def validate_plan(value: Mapping[str, Any]) -> None:
     if counts != SPLIT_SIZES:
         raise CorpusError("plan split allocation")
     pairs: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    families: dict[str, set[str]] = defaultdict(set)
     for row in slots:
+        family = row.get("family_id")
+        split = row.get("split")
+        if not isinstance(family, str) or not isinstance(split, str):
+            raise CorpusError("plan family identity")
+        families[family].add(split)
         pair = row.get("pair_id")
         if pair is not None:
             pairs[cast(str, pair)].append(row)
+    if any(len(splits) != 1 for splits in families.values()):
+        raise CorpusError("family split isolation")
     if len(pairs) != 120 or any(len(rows) != 2 for rows in pairs.values()):
         raise CorpusError("cross-locale plan")
-    for rows in pairs.values():
-        if {row["locale"] for row in rows} != set(LOCALES) or len(
-            {row["split"] for row in rows}
-        ) != 1:
+    for pair_id, rows in pairs.items():
+        if (
+            {row["locale"] for row in rows} != set(LOCALES)
+            or len({row["split"] for row in rows}) != 1
+            or {row["family_id"] for row in rows} != {pair_id}
+        ):
             raise CorpusError("cross-locale split isolation")
     for split in SPLITS:
         for locale in LOCALES:
@@ -323,6 +327,9 @@ class ValidatedAuthorRow(_Closed):
     pair_id: str | None
     axes: dict[str, str]
     cross_locale_attestation: CrossLocaleAttestation | None
+    author_response_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    author_reservation_id: str | None = Field(default=None, pattern=r"^reservation-[0-9a-f]{64}$")
+    author_request_id: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def valid_author_task(self) -> ValidatedAuthorRow:
@@ -344,6 +351,48 @@ class ValidatedAuthorRow(_Closed):
         return self
 
 
+def _lineage_placeholder(actor: Literal["author", "reviewer"], task_id: str) -> dict[str, str]:
+    """Supply syntactic lineage only for isolated contract tests.
+
+    Production rows overwrite this with a settled provider-journal entry before
+    review or packet persistence. The packet validator never treats this value
+    as evidence because it cannot bind it to the durable journal/ledger.
+    """
+
+    digest = _sha(_canonical({"actor": actor, "task_id": task_id}))
+    return {
+        f"{actor}_response_sha256": digest,
+        f"{actor}_reservation_id": f"reservation-{digest}",
+        f"{actor}_request_id": f"fixture-{actor}-{digest}",
+    }
+
+
+def lineage_from_journal(
+    journal: Mapping[str, Any], actor: Literal["author", "reviewer"]
+) -> dict[str, str]:
+    """Return the non-secret per-record lineage bound to one settled request."""
+
+    required = {"stage", "reservation_id", "request_id", "task_ids", "response_sha256"}
+    if set(journal) != required or not all(
+        isinstance(journal[key], str) for key in required - {"task_ids"}
+    ):
+        raise CorpusError("provider journal lineage")
+    stage = f"corpus_{actor}"
+    if journal["stage"] != stage:
+        raise CorpusError("provider journal stage")
+    reservation_id = cast(str, journal["reservation_id"])
+    response_sha256 = cast(str, journal["response_sha256"])
+    if not re.fullmatch(r"reservation-[0-9a-f]{64}", reservation_id) or not re.fullmatch(
+        r"[0-9a-f]{64}", response_sha256
+    ):
+        raise CorpusError("provider journal lineage")
+    return {
+        f"{actor}_response_sha256": response_sha256,
+        f"{actor}_reservation_id": reservation_id,
+        f"{actor}_request_id": cast(str, journal["request_id"]),
+    }
+
+
 class AcceptedPacketRow(_Closed):
     """One sealed synthetic row with its independently matching review receipt."""
 
@@ -362,6 +411,12 @@ class AcceptedPacketRow(_Closed):
     synthetic_only: Literal[True]
     review: ReviewerRecord
     review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    author_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    author_reservation_id: str = Field(pattern=r"^reservation-[0-9a-f]{64}$")
+    author_request_id: str = Field(min_length=1, max_length=256)
+    reviewer_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reviewer_reservation_id: str = Field(pattern=r"^reservation-[0-9a-f]{64}$")
+    reviewer_request_id: str = Field(min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def matching_review_receipt(self) -> AcceptedPacketRow:
@@ -539,32 +594,9 @@ def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]
     """
     if len(rows) != 1 or not isinstance(rows[0], ValidatedAuthorRow):
         raise CorpusError("reviewer requires one validated author row")
-    safe = [
-        {
-            key: (
-                [criterion.model_dump(mode="json") for criterion in row.criteria]
-                if key == "criteria"
-                else getattr(row, key)
-            )
-            for key in (
-                "task_id",
-                "family_id",
-                "locale",
-                "domain",
-                "instruction",
-                "state",
-                "criteria",
-            )
-        }
-        for row in rows
-    ]
+    safe = [_reviewer_task_view(rows[0])]
+    _validate_reviewer_task_view(safe[0])
     payload = _canonical({"tasks": safe}).decode("utf-8")
-    # This check protects future edits as well as the call site.
-    if any(
-        field in payload
-        for field in ("gold_position", "selected_criterion_id", "pair_id", "split", "axes")
-    ):
-        raise CorpusError("reviewer answer blindness violated")
     return [
         {
             "role": "system",
@@ -572,6 +604,70 @@ def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]
         },
         {"role": "user", "content": payload},
     ]
+
+
+def _reviewer_task_view(row: ValidatedAuthorRow) -> dict[str, Any]:
+    """Construct the exact answer-blind transport object from a typed row."""
+
+    return {
+        "task_id": row.task_id,
+        "family_id": row.family_id,
+        "locale": row.locale,
+        "domain": row.domain,
+        "instruction": row.instruction,
+        "state": row.state,
+        "criteria": [
+            {"id": criterion.id, "description": criterion.description} for criterion in row.criteria
+        ],
+    }
+
+
+def _validate_reviewer_json(value: object) -> None:
+    """Validate JSON structure without treating any string value as metadata."""
+
+    if value is None or isinstance(value, (bool, str, int, float)):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_reviewer_json(item)
+        return
+    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
+        for item in value.values():
+            _validate_reviewer_json(item)
+        return
+    raise CorpusError("reviewer transport value")
+
+
+def _validate_reviewer_task_view(value: object) -> None:
+    """Prove the review transport view has only its explicit public fields."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "task_id",
+        "family_id",
+        "locale",
+        "domain",
+        "instruction",
+        "state",
+        "criteria",
+    }:
+        raise CorpusError("reviewer transport fields")
+    if any(
+        not isinstance(value[field], str)
+        for field in ("task_id", "family_id", "locale", "domain", "instruction")
+    ) or not isinstance(value["state"], dict):
+        raise CorpusError("reviewer transport types")
+    _validate_reviewer_json(value["state"])
+    criteria = value["criteria"]
+    if not isinstance(criteria, list) or not 2 <= len(criteria) <= 8:
+        raise CorpusError("reviewer transport criteria")
+    for criterion in criteria:
+        if (
+            not isinstance(criterion, dict)
+            or set(criterion) != {"id", "description"}
+            or not isinstance(criterion["id"], str)
+            or not isinstance(criterion["description"], str)
+        ):
+            raise CorpusError("reviewer transport criterion")
 
 
 def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> UniversalTask:
@@ -809,7 +905,11 @@ def _privacy(row: Mapping[str, Any]) -> bool:
 
 
 def resolve_reviews(
-    rows: Sequence[Mapping[str, Any]], reviews: Any, prior_rows: Iterable[Mapping[str, Any]] = ()
+    rows: Sequence[Mapping[str, Any]],
+    reviews: Any,
+    prior_rows: Iterable[Mapping[str, Any]] = (),
+    *,
+    reviewer_lineages: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(reviews, list) or len(reviews) != len(rows):
         raise CorpusError("review record count")
@@ -830,6 +930,35 @@ def resolve_reviews(
     rejected: list[dict[str, Any]] = []
     for row in rows:
         review = by_id[cast(str, row["task_id"])]
+        task_id = cast(str, row["task_id"])
+        author_lineage = {
+            key: row[key]
+            for key in (
+                "author_response_sha256",
+                "author_reservation_id",
+                "author_request_id",
+            )
+            if key in row
+        }
+        if not author_lineage:
+            author_lineage = _lineage_placeholder("author", task_id)
+        if set(author_lineage) != {
+            "author_response_sha256",
+            "author_reservation_id",
+            "author_request_id",
+        }:
+            raise CorpusError("author provider lineage")
+        reviewer_lineage = (
+            dict(reviewer_lineages[task_id])
+            if reviewer_lineages is not None and task_id in reviewer_lineages
+            else _lineage_placeholder("reviewer", task_id)
+        )
+        if set(reviewer_lineage) != {
+            "reviewer_response_sha256",
+            "reviewer_reservation_id",
+            "reviewer_request_id",
+        }:
+            raise CorpusError("reviewer provider lineage")
         reason: str | None = None
         if (
             review.status != "accepted"
@@ -850,7 +979,15 @@ def resolve_reviews(
             ):
                 reason = "near_duplicate"
         if reason:
-            rejected.append({"task_id": row["task_id"], "split": row["split"], "reason": reason})
+            rejected.append(
+                {
+                    "task_id": task_id,
+                    "split": row["split"],
+                    "reason": reason,
+                    **author_lineage,
+                    **reviewer_lineage,
+                }
+            )
         else:
             review_payload = review.model_dump(mode="json")
             accepted.append(
@@ -859,6 +996,8 @@ def resolve_reviews(
                     "synthetic_only": True,
                     "review": review_payload,
                     "review_sha256": _sha(_canonical(review_payload)),
+                    **author_lineage,
+                    **reviewer_lineage,
                 }
             )
             seen.add(fingerprint)
@@ -874,16 +1013,136 @@ def resolve_reviews(
         for row in members
     }
     if invalid_pair_task_ids:
+        paired_lineages = {
+            cast(str, row["task_id"]): {
+                key: row[key]
+                for key in (
+                    "author_response_sha256",
+                    "author_reservation_id",
+                    "author_request_id",
+                    "reviewer_response_sha256",
+                    "reviewer_reservation_id",
+                    "reviewer_request_id",
+                )
+            }
+            for row in accepted
+            if row["task_id"] in invalid_pair_task_ids
+        }
         accepted = [row for row in accepted if row["task_id"] not in invalid_pair_task_ids]
         rejected.extend(
             {
                 "task_id": task_id,
                 "split": next(row["split"] for row in rows if row["task_id"] == task_id),
                 "reason": "cross_locale_semantic_attestation",
+                **paired_lineages[task_id],
             }
             for task_id in sorted(invalid_pair_task_ids)
         )
     return accepted, rejected
+
+
+def _identity_projection(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical, non-content identity for one accepted row.
+
+    This is deliberately the only representation of accepted holdout rows that
+    may be released before the one-time holdout claim.  In particular, it
+    never carries task text, state, criterion descriptions, review receipts,
+    token data, or embeddings.
+    """
+    criterion_ids: object
+    gold_position: object
+    option_count: object
+    criteria = row.get("criteria")
+    selected = row.get("selected_criterion_id")
+    if isinstance(criteria, Sequence) and not isinstance(criteria, (str, bytes)):
+        criterion_ids = [
+            criterion.get("id") if isinstance(criterion, Mapping) else None
+            for criterion in criteria
+        ]
+        try:
+            gold_position = next(
+                index
+                for index, criterion_id in enumerate(criterion_ids)
+                if criterion_id == selected
+            )
+        except StopIteration as error:
+            raise CorpusError("holdout identity criterion") from error
+        option_count = len(criterion_ids)
+    else:
+        criterion_ids = row.get("criterion_ids")
+        gold_position = row.get("gold_position")
+        option_count = row.get("option_count")
+    identity = {
+        "task_id": row.get("task_id"),
+        "family_id": row.get("family_id"),
+        "pair_id": row.get("pair_id"),
+        "split": row.get("split"),
+        "locale": row.get("locale"),
+        "domain": row.get("domain"),
+        "axes": row.get("axes"),
+        "option_count": option_count,
+        "gold_position": gold_position,
+        "criterion_ids": criterion_ids,
+    }
+    if (
+        not isinstance(identity["task_id"], str)
+        or not isinstance(identity["family_id"], str)
+        or (identity["pair_id"] is not None and not isinstance(identity["pair_id"], str))
+        or identity["split"] not in SPLITS
+        or identity["locale"] not in LOCALES
+        or identity["domain"] not in DOMAINS
+        or not isinstance(identity["axes"], dict)
+        or identity["axes"] != {key: identity["axes"].get(key) for key in AXES}
+        or any(identity["axes"].get(key) not in values for key, values in AXES.items())
+        or type(identity["option_count"]) is not int
+        or not 2 <= identity["option_count"] <= 8
+        or type(identity["gold_position"]) is not int
+        or not 0 <= identity["gold_position"] < identity["option_count"]
+        or not isinstance(identity["criterion_ids"], list)
+        or len(identity["criterion_ids"]) != identity["option_count"]
+        or not all(isinstance(item, str) for item in identity["criterion_ids"])
+        or len(set(cast(list[str], identity["criterion_ids"]))) != identity["option_count"]
+    ):
+        raise CorpusError("holdout identity schema")
+    return cast(dict[str, Any], identity)
+
+
+def _identity_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    identities = [_identity_projection(row) for row in rows]
+    if len({row["task_id"] for row in identities}) != len(identities):
+        raise CorpusError("holdout identity coverage")
+    return sorted(identities, key=lambda row: cast(str, row["task_id"]))
+
+
+def _read_holdout_identities(path: Path) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_bytes())
+    except (OSError, ValueError) as error:
+        raise CorpusError("holdout identities") from error
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "rows"}:
+        raise CorpusError("holdout identities")
+    if payload["schema_version"] != "phase4e-holdout-identities.v1" or not isinstance(
+        payload["rows"], list
+    ):
+        raise CorpusError("holdout identities")
+    identities = _identity_rows(cast(list[Mapping[str, Any]], payload["rows"]))
+    if identities != payload["rows"]:
+        raise CorpusError("holdout identities canonical order")
+    if any(row["split"] != "synthetic_holdout" for row in identities):
+        raise CorpusError("holdout identities split")
+    return identities
+
+
+def _row_option_count(row: Mapping[str, Any]) -> int | None:
+    """Read the closed option count without treating absent criteria as truthy."""
+
+    declared = row.get("option_count")
+    if type(declared) is int:
+        return declared
+    criteria = row.get("criteria")
+    if isinstance(criteria, Sequence) and not isinstance(criteria, (str, bytes)):
+        return len(criteria)
+    return None
 
 
 def _minimums(rows: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -914,8 +1173,7 @@ def _minimums(rows: Sequence[Mapping[str, Any]]) -> list[str]:
                     sum(
                         row["split"] == part
                         and row["locale"] == locale
-                        and row["criteria"]
-                        and len(row["criteria"]) == count
+                        and _row_option_count(row) == count
                         for row in rows
                     )
                     < floor
@@ -996,7 +1254,19 @@ def _validate_packet_resolution(
             raise CorpusError("packet cross-locale semantic attestation")
     for rejected_row in rejected:
         if (
-            set(rejected_row) != {"task_id", "split", "reason"}
+            not {"task_id", "split", "reason"} <= set(rejected_row)
+            or set(rejected_row)
+            - {
+                "task_id",
+                "split",
+                "reason",
+                "author_response_sha256",
+                "author_reservation_id",
+                "author_request_id",
+                "reviewer_response_sha256",
+                "reviewer_reservation_id",
+                "reviewer_request_id",
+            }
             or rejected_row.get("task_id") not in slots
         ):
             raise CorpusError("packet rejection")
@@ -1004,34 +1274,225 @@ def _validate_packet_resolution(
             raise CorpusError("packet rejected split mutation")
 
 
-def validate_accepted_packet(packet: Path) -> None:
-    """Validate an immutable accepted packet without provider/network access."""
-    expected = {"plan.json", "accepted.jsonl", "rejected.jsonl", "ledger.json", "packet.json"}
+def _validate_provider_lineage(
+    ledger: BudgetLedger,
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    resolved_task_ids: set[str],
+) -> None:
+    """Bind every persisted provider-derived row to the sealed journal and ledger."""
+
+    ledger.require_complete_provider_journal()
+    evidence: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for journal in ledger.provider_journal:
+        for task_id in cast(list[str], journal["task_ids"]):
+            key = (cast(str, journal["stage"]), task_id)
+            if key in evidence or task_id not in resolved_task_ids:
+                raise CorpusError("provider journal task resolution")
+            evidence[key] = journal
+
+    def fields(journal: Mapping[str, Any], actor: Literal["author", "reviewer"]) -> dict[str, Any]:
+        return {
+            f"{actor}_response_sha256": journal["response_sha256"],
+            f"{actor}_reservation_id": journal["reservation_id"],
+            f"{actor}_request_id": journal["request_id"],
+        }
+
+    for row in accepted:
+        accepted_task_id = row.get("task_id")
+        if not isinstance(accepted_task_id, str):
+            raise CorpusError("provider lineage task")
+        author = evidence.get(("corpus_author", accepted_task_id))
+        reviewer = evidence.get(("corpus_reviewer", accepted_task_id))
+        if (
+            author is None
+            or reviewer is None
+            or any(
+                row.get(key) != value
+                for source, actor in cast(
+                    tuple[tuple[Mapping[str, Any], Literal["author", "reviewer"]], ...],
+                    ((author, "author"), (reviewer, "reviewer")),
+                )
+                for key, value in fields(source, actor).items()
+            )
+        ):
+            raise CorpusError("accepted provider lineage")
+    for row in rejected:
+        rejected_task_id = row.get("task_id")
+        if not isinstance(rejected_task_id, str):
+            raise CorpusError("provider lineage task")
+        for stage, actor in cast(
+            tuple[
+                tuple[Literal["corpus_author", "corpus_reviewer"], Literal["author", "reviewer"]],
+                ...,
+            ],
+            (("corpus_author", "author"), ("corpus_reviewer", "reviewer")),
+        ):
+            rejected_journal = evidence.get((stage, rejected_task_id))
+            expected = fields(rejected_journal, actor) if rejected_journal is not None else {}
+            present = {key: row[key] for key in fields_placeholder(actor) if key in row}
+            if present != expected:
+                raise CorpusError("rejected provider lineage")
+
+
+def fields_placeholder(actor: Literal["author", "reviewer"]) -> dict[str, None]:
+    return {
+        f"{actor}_response_sha256": None,
+        f"{actor}_reservation_id": None,
+        f"{actor}_request_id": None,
+    }
+
+
+_PACKET_FILES = {
+    "plan.json",
+    "accepted-train-dev.jsonl",
+    "accepted-holdout.jsonl",
+    "holdout-identities.json",
+    "rejected.jsonl",
+    "ledger.json",
+    "packet.json",
+}
+_PACKET_NON_HOLDOUT_FILES = _PACKET_FILES - {"accepted-holdout.jsonl", "packet.json"}
+
+
+def _packet_manifest(packet: Path) -> dict[str, Any]:
+    expected = _PACKET_FILES
     if not packet.is_dir() or {path.name for path in packet.iterdir()} != expected:
         raise CorpusError("packet file set")
-    manifest_path = packet / "packet.json"
     try:
-        manifest = json.loads(manifest_path.read_bytes())
+        manifest = json.loads((packet / "packet.json").read_bytes())
     except (OSError, ValueError) as error:
         raise CorpusError("packet manifest") from error
     if (
         not isinstance(manifest, dict)
         or set(manifest) != {"schema_version", "files", "sealed"}
+        or manifest["schema_version"] != "phase4e-accepted-packet.v2"
         or manifest["sealed"] is not True
+        or not isinstance(manifest["files"], dict)
+        or set(manifest["files"]) != expected - {"packet.json"}
+        or any(
+            not isinstance(value, str) or len(value) != 64 for value in manifest["files"].values()
+        )
     ):
         raise CorpusError("packet manifest shape")
+    return cast(dict[str, Any], manifest)
+
+
+def _validate_packet_pre_holdout(
+    packet: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Validate every non-holdout byte and the sealed identity projection.
+
+    This deliberately never opens, parses, or hashes the holdout payload.  Its
+    digest in ``packet.json`` is only precommitted metadata at this stage.
+    """
+    manifest = _packet_manifest(packet)
     files = cast(dict[str, str], manifest["files"])
-    if set(files) != expected - {"packet.json"}:
-        raise CorpusError("packet manifest files")
-    for name, digest in files.items():
-        if not isinstance(digest, str) or _sha((packet / name).read_bytes()) != digest:
+    for name in _PACKET_NON_HOLDOUT_FILES:
+        if _sha((packet / name).read_bytes()) != files[name]:
             raise CorpusError("packet digest")
-    plan = json.loads((packet / "plan.json").read_bytes())
+    try:
+        plan = json.loads((packet / "plan.json").read_bytes())
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet plan") from error
     validate_plan(plan)
-    rows = _read_jsonl(packet / "accepted.jsonl")
+    train_dev = _read_jsonl(packet / "accepted-train-dev.jsonl")
     rejected = _read_jsonl(packet / "rejected.jsonl")
-    _validate_packet_resolution(rows, rejected, plan)
-    if _minimums(rows):
+    try:
+        ledger = BudgetLedger.from_json(json.loads((packet / "ledger.json").read_bytes()))
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet ledger") from error
+    holdout_identities = _read_holdout_identities(packet / "holdout-identities.json")
+    slots = {
+        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    accepted_identities: list[dict[str, Any]] = []
+    for raw_row in train_dev:
+        try:
+            row = AcceptedPacketRow.model_validate(raw_row).model_dump(mode="json")
+        except ValidationError as error:
+            raise CorpusError("accepted packet row schema") from error
+        if row["split"] not in {"synthetic_train", "synthetic_dev"}:
+            raise CorpusError("packet train/dev split")
+        accepted_identities.append(_identity_projection(row))
+    accepted_identities.extend(holdout_identities)
+    if len({row["task_id"] for row in accepted_identities}) != len(accepted_identities):
+        raise CorpusError("packet resolution coverage")
+    for identity in accepted_identities:
+        task_id = identity["task_id"]
+        planned = slots.get(task_id)
+        if planned is None or any(
+            identity[key] != planned[key]
+            for key in (
+                "family_id",
+                "pair_id",
+                "split",
+                "locale",
+                "domain",
+                "axes",
+                "option_count",
+                "gold_position",
+            )
+        ):
+            raise CorpusError("packet split or family mutation")
+    resolved = [
+        *(row["task_id"] for row in accepted_identities),
+        *(row.get("task_id") for row in rejected),
+    ]
+    if len(resolved) != len(set(resolved)) or set(resolved) != set(slots):
+        raise CorpusError("packet resolution coverage")
+    for rejected_row in rejected:
+        if (
+            set(rejected_row) != {"task_id", "split", "reason"}
+            or rejected_row.get("task_id") not in slots
+            or rejected_row["split"] != slots[cast(str, rejected_row["task_id"])]["split"]
+        ):
+            raise CorpusError("packet rejection")
+    _validate_provider_lineage(ledger, train_dev, rejected, set(cast(list[str], resolved)))
+    if _minimums(accepted_identities):
+        raise CorpusError("accepted corpus minimum")
+    families: dict[str, set[str]] = defaultdict(set)
+    for identity in accepted_identities:
+        families[cast(str, identity["family_id"])].add(cast(str, identity["split"]))
+    if any(len(splits) != 1 for splits in families.values()):
+        raise CorpusError("packet family split isolation")
+    return manifest, train_dev, holdout_identities
+
+
+def validate_accepted_packet_pre_holdout(packet: Path) -> None:
+    """Run the fail-closed pre-claim packet validator without holdout access."""
+    _validate_packet_pre_holdout(packet)
+
+
+def validate_accepted_packet(packet: Path) -> None:
+    """Fully validate the immutable v2 packet after the holdout claim."""
+    manifest, train_dev, holdout_identities = _validate_packet_pre_holdout(packet)
+    files = cast(dict[str, str], manifest["files"])
+    holdout_path = packet / "accepted-holdout.jsonl"
+    if _sha(holdout_path.read_bytes()) != files["accepted-holdout.jsonl"]:
+        raise CorpusError("packet digest")
+    holdout = _read_jsonl(holdout_path)
+    if any(row.get("split") != "synthetic_holdout" for row in holdout):
+        raise CorpusError("packet holdout split")
+    if _identity_rows(holdout) != holdout_identities:
+        raise CorpusError("holdout identity projection binding")
+    try:
+        plan = json.loads((packet / "plan.json").read_bytes())
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet plan") from error
+    rejected = _read_jsonl(packet / "rejected.jsonl")
+    _validate_packet_resolution([*train_dev, *holdout], rejected, plan)
+    try:
+        ledger = BudgetLedger.from_json(json.loads((packet / "ledger.json").read_bytes()))
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet ledger") from error
+    _validate_provider_lineage(
+        ledger,
+        [*train_dev, *holdout],
+        rejected,
+        {cast(str, slot["task_id"]) for slot in cast(list[Mapping[str, Any]], plan["slots"])},
+    )
+    if _minimums([*train_dev, *holdout]):
         raise CorpusError("accepted corpus minimum")
 
 
@@ -1070,9 +1531,23 @@ def seal_packet(
     packet.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=f".{packet.name}.", dir=packet.parent))
     os.chmod(staged, 0o700)
+    accepted_train_dev = sorted(
+        (row for row in accepted if row.get("split") in {"synthetic_train", "synthetic_dev"}),
+        key=lambda row: cast(str, row.get("task_id")),
+    )
+    accepted_holdout = sorted(
+        (row for row in accepted if row.get("split") == "synthetic_holdout"),
+        key=lambda row: cast(str, row.get("task_id")),
+    )
+    identities = _identity_rows(accepted_holdout)
     files = {
         "plan.json": _canonical(plan) + b"\n",
-        "accepted.jsonl": _jsonl(accepted),
+        "accepted-train-dev.jsonl": _jsonl(accepted_train_dev),
+        "accepted-holdout.jsonl": _jsonl(accepted_holdout),
+        "holdout-identities.json": _canonical(
+            {"schema_version": "phase4e-holdout-identities.v1", "rows": identities}
+        )
+        + b"\n",
         "rejected.jsonl": _jsonl(rejected),
         "ledger.json": _canonical(ledger) + b"\n",
     }
@@ -1081,7 +1556,7 @@ def seal_packet(
             atomic_create(staged / name, body)
             os.chmod(staged / name, 0o600)
         manifest = {
-            "schema_version": "phase4e-accepted-packet.v1",
+            "schema_version": "phase4e-accepted-packet.v2",
             "sealed": True,
             "files": {name: _sha(body) for name, body in files.items()},
         }
@@ -1118,6 +1593,7 @@ class BudgetLedger:
     """Parameterized four-stage ledger; the larger local/server debit wins."""
 
     entries: list[dict[str, str]] = field(default_factory=list)
+    provider_journal: list[dict[str, Any]] = field(default_factory=list)
 
     def spent(self, stage: str) -> Decimal:
         return sum(
@@ -1132,9 +1608,10 @@ class BudgetLedger:
             raise CorpusError("budget terminal overspend")
         if self.spent(stage) + local_worst_case > STAGE_LIMITS[stage]:
             raise CorpusError("stage budget exhausted")
-        if sum(
-            (Decimal(item["debit_usd"]) for item in self.entries), Decimal()
-        ) + local_worst_case > Decimal("2.00"):
+        if (
+            sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) + local_worst_case
+            > TOTAL_BUDGET
+        ):
             raise CorpusError("total budget exhausted")
 
     def reserve_request(self, stage: str, reservation_id: str, local_worst_case: Decimal) -> None:
@@ -1192,7 +1669,7 @@ class BudgetLedger:
         if self.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]]:
             entry["status"] = "overspent"
             raise CorpusError("reported stage budget exhausted")
-        if sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) > Decimal("2.00"):
+        if sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) > TOTAL_BUDGET:
             entry["status"] = "overspent"
             raise CorpusError("reported total budget exhausted")
 
@@ -1224,26 +1701,79 @@ class BudgetLedger:
             "status": "settled",
         }
         self.entries.append(entry)
-        if self.spent(stage) > STAGE_LIMITS[stage] or sum(
-            (Decimal(item["debit_usd"]) for item in self.entries), Decimal()
-        ) > Decimal("2.00"):
+        if (
+            self.spent(stage) > STAGE_LIMITS[stage]
+            or sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) > TOTAL_BUDGET
+        ):
             entry["status"] = "overspent"
             raise CorpusError("reported budget exhausted")
 
+    def record_provider_journal(
+        self,
+        *,
+        stage: Literal["corpus_author", "corpus_reviewer"],
+        reservation_id: str,
+        task_ids: Sequence[str],
+    ) -> None:
+        """Atomically bind a settled response to its preplanned task identities.
+
+        This record deliberately contains no prompt, response payload, headers,
+        or credential. Its response digest is the one already settled in the
+        cost ledger, so the two durable receipts cannot be mixed later.
+        """
+
+        entry = next(
+            (item for item in self.entries if item["reservation_id"] == reservation_id), None
+        )
+        if (
+            entry is None
+            or entry["stage"] != stage
+            or entry["status"] not in {"settled", "overspent"}
+            or not task_ids
+            or len(task_ids) != len(set(task_ids))
+            or not all(re.fullmatch(r"task-[0-9a-f]{64}", task_id) for task_id in task_ids)
+            or any(item["reservation_id"] == reservation_id for item in self.provider_journal)
+        ):
+            raise CorpusError("provider journal")
+        self.provider_journal.append(
+            {
+                "stage": stage,
+                "reservation_id": reservation_id,
+                "request_id": entry["request_id"],
+                "task_ids": sorted(task_ids),
+                "response_sha256": entry["response_sha256"],
+            }
+        )
+
+    def require_complete_provider_journal(self) -> None:
+        """Fail closed if a settled paid call has no immutable task correlation."""
+
+        journal_ids = {entry["reservation_id"] for entry in self.provider_journal}
+        settled_ids = {
+            entry["reservation_id"]
+            for entry in self.entries
+            if entry["status"] in {"settled", "overspent"}
+        }
+        if journal_ids != settled_ids:
+            raise CorpusError("settled provider call lacks durable journal")
+
     def as_json(self, *, final: bool = False, stop_reason: str | None = None) -> dict[str, Any]:
         return {
-            "schema_version": "phase4e-cost-ledger.v1",
+            "schema_version": "phase4e-cost-ledger.v2",
             "final": final,
             "entries": self.entries,
+            "provider_journal": self.provider_journal,
             "stop_reason": stop_reason,
         }
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> BudgetLedger:
-        if set(value) != {"schema_version", "final", "entries", "stop_reason"}:
+        if set(value) != {"schema_version", "final", "entries", "provider_journal", "stop_reason"}:
             raise CorpusError("ledger shape")
-        if value["schema_version"] != "phase4e-cost-ledger.v1" or not isinstance(
-            value["entries"], list
+        if (
+            value["schema_version"] != "phase4e-cost-ledger.v2"
+            or not isinstance(value["entries"], list)
+            or not isinstance(value["provider_journal"], list)
         ):
             raise CorpusError("ledger identity")
         ledger = cls()
@@ -1291,11 +1821,54 @@ class BudgetLedger:
             if any(item["reservation_id"] == entry["reservation_id"] for item in ledger.entries):
                 raise CorpusError("ledger entry")
             ledger.entries.append(cast(dict[str, str], entry))
-            over_budget = ledger.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]] or sum(
-                (Decimal(item["debit_usd"]) for item in ledger.entries), Decimal()
-            ) > Decimal("2.00")
+            over_budget = (
+                ledger.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]]
+                or sum((Decimal(item["debit_usd"]) for item in ledger.entries), Decimal())
+                > TOTAL_BUDGET
+            )
             if over_budget != (entry["status"] == "overspent"):
                 raise CorpusError("ledger budget")
+        journal_entry_keys = {
+            "stage",
+            "reservation_id",
+            "request_id",
+            "task_ids",
+            "response_sha256",
+        }
+        for raw_journal in value["provider_journal"]:
+            if not isinstance(raw_journal, Mapping) or set(raw_journal) != journal_entry_keys:
+                raise CorpusError("provider journal")
+            stage = raw_journal["stage"]
+            reservation_id = raw_journal["reservation_id"]
+            request_id = raw_journal["request_id"]
+            task_ids = raw_journal["task_ids"]
+            response_sha256 = raw_journal["response_sha256"]
+            matching = next(
+                (entry for entry in ledger.entries if entry["reservation_id"] == reservation_id),
+                None,
+            )
+            if (
+                stage not in {"corpus_author", "corpus_reviewer"}
+                or not isinstance(reservation_id, str)
+                or not isinstance(request_id, str)
+                or not isinstance(response_sha256, str)
+                or not isinstance(task_ids, list)
+                or task_ids != sorted(task_ids)
+                or len(task_ids) != len(set(task_ids))
+                or not task_ids
+                or not all(
+                    isinstance(task_id, str) and re.fullmatch(r"task-[0-9a-f]{64}", task_id)
+                    for task_id in task_ids
+                )
+                or matching is None
+                or matching["stage"] != stage
+                or matching["status"] not in {"settled", "overspent"}
+                or matching["request_id"] != request_id
+                or matching["response_sha256"] != response_sha256
+                or any(item["reservation_id"] == reservation_id for item in ledger.provider_journal)
+            ):
+                raise CorpusError("provider journal")
+            ledger.provider_journal.append(cast(dict[str, Any], raw_journal))
         return ledger
 
 
@@ -1331,6 +1904,11 @@ def write_ledger_snapshot(
                 or Decimal(current["debit_usd"]) < Decimal(earlier["debit_usd"])
             ):
                 raise CorpusError("ledger resume mismatch")
+        if (
+            previous_ledger.provider_journal
+            != ledger.provider_journal[: len(previous_ledger.provider_journal)]
+        ):
+            raise CorpusError("provider journal resume mismatch")
     path = directory / f"ledger-{len(snapshots):04d}.json"
     atomic_create(path, _canonical(ledger.as_json(stop_reason=stop_reason)) + b"\n")
     os.chmod(path, 0o600)
@@ -1446,6 +2024,7 @@ class OpenRouterCorpusClient:
             raise CorpusError("network requires durable ledger")
         self._transport = transport
         self._ledger_directory = ledger_directory
+        self._last_journal: dict[str, Any] | None = None
         resumed = resume_ledger(ledger_directory)
         if (
             ledger is not None
@@ -1472,6 +2051,7 @@ class OpenRouterCorpusClient:
             response_schema=author_schema(slots),
             max_output_tokens=max_output_tokens,
             api_key=api_key,
+            task_ids=[cast(str, slot["task_id"]) for slot in slots],
         )
 
     def reviewer(
@@ -1489,7 +2069,15 @@ class OpenRouterCorpusClient:
             response_schema=reviewer_schema(1),
             max_output_tokens=max_output_tokens,
             api_key=api_key,
+            task_ids=[row.task_id],
         )
+
+    def last_journal(self, stage: Literal["corpus_author", "corpus_reviewer"]) -> dict[str, Any]:
+        """Return the durable journal record produced by the immediately prior request."""
+
+        if self._last_journal is None or self._last_journal["stage"] != stage:
+            raise CorpusError("provider journal unavailable")
+        return dict(self._last_journal)
 
     def _request(
         self,
@@ -1500,6 +2088,7 @@ class OpenRouterCorpusClient:
         response_schema: Mapping[str, Any],
         max_output_tokens: int,
         api_key: str,
+        task_ids: Sequence[str],
     ) -> dict[str, Any]:
         if not api_key:
             raise CorpusError("pinned provider request")
@@ -1542,8 +2131,19 @@ class OpenRouterCorpusClient:
             write_ledger_snapshot(
                 self._ledger_directory, self.ledger, stop_reason="reported_provider_overspend"
             )
+            self.ledger.record_provider_journal(
+                stage=stage, reservation_id=reservation_id, task_ids=task_ids
+            )
+            write_ledger_snapshot(
+                self._ledger_directory, self.ledger, stop_reason="reported_provider_overspend"
+            )
             raise
         write_ledger_snapshot(self._ledger_directory, self.ledger)
+        self.ledger.record_provider_journal(
+            stage=stage, reservation_id=reservation_id, task_ids=task_ids
+        )
+        write_ledger_snapshot(self._ledger_directory, self.ledger)
+        self._last_journal = dict(self.ledger.provider_journal[-1])
         if status != 200:
             raise CorpusError("provider request failed")
         return response

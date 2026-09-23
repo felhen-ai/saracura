@@ -188,6 +188,48 @@ a Fase 4E.3 selar um checkpoint real sintético e ele passar pelo gate de
 holdout revisado. Laya continua sendo um controle externo, nunca professor,
 fonte de checkpoint ou modelo Saracura-owned.
 
+### Trilha operacional da Fase 4E
+
+O pipeline da Fase 4E existe apenas no checkout e começa offline. Os comandos
+`plan`, `extract`, `train` e `verify` não constroem socket. Os materiais gerados
+ficam em `.artifacts/`, ignorado pelo Git, e continuam sendo evidência sintética
+de pesquisa: não instalam runtime, não provam qualidade e não autorizam
+automação.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline plan \
+  --output .artifacts/phase4e/plan.json
+
+# Apenas corpus pode usar rede. OPENROUTER_API_KEY entra de forma efêmera pelo
+# ambiente do operador; nunca é argumento nem entra em artefato.
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
+  --plan .artifacts/phase4e/plan.json \
+  --snapshot <snapshot-minilm-verificado> \
+  --work-dir .artifacts/phase4e/corpus-work \
+  --packet .artifacts/phase4e/accepted-packet \
+  --allow-network
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline extract \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <snapshot-minilm-verificado> --device cpu \
+  --output .artifacts/phase4e/embedding-capsule
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline train \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <snapshot-minilm-verificado> \
+  --embeddings .artifacts/phase4e/embedding-capsule --device cpu \
+  --output-parent .artifacts/phase4e/training --output-name saracura-universal-v0
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
+  --packet .artifacts/phase4e/accepted-packet \
+  --embeddings .artifacts/phase4e/embedding-capsule \
+  --training .artifacts/phase4e/training/saracura-universal-v0
+```
+
+As requisições de corpus são fixadas em HTTPS do OpenRouter, sem redirects e
+proxies. O limite revisado é USD 5,00 não fungíveis: USD 1,00 para autor, USD
+3,00 para revisor, USD 0,35 para autor da comparação e USD 0,65 para revisor da
+comparação. Uma reserva durável pré-envio que permaneça sem resolução bloqueia
+o resume; o comando não repete uma cobrança possivelmente efetuada.
+
 ## Gate de dados, licença e privacidade da Fase 2C
 
 Antes de criar qualquer pacote de treino, o repositório valida o registry de

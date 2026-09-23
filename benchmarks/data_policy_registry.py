@@ -549,7 +549,7 @@ class Phase4EUniversalSyntheticException(BaseModel):
             raise ValueError("Phase 4E synthetic split order is fixed")
         if self.allowed_uses != ["synthetic_only"]:
             raise ValueError("Phase 4E synthetic use is fixed")
-        if self.spend_ceiling_usd != 2.0:
+        if self.spend_ceiling_usd != 5.0:
             raise ValueError("Phase 4E synthetic spend ceiling is fixed")
         return self
 

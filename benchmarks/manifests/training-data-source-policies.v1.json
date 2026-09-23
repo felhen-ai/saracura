@@ -227,7 +227,7 @@
       "author_model": "qwen/qwen3.5-9b",
       "reviewer_model": "mistralai/ministral-8b-2512",
       "task_slots": 1600,
-      "spend_ceiling_usd": 2.0,
+      "spend_ceiling_usd": 5.0,
       "canonical_training_authorized": false,
       "calibration_authorized": false,
       "blind_test_authorized": false,

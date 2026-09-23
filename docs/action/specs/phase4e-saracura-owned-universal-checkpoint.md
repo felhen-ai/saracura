@@ -177,7 +177,7 @@ route the new manifest by its exact schema version.
 The Phase 4E exception uses the same already authorized OpenRouter author and
 reviewer identities unless a current preflight invalidates their availability,
 pricing ceiling, or provider policy. The operator's authorization for this
-phase is bounded to the USD 2.00 new-spend ceiling below, within the previously
+phase is bounded to the USD 5.00 new-spend ceiling below, within the previously
 identified OpenRouter credit; exceeding it requires a new authorization:
 
 - author: `qwen/qwen3.5-9b`;
@@ -261,9 +261,9 @@ minimum only when both are accepted.
 The provider lane keeps explicit network authorization, ZDR/data-collection
 controls, no secrets in argv/logs/artifacts, atomic no-clobber writes, resumable
 cost ledger, bounded retries, and record-level author/reviewer response hashes.
-Phase 4E has a new-spend ceiling of USD 2.00, partitioned into four nonfungible
-stages: USD 0.60 corpus author, USD 1.00 corpus reviewer, USD 0.15 comparison
-author, and USD 0.25 comparison reviewer. At the reviewed ceilings of USD
+Phase 4E has a new-spend ceiling of USD 5.00, partitioned into four nonfungible
+stages: USD 1.00 corpus author, USD 3.00 corpus reviewer, USD 0.35 comparison
+author, and USD 0.65 comparison reviewer. At the reviewed ceilings of USD
 0.12/M input and USD 0.20/M output for the author, and USD 0.20/M input and USD
 0.60/M output for the reviewer, the planned maximum payload and retry envelope
 must calculate to no more than each stage limit before the first request.
@@ -286,6 +286,31 @@ verified MiniLM snapshot. It refuses network access, cache discovery, arbitrary
 model IDs, environment-selected model paths, or a packet whose source-policy
 exception is absent.
 
+The packet keeps evaluation content physically separate. Its canonical sealed
+payloads are `accepted-train-dev.jsonl`, `accepted-holdout.jsonl`, and
+`holdout-identities.json`. The identity payload contains only the fields needed
+to prove split/family isolation and precompute the fixed holdout baselines; it
+contains no instruction, state, criterion description, review, token, mask, or
+embedding. Before the checkpoint digest, pre-holdout gate descriptor, and
+irreversible release claim exist, validation and embedding derivation may read
+the train/dev payload and the holdout identity payload, but must not open,
+deserialize, digest-check from bytes, render, tokenize, or derive the holdout
+payload or holdout tensors. The packet manifest may expose their precommitted
+digests. After the claim, the full packet validator must bind the holdout
+payload back to the sealed identities and plan before descriptor-bound holdout
+embeddings are verified and scored. A failed post-claim validation consumes the
+one-time holdout release and remains a failed experiment.
+
+The one-time release claim lives in Saracura's canonical per-user state
+registry, not beneath a caller-selected output directory. Its key is the
+immutable packet manifest digest alone: a second extraction device, ABI,
+capsule copy, output path, or checkpoint cannot reopen the same holdout. Its
+payload binds the exact embedding capsule, selected checkpoint, and pre-holdout
+gate descriptor. Tests may redirect the registry through an internal injected
+path, but the production command exposes no application-level registry
+argument. This is a fail-closed normal-operation guard, not a tamper-proof DRM
+boundary against a user who deletes or relocates local state.
+
 The fixed v0 search budget is one declared configuration, not an open sweep:
 
 - seed fixed in the policy manifest;
@@ -298,12 +323,17 @@ The fixed v0 search budget is one declared configuration, not an open sweep:
 - no retry or hyperparameter change after seeing holdout results in this model
   revision.
 
-The verified encoder produces frozen context and criterion embeddings once on
-the explicitly selected CPU or MPS device. Their capsule binds token IDs,
-attention masks, base-encoder identity, rendering revision, device/runtime ABI,
-and float32 embedding digests. Projection training then runs twice on CPU with
-PyTorch deterministic algorithms, fixed thread count and seed. Both runs must
-produce byte-identical safetensors checkpoint bytes and canonical metrics. A
+Before training, the verified encoder produces frozen train/dev context and
+criterion embeddings once on the explicitly selected CPU device. The
+pre-holdout embedding capsule binds their token IDs, attention masks,
+base-encoder identity, rendering revision, device/runtime ABI, float32 embedding
+digests, and the identity-only holdout descriptor; it contains no holdout text,
+token, mask, embedding, or `holdout.safetensors`. Projection training then runs
+twice on CPU with PyTorch deterministic algorithms, fixed thread count and
+seed. Both runs must produce byte-identical safetensors checkpoint bytes and
+canonical metrics. After checkpoint, gate, and claim are frozen, the same
+verified encoder opens the holdout payload once, derives its tensors in memory,
+and scores them without creating a reusable pre-claim holdout capsule. A
 failure is a reproducibility blocker, not a tolerance-based pass.
 
 `stratified_macro_accuracy` is the unweighted arithmetic mean of the 14 fixed
@@ -328,6 +358,11 @@ Before holdout access, the training manifest freezes these success gates:
 - zero non-finite logits, missing choices, extra choices, silent truncations,
   family overlaps, or deterministic-repeat mismatches.
 
+The two dev-improvement gates are evaluated immediately from the frozen
+descriptor. If either fails, the command seals a pre-holdout failed-experiment
+result and stops without creating a release claim or opening holdout content.
+Only a checkpoint that passes both dev gates may claim and observe holdout.
+
 Expected random accuracy is the arithmetic mean of `1 / option_count` over the
 accepted precommitted rows. The most-frequent-gold-position baseline is computed
 over the accepted holdout task IDs after acceptance is sealed but before any
@@ -338,8 +373,11 @@ runtime checkpoint.
 
 The no-clobber training capsule contains exact canonical manifests, the
 Saracura-only safetensors checkpoint, epoch ledger, dev selection report,
-holdout report, conformance vectors, source packet receipt, dependency versions,
-code digest, encoder identity, and architecture descriptor. Raw training rows
+holdout report, conformance vectors, source packet receipt, human-readable
+dependency versions, code digest, encoder identity, and architecture descriptor.
+Conformance vectors are a separate safetensors file containing a deterministic
+14-cell selection of context/criterion embeddings, option masks, and expected
+ranker logits; they contain no rendered text or raw example. Raw training rows
 remain outside Git and the wheel.
 
 The checkpoint tensor set is closed. It contains context projection, criterion
@@ -409,7 +447,7 @@ outputs cannot change Saracura weights, renderer, thresholds, or dataset.
 
 The comparison planner precommits 200 candidate slots and requires at least 150
 accepted tasks, both locales, all option-count buckets 2–8, and all 12 domains.
-Its provider calls use only the dedicated USD 0.15 author and USD 0.25 reviewer
+Its provider calls use only the dedicated USD 0.35 author and USD 0.65 reviewer
 stage authorizations above. Comparison generation begins only after the
 checkpoint and holdout report are sealed. Failure to reach its minimum or fit
 its stage budget reports insufficient comparison evidence; it never spends a
@@ -475,6 +513,10 @@ tokenizer snapshot so exact capacity rejection occurs before acceptance. Run a
 small fake-transport exercise before any network call. Tests monkeypatch socket
 construction to prove that packet validation, training, capsule verification,
 and the installed backend have no network path.
+
+The immutable packet schema for this phase is v2 and uses the physically split
+train/dev, holdout, and identity-only payloads defined above. There is no
+fallback to the v1 combined `accepted.jsonl` in the production training path.
 
 ### Phase 4E.3: real checkpoint and runtime
 
@@ -544,6 +586,60 @@ uv run python benchmarks/inspect_wheel.py <wheel> <sdist>
 Phase-specific real commands must be added by Phase 4E.2 with explicit input
 and output directories under ignored `.artifacts/`; secrets must enter through
 the existing 1Password-backed environment boundary and never through argv.
+
+The checkout-only operational entry point is `python -m
+benchmarks.phase4e_pipeline`. It exposes the following no-clobber stages:
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline plan \
+  --output .artifacts/phase4e/plan.json
+
+# OPENROUTER_API_KEY is an ephemeral environment value supplied by `op run`.
+# It is never accepted as an argument, written to an artifact, or printed.
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
+  --plan .artifacts/phase4e/plan.json \
+  --snapshot <verified-minilm-snapshot> \
+  --work-dir .artifacts/phase4e/corpus-work \
+  --packet .artifacts/phase4e/accepted-packet \
+  --allow-network
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline extract \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <verified-minilm-snapshot> \
+  --device cpu \
+  --output .artifacts/phase4e/embedding-capsule
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline train \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <verified-minilm-snapshot> \
+  --embeddings .artifacts/phase4e/embedding-capsule \
+  --device cpu \
+  --output-parent .artifacts/phase4e/training \
+  --output-name saracura-universal-v0
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
+  --packet .artifacts/phase4e/accepted-packet \
+  --embeddings .artifacts/phase4e/embedding-capsule \
+  --training .artifacts/phase4e/training/saracura-universal-v0
+```
+
+`corpus` is the only network-capable stage. It requires the literal
+`--allow-network` flag, reads only `OPENROUTER_API_KEY`, uses the pinned HTTPS
+host with redirects and proxies disabled, persists the reservation ledger
+before each request, and records response digests rather than credentials. Its
+append-only work directory supports deterministic resume of completed task
+identities; an unresolved pre-send reservation fails conservatively instead of
+silently repeating a possibly charged request. Author batching never separates
+a planned cross-locale family, and every reviewer request contains exactly one
+validated row. At each required ten-batch boundary the command persists and
+applies the Wilson stop projection. It seals the packet only after all 1,600
+slots are resolved and every corpus minimum passes. `plan`, `extract`, `train`,
+and `verify` construct no socket.
+
+Revision v0 extraction and training are CPU-only so descriptor-bound
+re-derivation is byte-exact across processes. MPS is reserved for later runtime
+latency/conformance checks against the CPU-authored checkpoint; it cannot
+produce a second embedding capsule or a second holdout release.
 
 ## Rollout and rollback
 

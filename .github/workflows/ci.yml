@@ -113,9 +113,13 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      # Fake encoder and policy paths only: no MPS, model weights, provider,
-      # snapshot, or optional ML dependency is present in this job.
+      # Preserve the default-install boundary independently from the optional
+      # local MiniLM lane below.
       - run: uv sync --locked --dev
-      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py
-      - run: uv run python -m benchmarks.validate_manifests
       - run: uv run python benchmarks/validate_default_environment.py
+      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py tests/test_phase4e_pipeline.py
+      # Synthetic tensors only: the isolated ML extra is exercised without a
+      # model snapshot, provider, cache discovery, or MPS.
+      - run: uv sync --locked --dev --extra local-minilm
+      - run: uv run --extra local-minilm pytest -q tests/test_phase4e_training.py tests/test_phase4e_pipeline.py
+      - run: uv run python -m benchmarks.validate_manifests

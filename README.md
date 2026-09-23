@@ -190,6 +190,47 @@ therefore planned and unsupported until Phase 4E.3 seals a real synthetic-only
 checkpoint and it passes the reviewed holdout gate. Laya remains an external
 control, never a teacher, checkpoint source, or Saracura-owned model.
 
+### Phase 4E operator lane
+
+The checkout-only Phase 4E pipeline is explicit and offline-first. Its `plan`,
+`extract`, `train`, and `verify` commands construct no socket. Generated
+material stays under ignored `.artifacts/`; it is synthetic-only research
+evidence, not a runtime registration, quality claim, or automation authority.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline plan \
+  --output .artifacts/phase4e/plan.json
+
+# Only corpus can use the network. OPENROUTER_API_KEY is supplied ephemerally
+# by the operator environment; it is never an argument or an artifact.
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
+  --plan .artifacts/phase4e/plan.json \
+  --snapshot <verified-minilm-snapshot> \
+  --work-dir .artifacts/phase4e/corpus-work \
+  --packet .artifacts/phase4e/accepted-packet \
+  --allow-network
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline extract \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <verified-minilm-snapshot> --device cpu \
+  --output .artifacts/phase4e/embedding-capsule
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline train \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <verified-minilm-snapshot> \
+  --embeddings .artifacts/phase4e/embedding-capsule --device cpu \
+  --output-parent .artifacts/phase4e/training --output-name saracura-universal-v0
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
+  --packet .artifacts/phase4e/accepted-packet \
+  --embeddings .artifacts/phase4e/embedding-capsule \
+  --training .artifacts/phase4e/training/saracura-universal-v0
+```
+
+Corpus requests are pinned to OpenRouter HTTPS with redirects and proxies
+disabled. It uses the reviewed nonfungible USD 5.00 ceiling: USD 1.00 author,
+USD 3.00 reviewer, USD 0.35 comparison author, and USD 0.65 comparison
+reviewer. A durable pre-send reservation that cannot be resolved stops resume
+instead of repeating a potentially charged request.
+
 ## Phase 2C data and privacy gate
 
 Before any training packet can be authored, the repository validates the

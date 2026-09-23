@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -194,6 +194,42 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     assert "gold_position" in json.dumps(author_messages(slots))
 
 
+def test_reviewer_blindness_is_structural_and_preserves_legitimate_text() -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    author_row = _record(slot)
+    forbidden_words = "split axes pair_id gold_position selected_criterion_id"
+    author_row["instruction"] = f"Instruction mentions {forbidden_words}."
+    author_row["state"] = {"note": f"State mentions {forbidden_words}."}
+    author_row["criteria"][0]["description"] = f"Criterion mentions {forbidden_words}."
+    row = ValidatedAuthorRow.model_validate(
+        validate_author_rows([author_row], [slot], _Counter())[0]
+    )
+
+    payload = json.loads(reviewer_messages([row])[1]["content"])
+    task = payload["tasks"][0]
+    assert set(task) == {
+        "task_id",
+        "family_id",
+        "locale",
+        "domain",
+        "instruction",
+        "state",
+        "criteria",
+    }
+    assert forbidden_words in task["instruction"]
+    assert forbidden_words in task["state"]["note"]
+    assert forbidden_words in task["criteria"][0]["description"]
+    assert "selected_criterion_id" not in task
+    assert "split" not in task
+    assert "pair_id" not in task
+    assert "axes" not in task
+    assert "gold_position" not in task
+
+    cast(dict[str, Any], row.state)["invalid"] = object()
+    with pytest.raises(CorpusError, match="reviewer transport value"):
+        reviewer_messages([row])
+
+
 def test_verified_minilm_capacity_classification_resolves_every_preassigned_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -234,9 +270,20 @@ def test_review_rejects_disagreement_privacy_and_normalized_duplicates() -> None
     reviews = [_review(rows[0]), _review(rows[1], selected_criterion_id="route-0")]
     accepted, rejected = resolve_reviews(rows, reviews)
     assert len(accepted) == 1
-    assert rejected == [
-        {"task_id": rows[1]["task_id"], "split": rows[1]["split"], "reason": "review_disagreement"}
-    ]
+    assert rejected[0]["task_id"] == rows[1]["task_id"]
+    assert rejected[0]["split"] == rows[1]["split"]
+    assert rejected[0]["reason"] == "review_disagreement"
+    assert set(rejected[0]) == {
+        "task_id",
+        "split",
+        "reason",
+        "author_response_sha256",
+        "author_reservation_id",
+        "author_request_id",
+        "reviewer_response_sha256",
+        "reviewer_reservation_id",
+        "reviewer_request_id",
+    }
 
 
 def test_semantic_fingerprint_rejects_criterion_permutation_and_renaming_globally() -> None:
@@ -267,13 +314,11 @@ def test_semantic_fingerprint_rejects_criterion_permutation_and_renaming_globall
     assert semantic_fingerprint(candidate) == semantic_fingerprint(original)
     accepted, rejected = resolve_reviews([candidate], [review], prior_rows=[original])
     assert accepted == []
-    assert rejected == [
-        {
-            "task_id": candidate["task_id"],
-            "split": "synthetic_holdout",
-            "reason": "semantic_duplicate",
-        }
-    ]
+    assert rejected[0]["task_id"] == candidate["task_id"]
+    assert rejected[0]["split"] == "synthetic_holdout"
+    assert rejected[0]["reason"] == "semantic_duplicate"
+    assert rejected[0]["author_response_sha256"]
+    assert rejected[0]["reviewer_response_sha256"]
 
 
 def test_accepted_rows_are_closed_synthetic_and_bound_to_a_matching_review() -> None:
@@ -424,9 +469,65 @@ def test_budget_uses_larger_debit_and_never_borrows_stage_budget() -> None:
     ledger.record("corpus_author", "request-a", Decimal("0.01"), Decimal("0.02"), "a" * 64)
     assert ledger.spent("corpus_author") == Decimal("0.02")
     with pytest.raises(CorpusError, match="stage budget"):
-        ledger.reserve("corpus_author", Decimal("0.59"))
+        ledger.reserve("corpus_author", Decimal("0.99"))
     with pytest.raises(CorpusError, match="network"):
         OpenRouterCorpusClient()
+
+
+def test_packet_lineage_binds_accepted_and_rejected_rows_to_settled_journal() -> None:
+    slots = [slot for slot in build_plan()["slots"] if slot["pair_id"] is None][:2]
+    rows = validate_author_rows([_record(slot) for slot in slots], slots, _Counter())
+    ledger = BudgetLedger()
+    author_reservation = "reservation-" + "a" * 64
+    reviewer_reservations = {
+        row["task_id"]: "reservation-" + format(index + 1, "x") * 64
+        for index, row in enumerate(rows)
+    }
+    ledger.reserve_request("corpus_author", author_reservation, Decimal("0.01"))
+    ledger.settle_request(author_reservation, "author-request", Decimal(), "b" * 64)
+    ledger.record_provider_journal(
+        stage="corpus_author",
+        reservation_id=author_reservation,
+        task_ids=[row["task_id"] for row in rows],
+    )
+    author_lineage = corpus.lineage_from_journal(ledger.provider_journal[0], "author")
+    journalled_rows = [{**row, **author_lineage} for row in rows]
+    reviewer_lineages: dict[str, dict[str, str]] = {}
+    for index, row in enumerate(rows):
+        reservation_id = reviewer_reservations[row["task_id"]]
+        ledger.reserve_request("corpus_reviewer", reservation_id, Decimal("0.01"))
+        ledger.settle_request(
+            reservation_id,
+            f"reviewer-request-{index}",
+            Decimal(),
+            format(index + 2, "x") * 64,
+        )
+        ledger.record_provider_journal(
+            stage="corpus_reviewer", reservation_id=reservation_id, task_ids=[row["task_id"]]
+        )
+        reviewer_lineages[row["task_id"]] = corpus.lineage_from_journal(
+            ledger.provider_journal[-1], "reviewer"
+        )
+    disagreement = next(
+        criterion["id"]
+        for criterion in journalled_rows[1]["criteria"]
+        if criterion["id"] != journalled_rows[1]["selected_criterion_id"]
+    )
+    reviews = [
+        _review(journalled_rows[0]),
+        _review(journalled_rows[1], selected_criterion_id=disagreement),
+    ]
+    accepted, rejected = resolve_reviews(
+        journalled_rows, reviews, reviewer_lineages=reviewer_lineages
+    )
+    corpus._validate_provider_lineage(
+        ledger, accepted, rejected, {row["task_id"] for row in journalled_rows}
+    )
+    tampered = [{**accepted[0], "author_response_sha256": "0" * 64}]
+    with pytest.raises(CorpusError, match="accepted provider lineage"):
+        corpus._validate_provider_lineage(
+            ledger, tampered, rejected, {row["task_id"] for row in journalled_rows}
+        )
 
 
 def test_ledger_resume_snapshots_are_append_only(tmp_path: Path) -> None:
@@ -484,7 +585,7 @@ def test_reported_cost_and_terminal_overspend_are_persisted_before_raising(tmp_p
         method: str, url: str, headers: Mapping[str, str], body: bytes
     ) -> tuple[int, dict[str, str], bytes]:
         del method, url, headers, body
-        return 429, {}, b'{"id":"charged-request","usage":{"cost":"0.61"}}'
+        return 429, {}, b'{"id":"charged-request","usage":{"cost":"1.01"}}'
 
     ledger_directory = tmp_path / "ledger"
     client = OpenRouterCorpusClient(
@@ -498,8 +599,8 @@ def test_reported_cost_and_terminal_overspend_are_persisted_before_raising(tmp_p
         )
     snapshot = json.loads(sorted(ledger_directory.glob("ledger-*.json"))[-1].read_bytes())
     entry = snapshot["entries"][0]
-    assert entry["provider_cost_usd"] == "0.61"
-    assert entry["debit_usd"] == "0.61"
+    assert entry["provider_cost_usd"] == "1.01"
+    assert entry["debit_usd"] == "1.01"
     assert entry["status"] == "overspent"
     assert snapshot["stop_reason"] == "reported_provider_overspend"
     with pytest.raises(CorpusError, match="terminal overspend"):
@@ -519,7 +620,9 @@ def test_packet_is_validated_in_a_sibling_staging_directory_before_atomic_publis
             assert not packet.exists()
         assert {path.name for path in staged.iterdir()} == {
             "plan.json",
-            "accepted.jsonl",
+            "accepted-train-dev.jsonl",
+            "accepted-holdout.jsonl",
+            "holdout-identities.json",
             "rejected.jsonl",
             "ledger.json",
             "packet.json",
@@ -535,6 +638,95 @@ def test_packet_is_validated_in_a_sibling_staging_directory_before_atomic_publis
         corpus.seal_packet(packet, {}, [], [], {})
     assert receipt.read_bytes() == original
     assert not list(packet.parent.glob(f".{packet.name}.*"))
+
+
+def test_holdout_identity_projection_is_canonical_and_content_free() -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["split"] == "synthetic_holdout")
+    identity = corpus._identity_projection(_accepted_row(slot))
+    assert set(identity) == {
+        "task_id",
+        "family_id",
+        "pair_id",
+        "split",
+        "locale",
+        "domain",
+        "axes",
+        "option_count",
+        "gold_position",
+        "criterion_ids",
+    }
+    rendered = corpus._canonical(identity).decode("utf-8")
+    for forbidden in ("instruction", "state", "description", "review", "token", "embedding"):
+        assert f'"{forbidden}"' not in rendered
+
+
+def test_preholdout_packet_validator_never_opens_or_parses_holdout_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = build_plan()
+    train_slot = next(
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_train" and slot["pair_id"] is None
+    )
+    holdout_slot = next(
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_holdout" and slot["pair_id"] is None
+    )
+    train = _accepted_row(train_slot)
+    holdout = _accepted_row(holdout_slot)
+    packet = tmp_path / "packet"
+    packet.mkdir()
+    files = {
+        "plan.json": corpus._canonical({"slots": [train_slot, holdout_slot]}) + b"\n",
+        "accepted-train-dev.jsonl": corpus._jsonl([train]),
+        "accepted-holdout.jsonl": corpus._jsonl([holdout]),
+        "holdout-identities.json": corpus._canonical(
+            {
+                "schema_version": "phase4e-holdout-identities.v1",
+                "rows": [corpus._identity_projection(holdout)],
+            }
+        )
+        + b"\n",
+        "rejected.jsonl": b"",
+        "ledger.json": corpus._canonical(corpus.BudgetLedger().as_json()) + b"\n",
+    }
+    for name, raw in files.items():
+        (packet / name).write_bytes(raw)
+    (packet / "packet.json").write_bytes(
+        corpus._canonical(
+            {
+                "schema_version": "phase4e-accepted-packet.v2",
+                "sealed": True,
+                "files": {name: corpus._sha(raw) for name, raw in files.items()},
+            }
+        )
+        + b"\n"
+    )
+    holdout_path = (packet / "accepted-holdout.jsonl").resolve()
+    holdout_raw = files["accepted-holdout.jsonl"]
+    original_read_bytes = Path.read_bytes
+    original_json_loads = json.loads
+    opened: list[Path] = []
+
+    def tracked_read_bytes(path: Path) -> bytes:
+        if path.resolve() == holdout_path:
+            opened.append(path)
+        return original_read_bytes(path)
+
+    def guarded_json_loads(value: object, *args: object, **kwargs: object) -> object:
+        if value == holdout_raw:
+            raise AssertionError("preclaim parsed accepted holdout")
+        return original_json_loads(cast(str | bytes | bytearray, value), *args, **cast(Any, kwargs))
+
+    monkeypatch.setattr(corpus, "validate_plan", lambda _plan: None)
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
+    monkeypatch.setattr(corpus, "_validate_provider_lineage", lambda *args: None)
+    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+    monkeypatch.setattr(json, "loads", guarded_json_loads)
+    corpus.validate_accepted_packet_pre_holdout(packet)
+    assert not opened
 
 
 @pytest.mark.parametrize("kind", ["failure", "timeout", "invalid"])

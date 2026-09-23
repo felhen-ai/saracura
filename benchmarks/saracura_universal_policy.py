@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from benchmarks.data_policy_registry import load_bundled_registry
+from benchmarks.data_policy_registry import (
+    Phase4EUniversalSyntheticException,
+    load_bundled_registry,
+)
 
 ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json"
+STAGE_LIMITS = {
+    "corpus_author": Decimal("1.00"),
+    "corpus_reviewer": Decimal("3.00"),
+    "comparison_author": Decimal("0.35"),
+    "comparison_reviewer": Decimal("0.65"),
+}
+TOTAL_BUDGET = Decimal("5.00")
 
 
 class Phase4EPolicyError(ValueError):
@@ -39,6 +50,7 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         "source_policy_exception_id",
         "base_encoder",
         "ranker",
+        "training",
         "provider",
         "budget",
         "capacity",
@@ -68,6 +80,19 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         "dynamic_label_bias": False,
     }:
         raise Phase4EPolicyError("ranker policy is invalid")
+    if policy["training"] != {
+        "seed": 20260923,
+        "optimizer": "AdamW",
+        "learning_rate": 0.02,
+        "weight_decay": 0.01,
+        "batch_size": 16,
+        "maximum_epochs": 40,
+        "early_stopping_patience": 8,
+        "cpu_threads": 1,
+        "selection_metric": "stratified_macro_accuracy.v1",
+        "dev_improvement_over_baseline": 0.03,
+    }:
+        raise Phase4EPolicyError("training policy is invalid")
     if policy["provider"] != {
         "host": "openrouter.ai",
         "author_model": "qwen/qwen3.5-9b",
@@ -77,11 +102,11 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     }:
         raise Phase4EPolicyError("provider policy is invalid")
     if policy["budget"] != {
-        "total_usd": 2.0,
-        "author_usd": 0.6,
-        "reviewer_usd": 1.0,
-        "comparison_author_usd": 0.15,
-        "comparison_reviewer_usd": 0.25,
+        "total_usd": 5.0,
+        "author_usd": 1.0,
+        "reviewer_usd": 3.0,
+        "comparison_author_usd": 0.35,
+        "comparison_reviewer_usd": 0.65,
     }:
         raise Phase4EPolicyError("budget policy is invalid")
     if policy["capacity"] != {
@@ -139,6 +164,21 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     }:
         raise Phase4EPolicyError("authorization policy is invalid")
     registry = load_bundled_registry()
-    if registry.exceptions[1].id != policy["source_policy_exception_id"]:
+    exception = registry.exceptions[1]
+    if (
+        not isinstance(exception, Phase4EUniversalSyntheticException)
+        or exception.id != policy["source_policy_exception_id"]
+    ):
         raise Phase4EPolicyError("source-policy exception is not bound")
+    budget = policy["budget"]
+    manifest_total = budget["total_usd"]
+    stage_total = sum(STAGE_LIMITS.values())
+    if (
+        type(manifest_total) is not float
+        or exception.spend_ceiling_usd != 5.0
+        or manifest_total != exception.spend_ceiling_usd
+        or stage_total != TOTAL_BUDGET
+        or Decimal(str(manifest_total)) != stage_total
+    ):
+        raise Phase4EPolicyError("Phase 4E budget equivalence is invalid")
     return policy

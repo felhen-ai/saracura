@@ -6,7 +6,9 @@ open safetensors or permit a fixture/random tensor payload to look trained.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+import math
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -68,3 +70,34 @@ def validate_checkpoint_descriptor(value: object) -> CheckpointDescriptor:
     """Validate metadata; actual weights stay unavailable until Phase 4E.3."""
 
     return CheckpointDescriptor.model_validate(value)
+
+
+def verify_checkpoint_tensors(tensors: Mapping[str, Any]) -> None:
+    """Check the closed Phase 4E decision-layer state without importing ML packages.
+
+    Callers own safetensors decoding.  Keeping this verifier structural makes
+    default imports lightweight and prevents a checkpoint from smuggling base
+    encoder, optimizer, or Laya state through a future loader.
+    """
+
+    if set(tensors) != set(_TENSOR_SHAPES):
+        raise ValueError("checkpoint tensor set is not closed")
+    for name, expected_shape in _TENSOR_SHAPES.items():
+        value = tensors[name]
+        shape = tuple(getattr(value, "shape", ()))
+        dtype = str(getattr(value, "dtype", "")).replace("torch.", "")
+        if shape != expected_shape or dtype != "float32":
+            raise ValueError("checkpoint tensor contract is invalid")
+        try:
+            finite = bool(value.isfinite().all().item())
+        except (AttributeError, TypeError, ValueError) as error:
+            raise ValueError("checkpoint tensor contract is invalid") from error
+        if not finite:
+            raise ValueError("checkpoint tensor is non-finite")
+    scale = tensors["log_scale"]
+    try:
+        log_scale = float(scale.reshape(-1)[0].item())
+    except (AttributeError, IndexError, TypeError, ValueError) as error:
+        raise ValueError("checkpoint log scale is invalid") from error
+    if not math.isfinite(log_scale) or not -4.0 <= log_scale <= 4.0:
+        raise ValueError("checkpoint log scale is invalid")
