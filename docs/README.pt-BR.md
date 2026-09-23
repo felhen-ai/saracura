@@ -49,6 +49,10 @@ O inglês é o idioma canônico da documentação técnica. O quickstart, os exe
 
 Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
 
+## Arquitetura de pesquisa em duas camadas
+
+Saracura está seguindo uma única API de decisões tipadas com duas camadas de execução. A camada experimental `universal` deve aceitar novos schemas Choice sem exigir que usuários adotem pacotes de modelos predefinidos ou heads específicos por tarefa. A camada opcional `compiled` especializa decisões estáveis e de alto volume quando essa otimização se justifica. A primeira implementação universal continua experimental, nenhum modelo está aprovado para produção e resultados não autorizam automação. TypeSafe/Jev é referência de benchmark e de design, não uma dependência de runtime ou fallback do Saracura. Veja o [ADR 0001](decisions/0001-two-tier-decision-architecture.md).
+
 ## Instalação e validação
 
 É necessário usar Python 3.11+ e [uv](https://docs.astral.sh/uv/).
