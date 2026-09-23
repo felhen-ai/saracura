@@ -57,6 +57,9 @@ class FakeUniversalBackend:
     def model(self) -> ModelReference:
         return self._model
 
+    def validate_request(self, request: DecisionRequest) -> None:
+        del request
+
     def score_universal_choice(
         self,
         request: DecisionRequest,

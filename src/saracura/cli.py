@@ -1,15 +1,20 @@
-"""Local-only v1alpha1 CLI for the fixture and explicit MiniLM research path."""
+"""Local-only v1alpha1 CLI for explicit research-only backends."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, Literal, Never, cast
 
-from saracura.backends import DeterministicFixtureBackend, MiniLMRoutingBackend
+from saracura.backends import (
+    DeterministicFixtureBackend,
+    LayaUniversalBackend,
+    MiniLMRoutingBackend,
+)
 from saracura.calibration import (
     ResearchCalibrationArtifact,
     create_identity_calibration,
@@ -17,6 +22,7 @@ from saracura.calibration import (
     validate_calibration_compatibility,
 )
 from saracura.contracts import ErrorCode, SaracuraError, parse_request_json
+from saracura.laya_snapshot import load_laya_candidate
 from saracura.runtime import (
     MINILM_ROUTING_WORKFLOW_ID,
     MINILM_ROUTING_WORKFLOW_REVISION,
@@ -53,6 +59,10 @@ def _add_minilm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", choices=("mps", "cpu"))
 
 
+def _add_laya_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--model-snapshot", type=Path)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _NonExitingArgumentParser(prog="saracura")
     commands = parser.add_subparsers(
@@ -62,18 +72,22 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     decide = commands.add_parser("decide", help="run a local research-only backend")
-    decide.add_argument("--backend", choices=("fixture", "minilm-routing"), default="fixture")
+    decide.add_argument(
+        "--backend", choices=("fixture", "minilm-routing", "laya-universal"), default="fixture"
+    )
     decide.add_argument("--request", type=Path, required=True)
-    decide.add_argument("--calibration", type=Path, required=True)
+    decide.add_argument("--calibration", type=Path)
     decide.add_argument("--timing", action="store_true")
     _add_minilm_arguments(decide)
+    _add_laya_arguments(decide)
 
     describe = commands.add_parser(
         "describe-backend",
         help="load a local backend and emit its public immutable reference",
     )
-    describe.add_argument("--backend", choices=("minilm-routing",), required=True)
+    describe.add_argument("--backend", choices=("minilm-routing", "laya-universal"), required=True)
     _add_minilm_arguments(describe)
+    _add_laya_arguments(describe)
 
     identity = commands.add_parser(
         "create-identity-calibration",
@@ -114,10 +128,35 @@ def _require_minilm_arguments(values: argparse.Namespace) -> MiniLMRoutingBacken
     )
 
 
+def _require_laya_arguments(values: argparse.Namespace) -> LayaUniversalBackend:
+    if values.model_snapshot is None or values.device is None:
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "Laya universal commands require an explicit local snapshot and device.",
+            "/",
+        )
+    if getattr(values, "calibration", None) is not None or any(
+        getattr(values, name, None) is not None
+        for name in ("encoder_snapshot", "training_manifest", "checkpoint", "training_capsule")
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "Laya universal commands reject calibration and MiniLM-only arguments.",
+            "/backend",
+        )
+    return LayaUniversalBackend(model_snapshot=values.model_snapshot, device=values.device)
+
+
 def _backend_for_decide(
     values: argparse.Namespace,
-) -> DeterministicFixtureBackend | MiniLMRoutingBackend:
+) -> DeterministicFixtureBackend | MiniLMRoutingBackend | LayaUniversalBackend:
     if values.backend == "fixture":
+        if values.calibration is None:
+            raise SaracuraError(
+                ErrorCode.REQUEST_INVALID,
+                "Fixture decisions require a calibration artifact.",
+                "/calibration",
+            )
         if any(
             getattr(values, name, None) is not None
             for name in (
@@ -126,6 +165,7 @@ def _backend_for_decide(
                 "checkpoint",
                 "training_capsule",
                 "device",
+                "model_snapshot",
             )
         ):
             raise SaracuraError(
@@ -134,7 +174,92 @@ def _backend_for_decide(
                 "/backend",
             )
         return DeterministicFixtureBackend()
+    if values.backend == "laya-universal":
+        return _require_laya_arguments(values)
+    if values.calibration is None:
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "MiniLM decisions require a calibration artifact.",
+            "/calibration",
+        )
+    if values.model_snapshot is not None:
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "MiniLM decisions reject Laya-only arguments.",
+            "/backend",
+        )
     return _require_minilm_arguments(values)
+
+
+def _prevalidate_request(
+    request_path: Path, *, execution_tier: Literal["compiled", "universal"]
+) -> tuple[Any, bytes]:
+    """Validate every request-only Laya gate before optional backend construction."""
+
+    request = parse_request_json(read_public_external_file(request_path, maximum=MAX_REQUEST_BYTES))
+    if execution_tier == "compiled" and len(request.questions) != 1:
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "The local CLI accepts one calibration artifact and one question.",
+            "/questions",
+        )
+    default_workflows().validate(request, execution_tier=execution_tier)
+    if request.model in {"latest", "main", "master"}:
+        raise SaracuraError(
+            ErrorCode.MODEL_ALIAS_FORBIDDEN,
+            "The immutable model revision is not available.",
+            "/model",
+        )
+    state_payload = serialize_state(request)
+    if len(state_payload) > MAX_STATE_PAYLOAD_BYTES:
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "Serialized state exceeds the research runtime byte limit.",
+            "/state",
+            details={"max_bytes": MAX_STATE_PAYLOAD_BYTES},
+        )
+    if execution_tier == "universal":
+        if not _is_nfc(request.state) or not all(
+            _is_nfc(value)
+            for value in (
+                request.locale,
+                request.domain,
+                *(question.instruction for question in request.questions),
+                *(
+                    criterion.id
+                    for question in request.questions
+                    for criterion in question.criteria
+                ),
+                *(
+                    criterion.description
+                    for question in request.questions
+                    for criterion in question.criteria
+                ),
+            )
+        ):
+            raise SaracuraError(
+                ErrorCode.REQUEST_INVALID, "Universal input must already be NFC.", "/"
+            )
+        candidate = load_laya_candidate()
+        if request.model != candidate.model_revision:
+            raise SaracuraError(
+                ErrorCode.MODEL_NOT_FOUND,
+                "The immutable model revision is not available.",
+                "/model",
+            )
+    return request, state_payload
+
+
+def _is_nfc(value: object) -> bool:
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value) == value
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_nfc(key) and _is_nfc(child) for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return all(_is_nfc(child) for child in value)
+    return True
 
 
 def _run_decide(
@@ -148,32 +273,10 @@ def _run_decide(
     ) = None,
 ) -> int:
     try:
-        request = parse_request_json(
-            read_public_external_file(request_path, maximum=MAX_REQUEST_BYTES)
-        )
-        if len(request.questions) != 1:
-            raise SaracuraError(
-                ErrorCode.REQUEST_INVALID,
-                "The local CLI accepts one calibration artifact and one question.",
-                "/questions",
-            )
+        request, _state_payload = _prevalidate_request(request_path, execution_tier="compiled")
         # This is deliberately request-only validation.  It must complete
         # before the optional backend can import ML packages, inspect a device,
         # or open a model/weight path.
-        default_workflows().validate(request)
-        if request.model in {"latest", "main", "master"}:
-            raise SaracuraError(
-                ErrorCode.MODEL_ALIAS_FORBIDDEN,
-                "The immutable model revision is not available.",
-                "/model",
-            )
-        if len(serialize_state(request)) > MAX_STATE_PAYLOAD_BYTES:
-            raise SaracuraError(
-                ErrorCode.REQUEST_INVALID,
-                "Serialized state exceeds the research runtime byte limit.",
-                "/state",
-                details={"max_bytes": MAX_STATE_PAYLOAD_BYTES},
-            )
         # The sole envelope read classifies the lane and, for v2, verifies the
         # bundled trust receipt.  It runs before constructing MiniLM and is
         # retained for later compatibility validation without a reread.
@@ -231,19 +334,88 @@ def _run_decide(
 
 
 def _run_describe(values: argparse.Namespace) -> int:
-    backend = _require_minilm_arguments(values)
-    payload: dict[str, Any] = {
-        "model": backend.model.model_dump(mode="json"),
-        "architecture_config_sha256": backend.calibration_metadata.architecture_config_sha256,
-        "execution_path": backend.execution_path,
+    if values.backend == "laya-universal":
+        backend = _require_laya_arguments(values)
+        try:
+            backend.prepare()
+            payload = {
+                "model": backend.model.model_dump(mode="json"),
+                "execution_tier": "universal",
+                "workflow": {
+                    "id": "universal-choice",
+                    "revision": "phase4d-laya.v1",
+                    "locales": ["pt-BR", "en"],
+                    "question_type": "choice",
+                    "questions": {"minimum": 1, "maximum": 10},
+                    "criteria_per_question": {"minimum": 2, "maximum": 20},
+                },
+                "capacity": {
+                    "input_tokens_maximum": 1024,
+                    "decision_head_prefix_tokens_maximum": 256,
+                    "microbatch_questions": 1,
+                },
+                "response": {
+                    "status": "uncalibrated",
+                    "score_semantics": "ranking_weights",
+                    "abstained": True,
+                    "calibration": None,
+                    "automation_allowed": False,
+                },
+                "runtime_disposition": "research_only_unresolved_provenance",
+            }
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        finally:
+            backend.close()
+    if values.model_snapshot is not None:
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "MiniLM commands reject Laya-only arguments.",
+            "/backend",
+        )
+    minilm_backend = _require_minilm_arguments(values)
+    minilm_payload: dict[str, Any] = {
+        "model": minilm_backend.model.model_dump(mode="json"),
+        "architecture_config_sha256": (
+            minilm_backend.calibration_metadata.architecture_config_sha256
+        ),
+        "execution_path": minilm_backend.execution_path,
         "workflow": {
             "id": MINILM_ROUTING_WORKFLOW_ID,
             "revision": MINILM_ROUTING_WORKFLOW_REVISION,
         },
         "identity_profile": PHASE4A_IDENTITY_PROFILE.model_dump(mode="json"),
     }
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(minilm_payload, ensure_ascii=False, sort_keys=True))
     return 0
+
+
+def _run_laya_decide(values: argparse.Namespace) -> int:
+    """Run the explicit Laya lane, constructing it only after request-only gates."""
+
+    try:
+        request, _state_payload = _prevalidate_request(values.request, execution_tier="universal")
+        backend = _require_laya_arguments(values)
+        try:
+            response = DecisionEngine(
+                backend=backend,
+                workflows=default_workflows(),
+                calibrations={},
+            ).decide(request, include_timing=values.timing)
+            print(response.model_dump_json(indent=2, exclude_none=False))
+            return 0
+        finally:
+            backend.close()
+    except FileNotFoundError:
+        public = SaracuraError(ErrorCode.REQUEST_INVALID, "Input file was not found.", "/")
+    except SaracuraError as error:
+        public = error
+    except OSError:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Local input could not be read.", "/")
+    except Exception:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Unexpected internal error.", "/")
+    _print_error(public)
+    return 2
 
 
 def _run_create_identity(values: argparse.Namespace) -> int:
@@ -285,11 +457,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         values = _parser().parse_args(argv)
         if values.command == "decide":
+            if values.backend == "laya-universal":
+                return _run_laya_decide(values)
+            if values.calibration is None:
+                raise SaracuraError(
+                    ErrorCode.REQUEST_INVALID,
+                    "Fixture and MiniLM decisions require a calibration artifact.",
+                    "/calibration",
+                )
             return _run_decide(
                 values.request,
                 values.calibration,
                 values.timing,
-                backend_factory=lambda: _backend_for_decide(values),
+                backend_factory=lambda: cast(
+                    DeterministicFixtureBackend | MiniLMRoutingBackend,
+                    _backend_for_decide(values),
+                ),
             )
         if values.command == "describe-backend":
             return _run_describe(values)

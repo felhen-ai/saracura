@@ -228,6 +228,8 @@ class DecisionEngine:
                 "/calibration",
             )
         self._workflows.validate(request, execution_tier)
+        if execution_tier == "universal":
+            cast(UniversalBackend, self._backend).validate_request(request)
 
         encoding_started = perf_counter()
         state_payload = serialize_state(request)

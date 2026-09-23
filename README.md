@@ -45,9 +45,10 @@ English is the canonical language for technical documentation. The quickstart, p
 - fail-closed schema-cache keys with complete canonical schema bytes and revision axes
 - immutable, fail-closed calibration artifacts
 - local in-process runtime and CLI
+- one opt-in experimental `laya-universal` backend for the exact dynamic Choice workflow
 - opt-in research lanes for encoder acquisition, synthetic head training, human PT-BR calibration, and external controls
 
-Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
+Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels outside the exact experimental Phase 4D Choice workflow, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
 ## Two-tier research architecture
 
@@ -148,6 +149,34 @@ single frozen support-routing workflow. It is deliberately fixture_only: it has
 no fitted data, no evaluation claim, no threshold, and never authorizes
 automation. Apple MPS is explicit, has no CPU fallback, and is an operator
 choice rather than a default.
+
+## Phase 4D experimental universal Choice
+
+`laya-universal` is an opt-in local, research-only backend for the single
+dynamic `universal-choice@phase4d-laya.v1` Choice workflow. It requires the
+isolated optional dependency group, an operator-supplied immutable local Laya
+snapshot, and an explicit CPU or MPS device; it never downloads, discovers, or
+contacts a model provider. The synthetic PT-BR request in
+[`examples/ptbr-universal-request.json`](examples/ptbr-universal-request.json)
+uses e-mail triage only as the next shadow-mode pilot and contains no mailbox
+data.
+
+```bash
+uv sync --locked --dev --extra universal-local
+uv run saracura describe-backend --backend laya-universal \
+  --model-snapshot <verified-local-laya-snapshot> --device cpu
+uv run saracura decide --backend laya-universal \
+  --request examples/ptbr-universal-request.json \
+  --model-snapshot <verified-local-laya-snapshot> --device cpu
+```
+
+The response is explicitly `uncalibrated`, `abstained`, and
+`automation_allowed=false`. Its normalized values are ranking weights, not
+confidence or a permission to archive, delete, move, reply, forward, or make
+any other mailbox change. The candidate remains
+`research_only_unresolved_provenance`; a successful local smoke demonstrates
+execution compatibility only, not quality, calibration, licensing, or
+production readiness.
 
 ## Phase 2C data and privacy gate
 

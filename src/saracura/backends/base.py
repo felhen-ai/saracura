@@ -76,6 +76,8 @@ class UniversalBackend(Protocol):
     @property
     def model(self) -> ModelReference: ...
 
+    def validate_request(self, request: DecisionRequest) -> None: ...
+
     def score_universal_choice(
         self,
         request: DecisionRequest,

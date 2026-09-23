@@ -8,6 +8,14 @@ from typing import Annotated, Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[a-z0-9][a-z0-9._-]*$")]
+ModelIdentifier = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)?$",
+    ),
+]
 Revision = Annotated[str, Field(min_length=1, max_length=256)]
 Locale = Annotated[
     str, Field(min_length=2, max_length=35, pattern=r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
@@ -108,7 +116,7 @@ class Answer(ClosedModel):
 
 
 class ModelReference(ClosedModel):
-    id: Identifier
+    id: ModelIdentifier
     revision: Revision
     checkpoint_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 

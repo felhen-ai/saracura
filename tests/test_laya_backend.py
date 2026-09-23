@@ -6,6 +6,8 @@ import hashlib
 import os
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -14,7 +16,7 @@ import pytest
 from pydantic import JsonValue
 
 from benchmarks import inspect_wheel
-from saracura.backends.laya import render_laya_choice
+from saracura.backends.laya import LayaUniversalBackend, render_laya_choice
 from saracura.contracts import (
     ChoiceCriterion,
     ChoiceQuestion,
@@ -31,6 +33,7 @@ from saracura.laya_snapshot import (
     load_laya_candidate,
     verify_laya_snapshot,
 )
+from saracura.runtime import DecisionEngine, default_workflows
 from saracura.runtime.workflows import (
     UNIVERSAL_CHOICE_WORKFLOW_ID,
     UNIVERSAL_CHOICE_WORKFLOW_REVISION,
@@ -102,6 +105,20 @@ def test_renderer_preserves_order_and_never_truncates() -> None:
     assert rendered.input_ids[rendered.marker_positions[0]] == 103
     assert rendered.input_ids[rendered.marker_positions[1]] == 103
     assert rendered.marker_positions == tuple(sorted(rendered.marker_positions))
+    assert rendered.input_tokens <= 1024
+
+
+def test_renderer_accepts_description_over_old_benchmark_cap_when_total_fits() -> None:
+    request = _request()
+    question = request.questions[0]
+    criteria = (
+        question.criteria[0].model_copy(update={"description": "x" * 49}),
+        question.criteria[1],
+    )
+    rendered = render_laya_choice(
+        ByteTokenizer(), request, question.model_copy(update={"criteria": criteria})
+    )
+
     assert rendered.input_tokens <= 1024
 
 
@@ -301,3 +318,69 @@ def test_default_import_does_not_load_optional_ml_modules() -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_backend_construction_defers_snapshot_and_ml_until_after_engine_gates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    verified = False
+
+    def forbidden_verify(_path: Path) -> LayaSnapshotReceipt:
+        nonlocal verified
+        verified = True
+        raise AssertionError("invalid request must not inspect the snapshot")
+
+    monkeypatch.setattr("saracura.backends.laya.verify_laya_snapshot", forbidden_verify)
+    request = _request()
+    template = request.questions[0]
+    questions = tuple(template.model_copy(update={"id": f"triage-{index}"}) for index in range(11))
+    backend = LayaUniversalBackend(model_snapshot=tmp_path / "missing", device="cpu")
+    try:
+        with pytest.raises(SaracuraError) as captured:
+            DecisionEngine(
+                backend=backend,
+                workflows=default_workflows(),
+                calibrations={},
+            ).decide(request.model_copy(update={"questions": questions}))
+        with pytest.raises(SaracuraError) as nfc_error:
+            DecisionEngine(
+                backend=backend,
+                workflows=default_workflows(),
+                calibrations={},
+            ).decide(_request(state={"na\u0303o": "valor"}))
+    finally:
+        backend.close()
+
+    assert captured.value.payload.code == ErrorCode.CARDINALITY_EXCEEDED
+    assert nfc_error.value.payload.code == ErrorCode.REQUEST_INVALID
+    assert verified is False
+
+
+def test_backend_prepare_serializes_concurrent_load_attempts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    backend = LayaUniversalBackend(model_snapshot=tmp_path / "missing", device="cpu")
+    state_lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def observed_load() -> None:
+        nonlocal active, maximum_active
+        with state_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.01)
+        with state_lock:
+            active -= 1
+
+    monkeypatch.setattr(backend, "_ensure_loaded_locked", observed_load)
+    threads = [threading.Thread(target=backend.prepare) for _ in range(8)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        backend.close()
+
+    assert maximum_active == 1

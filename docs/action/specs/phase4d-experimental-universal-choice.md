@@ -150,6 +150,8 @@ The CLI parses and validates the request, model alias, dynamic workflow, questio
 
 Add a compact PT-BR universal request example using synthetic e-mail-like content and labels such as `action_required`, `billing_or_accounting`, `marketing_or_newsletter`, and `low_value_or_spam`. It must contain no real address, message, company correspondence, personal data, secret, or mailbox identifier. English and PT-BR README sections explain the opt-in command, the uncalibrated/abstained response, optional dependency, explicit local snapshot requirement, and prohibition on automation.
 
+Reconcile `AGENTS.md` with ADR 0001 and this reviewed increment by replacing its earlier blanket compiled-only runtime restriction with one narrow exception for the exact Phase 4D backend and workflow. The policy must keep every other question-conditioned candidate checkout-only and bind the exception to opt-in local execution, no truncation, uncalibrated abstention, and no automation. This update does not authorize another universal backend or product path.
+
 ## Implementation phases
 
 ### Phase 4D.1: tier and response contracts
@@ -177,6 +179,7 @@ Wire the opt-in CLI and backend description, add the synthetic PT-BR example and
 9. A deterministic fake universal backend proves dynamic PT-BR and English Choice schemas, declared criterion-order preservation, exact score-key validation, finite-score validation, usage accounting, and response semantics without ML dependencies.
 10. The bilingual documentation and synthetic example make the research-only, uncalibrated, no-automation boundary visible and identify e-mail triage only as the next shadow-mode pilot.
 11. If the existing local Laya snapshot is available, a no-network CPU or MPS smoke returns one structurally valid universal response. The result supports only local execution compatibility and is not committed as quality evidence.
+12. Repository policy and both public READMEs no longer claim that every installed backend is compiled or that all dynamic Choice labels are absent; they document only the exact reviewed Phase 4D exception without widening the product boundary.
 
 ## Validation
 
