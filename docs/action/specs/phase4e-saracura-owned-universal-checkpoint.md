@@ -176,9 +176,11 @@ route the new manifest by its exact schema version.
 
 The Phase 4E exception uses the same already authorized OpenRouter author and
 reviewer identities unless a current preflight invalidates their availability,
-pricing ceiling, or provider policy. The operator's authorization for this
-phase is bounded to the USD 5.00 new-spend ceiling below, within the previously
-identified OpenRouter credit; exceeding it requires a new authorization:
+pricing ceiling, or provider policy. The operator's current authorization for
+this execution is bounded to the USD 10.00 new-spend safety envelope below.
+This guards against runaway spend; it is not a product budget or a reason to
+abandon useful work. It may be increased by explicit operator agreement when
+execution evidence shows that more is needed:
 
 - author: `qwen/qwen3.5-9b`;
 - reviewer: `mistralai/ministral-8b-2512`.
@@ -261,12 +263,15 @@ minimum only when both are accepted.
 The provider lane keeps explicit network authorization, ZDR/data-collection
 controls, no secrets in argv/logs/artifacts, atomic no-clobber writes, resumable
 cost ledger, bounded retries, and record-level author/reviewer response hashes.
-Phase 4E has a new-spend ceiling of USD 5.00, partitioned into four nonfungible
-stages: USD 1.00 corpus author, USD 3.00 corpus reviewer, USD 0.35 comparison
-author, and USD 0.65 comparison reviewer. At the reviewed ceilings of USD
-0.12/M input and USD 0.20/M output for the author, and USD 0.20/M input and USD
-0.60/M output for the reviewer, the planned maximum payload and retry envelope
-must calculate to no more than each stage limit before the first request.
+The current Phase 4E execution has a USD 10.00 new-spend safety envelope,
+partitioned into four nonfungible stages: USD 2.00 corpus author, USD 6.00
+corpus reviewer, USD 0.75 comparison author, and USD 1.25 comparison reviewer.
+This envelope prevents an unattended runaway; it is not a hard project ceiling
+and may be raised through explicit operator agreement. At the reviewed ceilings
+of USD 0.12/M input and USD 0.20/M output for the author, and USD 0.20/M input
+and USD 0.60/M output for the reviewer, the planned maximum payload and retry
+envelope must calculate to no more than each stage limit before the first
+request.
 Provider-reported costs and conservative local worst-case debits both enter the
 new Phase 4E ledger; the larger debit governs. Prior Phase 3B/4C spend remains
 immutable historical evidence and is not reset or charged to this new
@@ -447,7 +452,7 @@ outputs cannot change Saracura weights, renderer, thresholds, or dataset.
 
 The comparison planner precommits 200 candidate slots and requires at least 150
 accepted tasks, both locales, all option-count buckets 2–8, and all 12 domains.
-Its provider calls use only the dedicated USD 0.35 author and USD 0.65 reviewer
+Its provider calls use only the dedicated USD 0.75 author and USD 1.25 reviewer
 stage authorizations above. Comparison generation begins only after the
 checkpoint and holdout report are sealed. Failure to reach its minimum or fit
 its stage budget reports insufficient comparison evidence; it never spends a

@@ -15,12 +15,12 @@ from benchmarks.data_policy_registry import (
 ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json"
 STAGE_LIMITS = {
-    "corpus_author": Decimal("1.00"),
-    "corpus_reviewer": Decimal("3.00"),
-    "comparison_author": Decimal("0.35"),
-    "comparison_reviewer": Decimal("0.65"),
+    "corpus_author": Decimal("2.00"),
+    "corpus_reviewer": Decimal("6.00"),
+    "comparison_author": Decimal("0.75"),
+    "comparison_reviewer": Decimal("1.25"),
 }
-TOTAL_BUDGET = Decimal("5.00")
+TOTAL_BUDGET = Decimal("10.00")
 
 
 class Phase4EPolicyError(ValueError):
@@ -102,11 +102,11 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     }:
         raise Phase4EPolicyError("provider policy is invalid")
     if policy["budget"] != {
-        "total_usd": 5.0,
-        "author_usd": 1.0,
-        "reviewer_usd": 3.0,
-        "comparison_author_usd": 0.35,
-        "comparison_reviewer_usd": 0.65,
+        "total_usd": 10.0,
+        "author_usd": 2.0,
+        "reviewer_usd": 6.0,
+        "comparison_author_usd": 0.75,
+        "comparison_reviewer_usd": 1.25,
     }:
         raise Phase4EPolicyError("budget policy is invalid")
     if policy["capacity"] != {
@@ -175,7 +175,7 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     stage_total = sum(STAGE_LIMITS.values())
     if (
         type(manifest_total) is not float
-        or exception.spend_ceiling_usd != 5.0
+        or exception.spend_ceiling_usd != 10.0
         or manifest_total != exception.spend_ceiling_usd
         or stage_total != TOTAL_BUDGET
         or Decimal(str(manifest_total)) != stage_total

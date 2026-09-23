@@ -247,9 +247,9 @@ def test_phase4e_policy_and_phase3b_exception_are_closed_and_bound() -> None:
 
     assert policy["source_policy_exception_id"] == registry.exceptions[1].id
     assert isinstance(registry.exceptions[1], Phase4EUniversalSyntheticException)
-    assert registry.exceptions[1].spend_ceiling_usd == 5.0
-    assert policy["budget"]["total_usd"] == 5.0
-    assert sum(STAGE_LIMITS.values()) == TOTAL_BUDGET == Decimal("5.00")
+    assert registry.exceptions[1].spend_ceiling_usd == 10.0
+    assert policy["budget"]["total_usd"] == 10.0
+    assert sum(STAGE_LIMITS.values()) == TOTAL_BUDGET == Decimal("10.00")
     assert phase3b["workflow_revision"] == synthetic_policy["workflow_revision"]
     assert phase3b["author_model"] == synthetic_policy["author_model"]
     assert phase3b["reviewer_model"] == synthetic_policy["reviewer_model"]

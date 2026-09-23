@@ -469,7 +469,7 @@ def test_budget_uses_larger_debit_and_never_borrows_stage_budget() -> None:
     ledger.record("corpus_author", "request-a", Decimal("0.01"), Decimal("0.02"), "a" * 64)
     assert ledger.spent("corpus_author") == Decimal("0.02")
     with pytest.raises(CorpusError, match="stage budget"):
-        ledger.reserve("corpus_author", Decimal("0.99"))
+        ledger.reserve("corpus_author", Decimal("1.99"))
     with pytest.raises(CorpusError, match="network"):
         OpenRouterCorpusClient()
 
@@ -585,7 +585,7 @@ def test_reported_cost_and_terminal_overspend_are_persisted_before_raising(tmp_p
         method: str, url: str, headers: Mapping[str, str], body: bytes
     ) -> tuple[int, dict[str, str], bytes]:
         del method, url, headers, body
-        return 429, {}, b'{"id":"charged-request","usage":{"cost":"1.01"}}'
+        return 429, {}, b'{"id":"charged-request","usage":{"cost":"2.01"}}'
 
     ledger_directory = tmp_path / "ledger"
     client = OpenRouterCorpusClient(
@@ -599,8 +599,8 @@ def test_reported_cost_and_terminal_overspend_are_persisted_before_raising(tmp_p
         )
     snapshot = json.loads(sorted(ledger_directory.glob("ledger-*.json"))[-1].read_bytes())
     entry = snapshot["entries"][0]
-    assert entry["provider_cost_usd"] == "1.01"
-    assert entry["debit_usd"] == "1.01"
+    assert entry["provider_cost_usd"] == "2.01"
+    assert entry["debit_usd"] == "2.01"
     assert entry["status"] == "overspent"
     assert snapshot["stop_reason"] == "reported_provider_overspend"
     with pytest.raises(CorpusError, match="terminal overspend"):
