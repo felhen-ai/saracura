@@ -249,12 +249,23 @@ def _response_content(response: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(content, str):
         raise corpus.CorpusError("provider response content type")
     try:
-        value = json.loads(content)
+        value = json.loads(content, object_pairs_hook=_unique_json_object)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise corpus.CorpusError("provider response JSON") from error
     if not isinstance(value, dict):
         raise corpus.CorpusError("provider response content")
     return cast(dict[str, Any], value)
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate provider keys instead of silently accepting the last value."""
+
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError("duplicate provider JSON key")
+        value[key] = child
+    return value
 
 
 def _openrouter_transport() -> Transport:

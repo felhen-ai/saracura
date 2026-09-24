@@ -168,6 +168,19 @@ def _completion(payload: dict[str, Any], *, cost: str = "0") -> tuple[int, dict[
     )
 
 
+def _raw_completion(content: str, *, cost: str = "0") -> tuple[int, dict[str, str], bytes]:
+    return (
+        200,
+        {},
+        json.dumps(
+            {
+                "usage": {"cost": cost},
+                "choices": [{"message": {"content": content}}],
+            }
+        ).encode(),
+    )
+
+
 def _author_wire(slots: list[dict[str, Any]]) -> dict[str, Any]:
     wire: dict[str, Any] = {}
     for index, slot in enumerate(slots):
@@ -206,7 +219,7 @@ def _reviewer_payload(
                 "selected_criterion_id": f"criterion-{selected}",
                 "reason_codes": [],
                 "natural_language": True,
-                "fictional": True,
+                "generic_or_invented": True,
                 "exclusive_options": True,
                 "private_or_sensitive": False,
                 "semantic_equivalence_attestation": {
@@ -241,7 +254,7 @@ def test_registry_v1_bytes_stay_bound_and_v2_is_pilot_only() -> None:
 
 
 def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path) -> None:
-    output = tmp_path / "pilot-plan-v4" / "plan.json"
+    output = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(output)
     plan = json.loads(output.read_bytes())
     pilot.validate_pilot_plan(plan)
@@ -302,17 +315,40 @@ def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path)
         AcceptedPacketRow.model_validate({"split": "protocol_pilot"})
 
 
-def test_pilot_reviewer_uses_content_only_fictionality_rule() -> None:
+def test_pilot_reviewer_uses_genericity_wire_contract() -> None:
     system = pilot._pilot_reviewer_system()
     assert "observable content-safety flag" in system
-    assert "only from instruction, state.summary" in system
+    assert "generic_or_invented and private_or_sensitive only from instruction" in system
     assert "Ignore task_id, criterion IDs, locale, domain" in system
     assert "trusted routing metadata" in system
     assert "name without an observable real-world anchor" in system
     assert "do not search" in system
     assert "require external provenance" in system
-    assert "fictional=false only when the evaluated content" in system
+    assert "generic_or_invented=false" in system
+    assert "fictional=" not in system
     assert "do not treat provenance or stated synthetic intent as proof" not in system
+
+    schema = pilot.pilot_reviewer_schema(1)
+    item = schema["properties"]["reviews"]["items"]
+    assert "generic_or_invented" in item["properties"]
+    assert "generic_or_invented" in item["required"]
+    assert "fictional" not in item["properties"]
+    assert "fictional" not in item["required"]
+
+    task_id = pilot.build_plan()["slots"][0]["task_id"]
+    payload = _reviewer_payload(
+        pilot.build_plan()["slots"][0], disagree_answer=False, disagree_scenario=False
+    )["reviews"][0]
+    bound = pilot.bind_pilot_reviewer_record(payload, task_id)
+    assert bound["fictional"] is True
+    assert "generic_or_invented" not in bound
+    for invalid in (
+        {key: value for key, value in payload.items() if key != "generic_or_invented"},
+        {**payload, "generic_or_invented": "yes"},
+        {**payload, "fictional": True},
+    ):
+        with pytest.raises(corpus.CorpusError, match="genericity schema"):
+            pilot.bind_pilot_reviewer_record(invalid, task_id)
 
 
 def test_v2_ledger_reports_cost_without_enforcing_a_ceiling(tmp_path: Path) -> None:
@@ -557,7 +593,7 @@ def test_spend_below_baseline_refuses_before_transport(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "low", debit_delta=Decimal("-0.00000001"))
-    plan = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan)
     monkeypatch.setenv("OPENROUTER_API_KEY", "pilot-secret")
 
@@ -569,8 +605,8 @@ def test_spend_below_baseline_refuses_before_transport(
         pilot.run_pilot(
             plan,
             None,
-            tmp_path / "pilot-work-v4",
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
             root,
             allow_network=True,
             transport=transport,
@@ -588,20 +624,20 @@ def test_pilot_without_opt_in_constructs_no_socket(
     )
     with pytest.raises(corpus.CorpusError, match="literal --allow-network"):
         pilot.run_pilot(
-            tmp_path / "pilot-plan-v4" / "plan.json",
+            tmp_path / "pilot-plan-v5" / "plan.json",
             None,
-            tmp_path / "pilot-work-v4",
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
             tmp_path / "root",
             allow_network=False,
             counter=_Counter(),
         )
 
 
-def test_v3_paths_are_rejected_before_ledger_or_transport(
+def test_pre_v5_paths_are_rejected_before_ledger_or_transport(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plan = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan)
 
     def forbidden(*args: object, **kwargs: object) -> object:
@@ -612,11 +648,18 @@ def test_v3_paths_are_rejected_before_ledger_or_transport(
     cases = (
         (
             tmp_path / "pilot-plan-v3" / "plan.json",
-            tmp_path / "pilot-work-v4",
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
         ),
-        (plan, tmp_path / "pilot-work-v3", tmp_path / "pilot-report-v4"),
-        (plan, tmp_path / "pilot-work-v4", tmp_path / "pilot-report-v3"),
+        (
+            tmp_path / "pilot-plan-v4" / "plan.json",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
+        ),
+        (plan, tmp_path / "pilot-work-v3", tmp_path / "pilot-report-v5"),
+        (plan, tmp_path / "pilot-work-v4", tmp_path / "pilot-report-v5"),
+        (plan, tmp_path / "pilot-work-v5", tmp_path / "pilot-report-v3"),
+        (plan, tmp_path / "pilot-work-v5", tmp_path / "pilot-report-v4"),
     )
     for plan_path, work_dir, report_dir in cases:
         with pytest.raises(corpus.CorpusError, match="pilot artifact path"):
@@ -657,7 +700,7 @@ def test_fake_transport_passes_with_diagnostic_semantic_disagreement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     plan = json.loads(plan_path.read_bytes())
     by_id = {slot["task_id"]: slot for slot in plan["slots"]}
@@ -703,8 +746,8 @@ def test_fake_transport_passes_with_diagnostic_semantic_disagreement(
     report_path = pilot.run_pilot(
         plan_path,
         None,
-        tmp_path / "pilot-work-v4",
-        tmp_path / "pilot-report-v4",
+        tmp_path / "pilot-work-v5",
+        tmp_path / "pilot-report-v5",
         root,
         allow_network=True,
         transport=transport,
@@ -730,7 +773,7 @@ def test_settled_malformed_review_retries_and_cost_only_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     plan = json.loads(plan_path.read_bytes())
     by_id = {slot["task_id"]: slot for slot in plan["slots"]}
@@ -752,7 +795,10 @@ def test_settled_malformed_review_retries_and_cost_only_reports(
             return _completion(wire, cost="0.10")
         reviewer_calls += 1
         if reviewer_calls == 1:
-            return _completion({}, cost="0.10")
+            return _raw_completion(
+                '{"reviews":[{"generic_or_invented":true,"generic_or_invented":false}]}',
+                cost="0.10",
+            )
         slot = by_id[message["tasks"][0]["task_id"]]
         return _completion(
             _reviewer_payload(slot, disagree_answer=False, disagree_scenario=False),
@@ -763,8 +809,8 @@ def test_settled_malformed_review_retries_and_cost_only_reports(
         pilot.run_pilot(
             plan_path,
             None,
-            tmp_path / "pilot-work-v4",
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
             root,
             allow_network=True,
             transport=transport,
@@ -792,7 +838,7 @@ def test_settled_http_error_is_not_retried_and_other_pairs_continue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     plan = json.loads(plan_path.read_bytes())
     by_id = {slot["task_id"]: slot for slot in plan["slots"]}
@@ -820,8 +866,8 @@ def test_settled_http_error_is_not_retried_and_other_pairs_continue(
         pilot.run_pilot(
             plan_path,
             None,
-            tmp_path / "pilot-work-v4",
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
             root,
             allow_network=True,
             transport=transport,
@@ -842,7 +888,7 @@ def test_fake_transport_resolves_all_140_without_wilson_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     plan = json.loads(plan_path.read_bytes())
     by_id = {slot["task_id"]: slot for slot in plan["slots"]}
@@ -870,8 +916,8 @@ def test_fake_transport_resolves_all_140_without_wilson_stop(
         pilot.run_pilot(
             plan_path,
             None,
-            tmp_path / "pilot-work-v4",
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-work-v5",
+            tmp_path / "pilot-report-v5",
             root,
             allow_network=True,
             transport=transport,
@@ -895,7 +941,7 @@ def test_uncertain_transport_is_terminal_and_inconclusive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "pilot-secret")
     calls = 0
@@ -906,13 +952,13 @@ def test_uncertain_transport_is_terminal_and_inconclusive(
         calls += 1
         raise RuntimeError("rate limited")
 
-    work = tmp_path / "pilot-work-v4"
+    work = tmp_path / "pilot-work-v5"
     first = json.loads(
         pilot.run_pilot(
             plan_path,
             None,
             work,
-            tmp_path / "first" / "pilot-report-v4",
+            tmp_path / "first" / "pilot-report-v5",
             root,
             allow_network=True,
             transport=transport,
@@ -927,7 +973,7 @@ def test_uncertain_transport_is_terminal_and_inconclusive(
             plan_path,
             None,
             work,
-            tmp_path / "second" / "pilot-report-v4",
+            tmp_path / "second" / "pilot-report-v5",
             root,
             allow_network=True,
             transport=transport,
@@ -942,11 +988,11 @@ def test_resume_never_replays_a_settled_call_without_resolution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     plan = json.loads(plan_path.read_bytes())
     pair = plan["slots"][:2]
-    work = tmp_path / "pilot-work-v4"
+    work = tmp_path / "pilot-work-v5"
     ledger = corpus.BudgetLedger(policy=corpus.PILOT_LEDGER_POLICY)
     reservation_id = "reservation-" + "a" * 64
     ledger.reserve_request(pilot.AUTHOR_STAGE, reservation_id, Decimal("0.01"))
@@ -971,7 +1017,7 @@ def test_resume_never_replays_a_settled_call_without_resolution(
             plan_path,
             None,
             work,
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-report-v5",
             root,
             allow_network=True,
             transport=forbidden_transport,
@@ -988,7 +1034,7 @@ def test_resume_restores_persisted_diagnostics_without_another_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
     plan = json.loads(plan_path.read_bytes())
     by_id = {slot["task_id"]: slot for slot in plan["slots"]}
@@ -1017,13 +1063,13 @@ def test_resume_restores_persisted_diagnostics_without_another_call(
             )
         )
 
-    work = tmp_path / "pilot-work-v4"
+    work = tmp_path / "pilot-work-v5"
     first = json.loads(
         pilot.run_pilot(
             plan_path,
             None,
             work,
-            tmp_path / "first" / "pilot-report-v4",
+            tmp_path / "first" / "pilot-report-v5",
             root,
             allow_network=True,
             transport=first_transport,
@@ -1048,7 +1094,7 @@ def test_resume_restores_persisted_diagnostics_without_another_call(
             plan_path,
             None,
             work,
-            tmp_path / "second" / "pilot-report-v4",
+            tmp_path / "second" / "pilot-report-v5",
             root,
             allow_network=True,
             transport=forbidden_transport,
@@ -1063,9 +1109,9 @@ def test_orphan_diagnostics_fail_closed_without_transport(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _baseline_root(tmp_path / "root")
-    plan_path = tmp_path / "pilot-plan-v4" / "plan.json"
+    plan_path = tmp_path / "pilot-plan-v5" / "plan.json"
     pilot.write_pilot_plan(plan_path)
-    work = tmp_path / "pilot-work-v4"
+    work = tmp_path / "pilot-work-v5"
     diagnostics = work / "diagnostics"
     diagnostics.mkdir(parents=True)
     (diagnostics / ("call-" + "0" * 64 + ".json")).write_text("{}\n")
@@ -1080,7 +1126,7 @@ def test_orphan_diagnostics_fail_closed_without_transport(
             plan_path,
             None,
             work,
-            tmp_path / "pilot-report-v4",
+            tmp_path / "pilot-report-v5",
             root,
             allow_network=True,
             transport=forbidden_transport,

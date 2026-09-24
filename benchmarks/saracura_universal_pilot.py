@@ -31,10 +31,11 @@ ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-policy.v1.json"
 RECOVERY_POLICY_V2_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v2.json"
 RECOVERY_POLICY_V3_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v3.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v4.json"
+RECOVERY_POLICY_V4_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v4.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v5.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v4"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v5"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
@@ -109,7 +110,8 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _pilot_reviewer_system() -> str:
     return (
         "Return a JSON object whose sole top-level key is reviews, one review with status, "
-        "chosen criterion ID, reason codes, four quality flags, and independent "
+        "chosen criterion ID, reason codes, the quality flags natural_language, "
+        "generic_or_invented, exclusive_options, and private_or_sensitive, plus independent "
         "semantic_equivalence_attestation. Accepted reviews require reason_codes=[]. "
         + corpus.SCENARIO_CODEBOOK
         + " "
@@ -118,16 +120,19 @@ def _pilot_reviewer_system() -> str:
         "Choose the single scenario that directly explains the decision, ignoring merely "
         "incidental wording. Attest one scenario, distinct ordered roles, and "
         "selected_role=matches_rule at the chosen position. Select one criterion or reject. "
-        "Evaluate fictional and private_or_sensitive only from instruction, state.summary, and "
+        "Evaluate generic_or_invented and private_or_sensitive only from instruction, "
+        "state.summary, and "
         "criteria[].description. Ignore task_id, criterion IDs, locale, domain, and JSON field "
-        "names for both judgments; they are trusted routing metadata. Treat fictional as an "
-        "observable content-safety flag, not a claim about hidden author intent. A name without "
+        "names for both judgments; they are trusted routing metadata. Treat generic_or_invented "
+        "as an observable content-safety flag, not a claim about hidden author intent. A name "
+        "without "
         "an observable real-world anchor must be treated as generic or invented: do not search, "
         "speculate about name collisions, require external provenance, or require an explicit "
-        "synthetic declaration. Set fictional=true when the evaluated content has no URL, account "
+        "synthetic declaration. Set generic_or_invented=true when the evaluated content has no "
+        "URL, account "
         "handle, credential, exact private address, official registration, known public-entity "
-        "claim, private record, or claim tied to a real record. Set fictional=false only when the "
-        "evaluated content visibly contains one of those real-world anchors. "
+        "claim, private record, or claim tied to a real record. Set generic_or_invented=false "
+        "only when the evaluated content visibly contains one of those real-world anchors. "
         "exclusive_options=true only if exactly one criterion is best. Check language, "
         "sufficiency, privacy, and sensitive patterns. You do not receive answer, author "
         "attestation, family, pair, gold position, sibling, or split metadata."
@@ -290,14 +295,14 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "review_protocol",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v4",
+        "schema_version": "phase4e-protocol-pilot-recovery.v5",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
         "cost_mode": "report_only",
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
-        "review_protocol": "content-fields-only.v1",
+        "review_protocol": "genericity-wire-field.v1",
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -412,7 +417,7 @@ def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
                 stage=REVIEWER_STAGE,
                 model=REVIEWER_MODEL,
                 messages=pilot_reviewer_messages(_boundary_row(slot)),
-                response_schema=corpus.reviewer_schema(1),
+                response_schema=pilot_reviewer_schema(1),
                 max_output_tokens=REVIEWER_MAX_OUTPUT_TOKENS,
                 author_stage=AUTHOR_STAGE,
                 author_model=AUTHOR_MODEL,
@@ -523,6 +528,31 @@ def pilot_reviewer_messages(row: Mapping[str, Any]) -> list[dict[str, str]]:
     ]
 
 
+def pilot_reviewer_schema(batch_size: int) -> dict[str, Any]:
+    """Use an observable provider field while preserving the internal review contract."""
+
+    schema = corpus.reviewer_schema(batch_size)
+    reviews = cast(dict[str, Any], cast(dict[str, Any], schema["properties"])["reviews"])
+    item = cast(dict[str, Any], reviews["items"])
+    properties = cast(dict[str, Any], item["properties"])
+    properties["generic_or_invented"] = properties.pop("fictional")
+    required = cast(list[str], item["required"])
+    item["required"] = [
+        "generic_or_invented" if field == "fictional" else field for field in required
+    ]
+    return schema
+
+
+def bind_pilot_reviewer_record(record: Mapping[str, Any], task_id: str) -> dict[str, Any]:
+    """Map the pilot wire-only genericity field into the stable internal field."""
+
+    if "fictional" in record or type(record.get("generic_or_invented")) is not bool:
+        raise corpus.CorpusError("review record genericity schema")
+    normalized = dict(record)
+    normalized["fictional"] = normalized.pop("generic_or_invented")
+    return corpus.bind_reviewer_record(normalized, task_id)
+
+
 def pilot_acceptance(row: Mapping[str, Any], review: corpus.ReviewerRecord) -> str | None:
     """Pilot acceptance keeps answer and quality gates and ignores semantic mismatch."""
 
@@ -603,7 +633,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v4")
+    _require_component(output, "pilot-plan-v5")
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1083,7 +1113,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v4",
+        "schema_version": "phase4e-protocol-pilot-report.v5",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1239,9 +1269,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v4")
-    _require_component(work_dir, "pilot-work-v4")
-    _require_component(report_dir, "pilot-report-v4")
+    _require_component(plan_path, "pilot-plan-v5")
+    _require_component(work_dir, "pilot-work-v5")
+    _require_component(report_dir, "pilot-report-v5")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
@@ -1500,7 +1530,7 @@ def _run_pilot_batch(
                     stage=REVIEWER_STAGE,
                     model=REVIEWER_MODEL,
                     messages=review_body,
-                    response_schema=corpus.reviewer_schema(1),
+                    response_schema=pilot_reviewer_schema(1),
                     max_output_tokens=REVIEWER_MAX_OUTPUT_TOKENS,
                     api_key=api_key,
                     task_ids=[task_id],
@@ -1527,7 +1557,7 @@ def _run_pilot_batch(
                     or not isinstance(raw_reviews[0], dict)
                 ):
                     raise corpus.CorpusError("review response")
-                review = corpus.bind_reviewer_record(cast(dict[str, Any], raw_reviews[0]), task_id)
+                review = bind_pilot_reviewer_record(cast(dict[str, Any], raw_reviews[0]), task_id)
                 if attempt:
                     diagnostics["retry_recoveries"] += 1
                 break

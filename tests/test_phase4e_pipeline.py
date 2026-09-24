@@ -139,6 +139,20 @@ def test_response_content_ignores_reasoning_without_retaining_it() -> None:
         )
     assert finish_marker not in str(malformed.value)
 
+    with pytest.raises(corpus.CorpusError, match=r"^provider response JSON$"):
+        pipeline._response_content(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"reviews":[{"generic_or_invented":true,'
+                            '"generic_or_invented":false}]}'
+                        }
+                    }
+                ]
+            }
+        )
+
 
 def test_fake_transport_has_pinned_shape_and_does_not_store_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
