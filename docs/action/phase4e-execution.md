@@ -106,3 +106,21 @@ The remaining ambiguity is now narrower. The answer-blind payload necessarily in
 The interrupted run has 46 settled ledger entries and one open reservation because interruption occurred while reading a provider response. Settled provider-reported cost was USD 0.02153594 and settled conservative debit was USD 0.19660007; the open reservation remains conservatively accounted for and must never be replayed. Its work tree was copied create-only to `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v3`, and the post-copy inventory SHA-256 is `0fef1659be91b467e5fe59fbf04cb24e35e5ee3f8de54377b88c8e75374a7d5c`.
 
 V3 is `INCONCLUSIVE` by interruption and is not resumable. Phase 4E.3 remains blocked until a new create-only protocol resolves all 140 tasks and reaches `PASS`.
+
+## V4 diagnostic outcome
+
+V4 excluded routing metadata from the quality judgment and defined observable real-world anchors. It still produced 10 `review_quality_fictional` rejections across the first five pairs, then stopped `INCONCLUSIVE` after a transport-uncertain author call. The other 130 tasks were not attempted. The run reported USD 0.00709627 in settled provider cost and USD 0.06954541 in conservative debit; cumulative totals became USD 0.94893737 provider-reported and USD 6.38257483 conservative.
+
+This result eliminates both reviewed hypotheses about instruction wording and routing IDs. The remaining failure is the response field itself: a boolean named `fictional` asks the model for an epistemic conclusion even when the intended decision is an observable genericity/safety check. The next protocol must expose `generic_or_invented` to the provider and map that field locally into the existing internal `fictional` compatibility field. The provider schema and exact prompt remain plan-bound, while downstream acceptance remains unchanged.
+
+The work tree was copied create-only to the durable research root at `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v4`. The sealed evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan | `00f2f88f8722d09142fdae946a37a3b4951dad265739a6815b5b34b351c530b5` |
+| post-copy research inventory | `b613e6f0afcdf2f7763c53ff18277c43104875251a878ac573082ef22d969c9e` |
+| report-declared ledger | `d0dbca4c51cd8ebced5f104049c7ce72887812c2388eb09702ed968ea50834ca` |
+| sealed report file | `b391e00f241aa78354c138eb6a7d570f188a1e1b2be9ce3282810a980d814f0a` |
+| sealed ledger file | `0d2314472ee30c5627f07eea51bc41812e57a4f5d55385e1c874b33f716894f8` |
+
+V4 is not resumable because its ledger contains one transport-uncertain call. Phase 4E.3 remains blocked pending a complete `PASS`.
