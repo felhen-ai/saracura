@@ -2912,6 +2912,8 @@ def provider_request_bytes(
     author_model: str,
     provider_override: Mapping[str, Any] | None = None,
     author_reasoning_effort: str | None = "none",
+    reviewer_temperature: int | float | None = 0,
+    reviewer_reasoning: Mapping[str, Any] | None = None,
 ) -> bytes:
     """Canonical provider body shared by preflight and transport."""
 
@@ -2919,7 +2921,6 @@ def provider_request_bytes(
         "model": model,
         "messages": list(messages),
         "max_tokens": max_output_tokens,
-        "temperature": 0,
         "provider": dict(provider_override)
         if provider_override is not None
         else provider_preferences(stage),
@@ -2932,6 +2933,13 @@ def provider_request_bytes(
             },
         },
     }
+    temperature = reviewer_temperature if stage != author_stage else 0
+    if temperature is not None:
+        if type(temperature) not in {int, float} or not math.isfinite(float(temperature)):
+            raise CorpusError("provider temperature")
+        request["temperature"] = temperature
+    if stage != author_stage and reviewer_reasoning is not None:
+        request["reasoning"] = dict(reviewer_reasoning)
     if stage == author_stage and model == author_model and author_reasoning_effort is not None:
         request["reasoning_effort"] = author_reasoning_effort
     return _canonical(request)
@@ -2954,6 +2962,8 @@ class OpenRouterCorpusClient:
         reviewer_model: str = REVIEWER_MODEL,
         provider_preferences_by_stage: Mapping[str, Mapping[str, Any]] | None = None,
         author_reasoning_effort: str | None = "none",
+        reviewer_temperature: int | float | None = 0,
+        reviewer_reasoning: Mapping[str, Any] | None = None,
     ) -> None:
         if not allow_network or transport is None:
             raise CorpusError("network requires explicit injected transport")
@@ -2976,6 +2986,10 @@ class OpenRouterCorpusClient:
             for stage, preferences in (provider_preferences_by_stage or {}).items()
         }
         self.author_reasoning_effort = author_reasoning_effort
+        self.reviewer_temperature = reviewer_temperature
+        self.reviewer_reasoning = (
+            dict(reviewer_reasoning) if reviewer_reasoning is not None else None
+        )
         self._transport = transport
         self._ledger_directory = ledger_directory
         self._last_journal: dict[str, Any] | None = None
@@ -3083,6 +3097,8 @@ class OpenRouterCorpusClient:
             author_model=self.author_model,
             provider_override=self.provider_preferences_by_stage.get(stage),
             author_reasoning_effort=self.author_reasoning_effort,
+            reviewer_temperature=self.reviewer_temperature,
+            reviewer_reasoning=self.reviewer_reasoning,
         )
         prices = (
             None

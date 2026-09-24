@@ -35,10 +35,11 @@ RECOVERY_POLICY_V4_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-re
 RECOVERY_POLICY_V5_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v5.json"
 RECOVERY_POLICY_V6_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v6.json"
 RECOVERY_POLICY_V7_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v7.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v8.json"
+RECOVERY_POLICY_V8_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v8.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v9.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v8"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v9"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
@@ -52,7 +53,9 @@ PILOT_PROVIDER_POLICY = {
     "zdr": True,
 }
 AUTHOR_MAX_OUTPUT_TOKENS = 1024
-REVIEWER_MAX_OUTPUT_TOKENS = 192
+REVIEWER_MAX_OUTPUT_TOKENS = 512
+PILOT_REVIEWER_TEMPERATURE = None
+PILOT_REVIEWER_REASONING = {"effort": "minimal", "exclude": True}
 _BOUNDARY = "\U0001f9ea"
 _BOUNDARY_STATE_CODEPOINTS = 180
 _AUTHOR_LINEAGE = (
@@ -309,9 +312,10 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "models",
         "provider_policy",
         "transport_timeout_seconds",
+        "reviewer_request",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v8",
+        "schema_version": "phase4e-protocol-pilot-recovery.v9",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
@@ -333,6 +337,11 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         },
         "provider_policy": PILOT_PROVIDER_POLICY,
         "transport_timeout_seconds": PILOT_TRANSPORT_TIMEOUT_SECONDS,
+        "reviewer_request": {
+            "max_output_tokens": REVIEWER_MAX_OUTPUT_TOKENS,
+            "temperature": PILOT_REVIEWER_TEMPERATURE,
+            "reasoning": PILOT_REVIEWER_REASONING,
+        },
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -426,6 +435,11 @@ def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
                 "author_model": PILOT_AUTHOR_MODEL,
                 "reviewer_model": PILOT_REVIEWER_MODEL,
                 "provider_policy": PILOT_PROVIDER_POLICY,
+                "reviewer_request": {
+                    "max_output_tokens": REVIEWER_MAX_OUTPUT_TOKENS,
+                    "temperature": PILOT_REVIEWER_TEMPERATURE,
+                    "reasoning": PILOT_REVIEWER_REASONING,
+                },
                 "reviewer_system": _pilot_reviewer_system(),
             }
         )
@@ -465,6 +479,8 @@ def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
                 author_model=PILOT_AUTHOR_MODEL,
                 provider_override=PILOT_PROVIDER_POLICY,
                 author_reasoning_effort=None,
+                reviewer_temperature=PILOT_REVIEWER_TEMPERATURE,
+                reviewer_reasoning=PILOT_REVIEWER_REASONING,
             )
             reviewer_total += corpus.request_worst_case(
                 REVIEWER_STAGE,
@@ -680,6 +696,7 @@ def build_plan() -> dict[str, Any]:
         },
         "provider_policy_sha256": _sha(_canonical(PILOT_PROVIDER_POLICY)),
         "transport_timeout_seconds": PILOT_TRANSPORT_TIMEOUT_SECONDS,
+        "reviewer_request": recovery["reviewer_request"],
         "domain_scenario_map_sha256": _sha(_canonical(policy["domain_scenario_map"])),
         "slots": slots,
         "cost_estimate": {
@@ -703,7 +720,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v8", file_path=True)
+    _require_component(output, "pilot-plan-v9", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1185,7 +1202,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v8",
+        "schema_version": "phase4e-protocol-pilot-report.v9",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1341,9 +1358,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v8", file_path=True)
-    _require_component(work_dir, "pilot-work-v8")
-    _require_component(report_dir, "pilot-report-v8")
+    _require_component(plan_path, "pilot-plan-v9", file_path=True)
+    _require_component(work_dir, "pilot-work-v9")
+    _require_component(report_dir, "pilot-report-v9")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
@@ -1392,6 +1409,8 @@ def run_pilot(
             REVIEWER_STAGE: PILOT_PROVIDER_POLICY,
         },
         author_reasoning_effort=None,
+        reviewer_temperature=PILOT_REVIEWER_TEMPERATURE,
+        reviewer_reasoning=PILOT_REVIEWER_REASONING,
     )
     maximum_attempts = cast(int, recovery["maximum_attempts_per_request"])
     report_interval = Decimal(cast(str, recovery["cost_report_interval_usd"]))

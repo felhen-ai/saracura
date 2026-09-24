@@ -45,7 +45,7 @@ def test_phase4c_manifests_route_through_closed_validators() -> None:
 
 def test_phase4e_recovery_manifests_route_through_closed_validators(tmp_path: Path) -> None:
     root = Path(__file__).parents[1] / "benchmarks/manifests"
-    for version in range(2, 9):
+    for version in range(2, 10):
         source = root / f"phase4e-protocol-pilot-recovery.v{version}.json"
         validate_routed_manifest(source)
 

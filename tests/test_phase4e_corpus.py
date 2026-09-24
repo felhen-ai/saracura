@@ -1399,6 +1399,8 @@ def test_reviewer_transport_omits_unsupported_reasoning_effort_and_is_answer_bli
     assert captured["body"]["provider"] == corpus.provider_preferences("corpus_reviewer")
     # CoreWeave's pinned Llama endpoint does not advertise this parameter.
     assert "reasoning_effort" not in captured["body"]
+    assert captured["body"]["temperature"] == 0
+    assert "reasoning" not in captured["body"]
     messages = captured["body"]["messages"]
     assert messages == reviewer_messages([row])
     reviewer_prompt = messages[1]["content"]
