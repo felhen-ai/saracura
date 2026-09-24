@@ -389,6 +389,12 @@ def test_author_rejection_reasons_are_durable_and_content_free() -> None:
         assert usable == []
         assert rejected == [{"task_id": slot["task_id"], "split": slot["split"], "reason": reason}]
 
+    usable, rejected = classify_author_rows([{}], [slot], _Counter())
+    assert usable == []
+    assert rejected[0]["reason"].startswith(
+        "author_record_schema__instruction:missing_state:missing_criteria:missing_"
+    )
+
 
 def test_author_schema_reason_never_persists_provider_controlled_extra_key() -> None:
     slot = next(
@@ -435,8 +441,9 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
         "scenario": {"type": "string", "enum": [target["scenario"]]},
         "criterion_roles": {
             "type": "array",
-            "enum": [target["criterion_roles"]],
-            "items": {"type": "string"},
+            "prefixItems": [
+                {"type": "string", "enum": [role]} for role in target["criterion_roles"]
+            ],
             "minItems": pair[0]["option_count"],
             "maxItems": pair[0]["option_count"],
         },

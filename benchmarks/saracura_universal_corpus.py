@@ -748,8 +748,9 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
             "scenario": {"type": "string", "enum": [target["scenario"]]},
             "criterion_roles": {
                 "type": "array",
-                "enum": [target["criterion_roles"]],
-                "items": {"type": "string"},
+                "prefixItems": [
+                    {"type": "string", "enum": [role]} for role in target["criterion_roles"]
+                ],
                 "minItems": option_count,
                 "maxItems": option_count,
             },
@@ -1246,7 +1247,7 @@ def _bounded_contract_reason(prefix: str, message: str) -> str:
 def _known_contract_path(path: str) -> str:
     """Map provider-influenced validation locations to a static taxonomy."""
 
-    if path in {"instruction", "state.summary", "selected_index"}:
+    if path in {"instruction", "state", "state.summary", "criteria", "selected_index"}:
         return path
     if re.fullmatch(r"criteria\.\d+\.description", path):
         return "criteria.description"
