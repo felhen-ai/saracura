@@ -6,8 +6,13 @@ import json
 from pathlib import Path
 
 from benchmarks.data_policy_registry import load_registry as load_data_policy_registry
+from benchmarks.data_policy_registry import load_registry_v2 as load_data_policy_registry_v2
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
+from benchmarks.saracura_universal_pilot import (
+    validate_pilot_policy,
+    validate_spend_baseline,
+)
 from benchmarks.saracura_universal_policy import validate_phase4e_policy
 from benchmarks.synthetic_research import validate_synthetic_policy
 from benchmarks.universal_bakeoff import load_candidate_registry, load_plan
@@ -59,6 +64,15 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "training-data-source-policies.v1":
         load_data_policy_registry(raw)
+        return
+    if schema_version == "training-data-source-policies.v2":
+        load_data_policy_registry_v2(raw)
+        return
+    if schema_version == "phase4e-protocol-pilot-policy.v1":
+        validate_pilot_policy(path)
+        return
+    if schema_version == "phase4e-spend-baseline.v1":
+        validate_spend_baseline(path)
         return
     if schema_version == "support-routing-protocol.v1":
         validate_protocol_bytes(raw)

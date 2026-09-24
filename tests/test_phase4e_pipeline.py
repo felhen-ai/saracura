@@ -14,6 +14,16 @@ import pytest
 from benchmarks import phase4e_pipeline as pipeline
 from benchmarks import saracura_universal_corpus as corpus
 from benchmarks import saracura_universal_training as training
+from benchmarks.saracura_universal_policy import (
+    require_phase4e_authorization as _REAL_REQUIRE_PHASE4E_AUTHORIZATION,
+)
+
+
+@pytest.fixture(autouse=True)
+def historical_corpus_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the frozen historical engine below the current policy gate."""
+
+    monkeypatch.setattr(pipeline, "require_phase4e_authorization", lambda _action: {})
 
 
 @pytest.fixture
@@ -60,6 +70,38 @@ def test_corpus_requires_literal_network_opt_in_before_environment_or_io(
     captured = capsys.readouterr()
     assert "literal --allow-network" in captured.err
     assert secret not in captured.err + captured.out
+    assert not (tmp_path / "work").exists()
+
+
+def test_current_policy_blocks_corpus_after_network_opt_in_before_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "require_phase4e_authorization",
+        _REAL_REQUIRE_PHASE4E_AUTHORIZATION,
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "must-not-be-read")
+    assert (
+        pipeline.main(
+            [
+                "corpus",
+                "--plan",
+                str(tmp_path / "missing-plan.json"),
+                "--snapshot",
+                str(tmp_path / "snapshot"),
+                "--work-dir",
+                str(tmp_path / "work"),
+                "--packet",
+                str(tmp_path / "packet"),
+                "--allow-network",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert "not authorized before a reviewed pilot PASS" in captured.err
+    assert "must-not-be-read" not in captured.err + captured.out
     assert not (tmp_path / "work").exists()
 
 

@@ -6,7 +6,7 @@ import json
 import re
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -554,6 +554,69 @@ class Phase4EUniversalSyntheticException(BaseModel):
         return self
 
 
+class ProtocolPilot(BaseModel):
+    """Evaluation-only authorization. It is not a training split or a third exception."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    seed: Literal["saracura-phase4e-protocol-pilot-v1"]
+    task_count: Literal[140]
+    pair_count: Literal[70]
+    split: Literal["protocol_pilot"]
+    schema_version: Literal["phase4e-protocol-pilot.v1"]
+    evaluation_only: Literal[True]
+    training_authorized: Literal[False]
+    calibration_authorized: Literal[False]
+    publication_authorized: Literal[False]
+    quality_claims_allowed: Literal[False]
+    runtime_authorized: Literal[False]
+
+
+class Phase4EUniversalSyntheticExceptionV2(Phase4EUniversalSyntheticException):
+    """Phase 4E exception plus the closed protocol-pilot object. Training splits stay unchanged."""
+
+    protocol_pilot: ProtocolPilot
+
+    @model_validator(mode="after")
+    def pilot_is_not_a_training_split(self) -> Phase4EUniversalSyntheticExceptionV2:
+        split = cast(object, self.protocol_pilot.split)
+        if split in set(self.allowed_splits):
+            raise ValueError("pilot split is not a training split")
+        return self
+
+
+class RegistryV2(BaseModel):
+    """Same two exception IDs as v1. Only the Phase 4E exception gains protocol_pilot."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal["training-data-source-policies.v2"]
+    sources: list[Policy] = Field(min_length=8, max_length=8)
+    exceptions: list[SyntheticExperimentException | Phase4EUniversalSyntheticExceptionV2] = Field(
+        min_length=2, max_length=2
+    )
+
+    @model_validator(mode="after")
+    def exact_v1_base(self) -> RegistryV2:
+        if {source.id for source in self.sources} != set(IDENTITY):
+            raise ValueError("registry must contain exactly the eight fixed IDs")
+        if tuple(exception.id for exception in self.exceptions) != (
+            "synthetic_experiment",
+            "phase4e_saracura_universal_synthetic",
+        ):
+            raise ValueError("registry must contain exactly the two reviewed exceptions")
+        if self.exceptions[0].model_dump(mode="json") != _PHASE3B_EXCEPTION:
+            raise ValueError("Phase 3B exception content is immutable")
+        dumped = self.exceptions[1].model_dump(mode="json")
+        dumped.pop("protocol_pilot")
+        if dumped != _PHASE4E_V1_EXCEPTION:
+            raise ValueError("Phase 4E exception content is immutable")
+        v1 = load_registry(bundled_registry_path().read_bytes())
+        if [item.model_dump(mode="json") for item in self.sources] != [
+            item.model_dump(mode="json") for item in v1.sources
+        ]:
+            raise ValueError("v2 sources must match v1")
+        return self
+
+
 _PHASE3B_EXCEPTION = {
     "id": "synthetic_experiment",
     "workflow_revision": "phase3b-synthetic-research-training.v2",
@@ -562,6 +625,24 @@ _PHASE3B_EXCEPTION = {
     "allowed_uses": ["synthetic_only"],
     "author_model": "qwen/qwen3.5-9b",
     "reviewer_model": "mistralai/ministral-8b-2512",
+    "canonical_training_authorized": False,
+    "calibration_authorized": False,
+    "blind_test_authorized": False,
+    "publication_authorized": False,
+    "quality_claims_allowed": False,
+    "automation_authorized": False,
+}
+
+_PHASE4E_V1_EXCEPTION = {
+    "id": "phase4e_saracura_universal_synthetic",
+    "workflow_revision": "phase4e-saracura-universal-synthetic.v1",
+    "source_policy_id": "provider-model-generated",
+    "allowed_splits": ["synthetic_train", "synthetic_dev", "synthetic_holdout"],
+    "allowed_uses": ["synthetic_only"],
+    "author_model": "qwen/qwen3-30b-a3b",
+    "reviewer_model": "meta-llama/llama-3.3-70b-instruct",
+    "task_slots": 1600,
+    "spend_ceiling_usd": 17.0,
     "canonical_training_authorized": False,
     "calibration_authorized": False,
     "blind_test_authorized": False,
@@ -588,20 +669,42 @@ def load_registry(raw: bytes | str) -> Registry:
         raise ValueError("invalid data policy registry") from None
 
 
+def load_registry_v2(raw: bytes | str) -> RegistryV2:
+    try:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+        return RegistryV2.model_validate(payload)
+    except (ValueError, TypeError):
+        raise ValueError("invalid phase 4e registry v2") from None
+
+
 def bundled_registry_path() -> Path:
     return Path(__file__).parent / "manifests" / "training-data-source-policies.v1.json"
+
+
+def bundled_registry_v2_path() -> Path:
+    return Path(__file__).parent / "manifests" / "training-data-source-policies.v2.json"
 
 
 def load_bundled_registry() -> Registry:
     return load_registry(bundled_registry_path().read_bytes())
 
 
+def load_bundled_registry_v2() -> RegistryV2:
+    return load_registry_v2(bundled_registry_v2_path().read_bytes())
+
+
 __all__ = [
     "Phase4EUniversalSyntheticException",
+    "Phase4EUniversalSyntheticExceptionV2",
     "Policy",
+    "ProtocolPilot",
     "Registry",
+    "RegistryV2",
     "SyntheticExperimentException",
     "bundled_registry_path",
+    "bundled_registry_v2_path",
     "load_bundled_registry",
+    "load_bundled_registry_v2",
     "load_registry",
+    "load_registry_v2",
 ]

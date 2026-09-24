@@ -29,7 +29,10 @@ from benchmarks.saracura_universal_corpus import (
     validate_accepted_packet,
     validate_accepted_packet_pre_holdout,
 )
-from benchmarks.saracura_universal_policy import validate_phase4e_policy
+from benchmarks.saracura_universal_policy import (
+    require_phase4e_authorization,
+    validate_phase4e_policy,
+)
 from saracura.serialization import canonical_json_bytes
 from saracura.universal.checkpoint import (
     BASE_ENCODER_ID,
@@ -2044,6 +2047,7 @@ def train_and_seal(
 ) -> Path:
     """Train only from packet text re-derived on an explicit verified device."""
 
+    require_phase4e_authorization("synthetic_research_training")
     # This must precede every embedding read.  A receipt inside the capsule is
     # only a copied binding; it is never an authority to train.
     accepted_packet = validate_accepted_packet_binding(accepted_packet_path)

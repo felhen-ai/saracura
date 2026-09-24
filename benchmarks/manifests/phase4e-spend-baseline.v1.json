@@ -1,0 +1,13 @@
+{
+  "schema_version": "phase4e-spend-baseline.v1",
+  "as_of": "2026-09-24",
+  "directory_count": 46,
+  "entry_count": 2117,
+  "settled_count": 2099,
+  "open_reservation_count": 18,
+  "provider_reported_cost_usd": "0.81263107",
+  "conservative_debit_usd": "5.12153043",
+  "open_reservation_debit_usd": "0.01971612",
+  "cumulative_authorization_usd": "17.00",
+  "pilot_complete_plan_bound_usd": "1.50"
+}

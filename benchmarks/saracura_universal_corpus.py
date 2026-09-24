@@ -15,7 +15,7 @@ import os
 import re
 import tempfile
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from ctypes import CDLL, c_char_p, c_int, get_errno, set_errno
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -141,12 +141,19 @@ RESPONSE_SCHEMA_NAME = "saracura_phase4e_response"
 _SENSITIVE = re.compile(r"(?:\b\d{3}[.]?\d{3}[.]?\d{3}-?\d{2}\b|\b\d{13,16}\b|@|https?://)", re.I)
 
 
-def provider_preferences(
-    stage: Literal["corpus_author", "corpus_reviewer"],
-) -> dict[str, Any]:
+_AUTHOR_TRANSPORT_STAGES = frozenset({"corpus_author", "pilot_author"})
+_REVIEWER_TRANSPORT_STAGES = frozenset({"corpus_reviewer", "pilot_reviewer"})
+
+
+def provider_preferences(stage: str) -> dict[str, Any]:
     """Pin a provider proven to honor the stage's exact request contract."""
 
-    provider = AUTHOR_PROVIDER if stage == "corpus_author" else REVIEWER_PROVIDER
+    if stage in _AUTHOR_TRANSPORT_STAGES:
+        provider = AUTHOR_PROVIDER
+    elif stage in _REVIEWER_TRANSPORT_STAGES:
+        provider = REVIEWER_PROVIDER
+    else:
+        raise CorpusError("provider stage")
     preferences: dict[str, Any] = {
         "order": [provider],
         "allow_fallbacks": False,
@@ -154,13 +161,61 @@ def provider_preferences(
         "data_collection": "deny",
         "zdr": True,
     }
-    if stage == "corpus_author":
+    if stage in _AUTHOR_TRANSPORT_STAGES:
         preferences["quantizations"] = ["fp8"]
     return preferences
 
 
 class CorpusError(ValueError):
     """A closed corpus invariant was violated."""
+
+
+@dataclass(frozen=True)
+class LedgerPolicy:
+    """Closed stage prices and caps. Corpus callers keep the module defaults."""
+
+    schema_version: str
+    entry_stages: Mapping[str, Decimal]
+    total_budget: Decimal
+    prices: Mapping[str, tuple[Decimal, Decimal]]
+    journal_stages: frozenset[str]
+    automatic_retries: int
+
+
+def _default_ledger_policy() -> LedgerPolicy:
+    return CORPUS_LEDGER_POLICY
+
+
+CORPUS_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-cost-ledger.v2",
+    entry_stages=dict(STAGE_LIMITS),
+    total_budget=TOTAL_BUDGET,
+    prices=dict(PRICES),
+    journal_stages=frozenset({"corpus_author", "corpus_reviewer"}),
+    automatic_retries=0,
+)
+PILOT_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-pilot-cost-ledger.v1",
+    entry_stages={
+        "pilot_author": Decimal("0.50"),
+        "pilot_reviewer": Decimal("1.00"),
+    },
+    total_budget=Decimal("1.50"),
+    prices={
+        "pilot_author": (Decimal("0.30"), Decimal("2.50")),
+        "pilot_reviewer": (Decimal("0.71"), Decimal("0.71")),
+    },
+    journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
+    automatic_retries=0,
+)
+
+
+def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
+    if schema == CORPUS_LEDGER_POLICY.schema_version:
+        return CORPUS_LEDGER_POLICY
+    if schema == PILOT_LEDGER_POLICY.schema_version:
+        return PILOT_LEDGER_POLICY
+    raise CorpusError("ledger identity")
 
 
 class TokenCounter(Protocol):
@@ -329,6 +384,10 @@ def build_plan() -> dict[str, Any]:
 
 def validate_plan(value: Mapping[str, Any]) -> None:
     """Fail closed on any mutation; no provider result can alter this plan."""
+    from benchmarks.saracura_universal_pilot import PILOT_PLAN_SCHEMA, PILOT_SEED
+
+    if value.get("schema_version") == PILOT_PLAN_SCHEMA or value.get("seed") == PILOT_SEED:
+        raise CorpusError("pilot plan cannot enter corpus")
     if _canonical(value) != _canonical(build_plan()):
         raise CorpusError("immutable plan mismatch")
     slots = value.get("slots")
@@ -623,7 +682,10 @@ def _lineage_placeholder(actor: Literal["author", "reviewer"], task_id: str) -> 
 
 
 def lineage_from_journal(
-    journal: Mapping[str, Any], actor: Literal["author", "reviewer"]
+    journal: Mapping[str, Any],
+    actor: Literal["author", "reviewer"],
+    *,
+    expected_stage: str | None = None,
 ) -> dict[str, str]:
     """Return the non-secret per-record lineage bound to one settled request."""
 
@@ -632,7 +694,7 @@ def lineage_from_journal(
         isinstance(journal[key], str) for key in required - {"task_ids"}
     ):
         raise CorpusError("provider journal lineage")
-    stage = f"corpus_{actor}"
+    stage = f"corpus_{actor}" if expected_stage is None else expected_stage
     if journal["stage"] != stage:
         raise CorpusError("provider journal stage")
     reservation_id = cast(str, journal["reservation_id"])
@@ -1164,10 +1226,8 @@ def _materialize_author_rows(
     ]
 
 
-def materialize_reviewer_record(
-    record: Mapping[str, Any], row: ValidatedAuthorRow
-) -> dict[str, Any]:
-    """Bind a blind provider review to local identity without deriving semantics."""
+def bind_reviewer_record(record: Mapping[str, Any], task_id: str) -> dict[str, Any]:
+    """Bind a blind provider review to one local task id without deriving semantics."""
 
     if "task_id" in record:
         try:
@@ -1176,15 +1236,23 @@ def materialize_reviewer_record(
             raise CorpusError(
                 f"review record schema ({_safe_validation_details(error)})"
             ) from error
-        if full.task_id != row.task_id:
+        if full.task_id != task_id:
             raise CorpusError("review task identity")
         return full.model_dump(mode="json")
     try:
         generated = ReviewerGeneratedRecord.model_validate(record).model_dump(mode="json")
     except ValidationError as error:
         raise CorpusError(f"review record schema ({_safe_validation_details(error)})") from error
-    generated["task_id"] = row.task_id
+    generated["task_id"] = task_id
     return generated
+
+
+def materialize_reviewer_record(
+    record: Mapping[str, Any], row: ValidatedAuthorRow
+) -> dict[str, Any]:
+    """Bind a blind provider review to local identity without deriving semantics."""
+
+    return bind_reviewer_record(record, row.task_id)
 
 
 def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> UniversalTask:
@@ -1564,132 +1632,58 @@ def _privacy(row: Mapping[str, Any]) -> bool:
     return bool(_SENSITIVE.search(_normalized(row)))
 
 
-def resolve_reviews(
-    rows: Sequence[Mapping[str, Any]],
-    reviews: Any,
-    prior_rows: Iterable[Mapping[str, Any]] = (),
+def acceptance_reason(
+    row: Mapping[str, Any],
+    review: ReviewerRecord,
     *,
-    reviewer_lineages: Mapping[str, Mapping[str, Any]] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    if not isinstance(reviews, list) or len(reviews) != len(rows):
-        raise CorpusError("review record count")
-    by_id: dict[str, ReviewerRecord] = {}
-    for raw in reviews:
-        try:
-            review = ReviewerRecord.model_validate(raw)
-        except ValidationError as error:
-            raise CorpusError("review schema") from error
-        if review.task_id in by_id:
-            raise CorpusError("duplicate review task")
-        by_id[review.task_id] = review
-    if set(by_id) != {cast(str, row["task_id"]) for row in rows}:
-        raise CorpusError("review identity")
-    seen = {semantic_fingerprint(row) for row in prior_rows}
-    normalized_seen = [_normalized(row) for row in prior_rows]
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-    for row in rows:
-        review = by_id[cast(str, row["task_id"])]
-        task_id = cast(str, row["task_id"])
-        author_lineage = {
-            key: row[key]
-            for key in (
-                "author_response_sha256",
-                "author_reservation_id",
-                "author_request_id",
-            )
-            if key in row
-        }
-        if not author_lineage:
-            author_lineage = _lineage_placeholder("author", task_id)
-        if set(author_lineage) != {
-            "author_response_sha256",
-            "author_reservation_id",
-            "author_request_id",
-        }:
-            raise CorpusError("author provider lineage")
-        reviewer_lineage = (
-            dict(reviewer_lineages[task_id])
-            if reviewer_lineages is not None and task_id in reviewer_lineages
-            else _lineage_placeholder("reviewer", task_id)
-        )
-        if set(reviewer_lineage) != {
-            "reviewer_response_sha256",
-            "reviewer_reservation_id",
-            "reviewer_request_id",
-        }:
-            raise CorpusError("reviewer provider lineage")
-        reason: str | None = None
-        if review.status != "accepted":
-            if review.private_or_sensitive:
-                reason = "privacy"
-            elif not review.fictional:
-                reason = "review_quality_fictional"
-            elif not review.natural_language:
-                reason = "review_quality_natural_language"
-            elif not review.exclusive_options:
-                reason = "review_quality_exclusive_options"
-            else:
-                reason = "review_rejected"
-        elif review.reason_codes:
-            reason = "review_rejected"
-        elif review.selected_criterion_id != row["selected_criterion_id"]:
-            reason = "review_disagreement"
-        else:
-            selected_position = next(
-                index
-                for index, criterion in enumerate(row["criteria"])
-                if criterion["id"] == review.selected_criterion_id
-            )
-            reason = _attestation_disagreement_reason(
-                SemanticEquivalenceAttestation.model_validate(
-                    row["semantic_equivalence_attestation"]
-                ),
-                review.semantic_equivalence_attestation,
-                option_count=len(row["criteria"]),
-                selected_position=selected_position,
-            )
-        if reason is None and not review.natural_language:
-            reason = "review_quality_natural_language"
-        elif reason is None and not review.fictional:
-            reason = "review_quality_fictional"
-        elif reason is None and not review.exclusive_options:
-            reason = "review_quality_exclusive_options"
-        elif reason is None and (review.private_or_sensitive or _privacy(row)):
+    reject_semantic_disagreement: bool = True,
+) -> str | None:
+    """Return the corpus-v1 row decision. The default still rejects semantic mismatch."""
+
+    reason: str | None = None
+    if review.status != "accepted":
+        if review.private_or_sensitive:
             reason = "privacy"
-        elif reason is None:
-            fingerprint = semantic_fingerprint(row)
-            normalized = _normalized(row)
-            if fingerprint in seen:
-                reason = "semantic_duplicate"
-            elif any(
-                SequenceMatcher(None, normalized, item).ratio() >= 0.92 for item in normalized_seen
-            ):
-                reason = "near_duplicate"
-        if reason:
-            rejected.append(
-                {
-                    "task_id": task_id,
-                    "split": row["split"],
-                    "reason": reason,
-                    **author_lineage,
-                    **reviewer_lineage,
-                }
-            )
+        elif not review.fictional:
+            reason = "review_quality_fictional"
+        elif not review.natural_language:
+            reason = "review_quality_natural_language"
+        elif not review.exclusive_options:
+            reason = "review_quality_exclusive_options"
         else:
-            review_payload = review.model_dump(mode="json")
-            accepted.append(
-                {
-                    **row,
-                    "synthetic_only": True,
-                    "review": review_payload,
-                    "review_sha256": _sha(_canonical(review_payload)),
-                    **author_lineage,
-                    **reviewer_lineage,
-                }
-            )
-            seen.add(fingerprint)
-            normalized_seen.append(normalized)
+            reason = "review_rejected"
+    elif review.reason_codes:
+        reason = "review_rejected"
+    elif review.selected_criterion_id != row["selected_criterion_id"]:
+        reason = "review_disagreement"
+    elif reject_semantic_disagreement:
+        selected_position = next(
+            index
+            for index, criterion in enumerate(row["criteria"])
+            if criterion["id"] == review.selected_criterion_id
+        )
+        reason = _attestation_disagreement_reason(
+            SemanticEquivalenceAttestation.model_validate(row["semantic_equivalence_attestation"]),
+            review.semantic_equivalence_attestation,
+            option_count=len(row["criteria"]),
+            selected_position=selected_position,
+        )
+    if reason is None and not review.natural_language:
+        reason = "review_quality_natural_language"
+    elif reason is None and not review.fictional:
+        reason = "review_quality_fictional"
+    elif reason is None and not review.exclusive_options:
+        reason = "review_quality_exclusive_options"
+    elif reason is None and (review.private_or_sensitive or _privacy(row)):
+        reason = "privacy"
+    return reason
+
+
+def _corpus_v1_pair_resolution(
+    rows: Sequence[Mapping[str, Any]],
+    accepted: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     paired: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
         if isinstance(row.get("pair_id"), str):
@@ -1740,6 +1734,107 @@ def resolve_reviews(
             for task_id in sorted(invalid_pair_reasons)
         )
     return accepted, rejected
+
+
+def resolve_reviews(
+    rows: Sequence[Mapping[str, Any]],
+    reviews: Any,
+    prior_rows: Iterable[Mapping[str, Any]] = (),
+    *,
+    reviewer_lineages: Mapping[str, Mapping[str, Any]] | None = None,
+    acceptance: Callable[[Mapping[str, Any], ReviewerRecord], str | None] | None = None,
+    pair_resolution: Callable[
+        [Sequence[Mapping[str, Any]], list[dict[str, Any]], list[dict[str, Any]]],
+        tuple[list[dict[str, Any]], list[dict[str, Any]]],
+    ]
+    | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not isinstance(reviews, list) or len(reviews) != len(rows):
+        raise CorpusError("review record count")
+    by_id: dict[str, ReviewerRecord] = {}
+    for raw in reviews:
+        try:
+            review = ReviewerRecord.model_validate(raw)
+        except ValidationError as error:
+            raise CorpusError("review schema") from error
+        if review.task_id in by_id:
+            raise CorpusError("duplicate review task")
+        by_id[review.task_id] = review
+    if set(by_id) != {cast(str, row["task_id"]) for row in rows}:
+        raise CorpusError("review identity")
+    seen = {semantic_fingerprint(row) for row in prior_rows}
+    normalized_seen = [_normalized(row) for row in prior_rows]
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for row in rows:
+        review = by_id[cast(str, row["task_id"])]
+        task_id = cast(str, row["task_id"])
+        author_lineage = {
+            key: row[key]
+            for key in (
+                "author_response_sha256",
+                "author_reservation_id",
+                "author_request_id",
+            )
+            if key in row
+        }
+        if not author_lineage:
+            author_lineage = _lineage_placeholder("author", task_id)
+        if set(author_lineage) != {
+            "author_response_sha256",
+            "author_reservation_id",
+            "author_request_id",
+        }:
+            raise CorpusError("author provider lineage")
+        reviewer_lineage = (
+            dict(reviewer_lineages[task_id])
+            if reviewer_lineages is not None and task_id in reviewer_lineages
+            else _lineage_placeholder("reviewer", task_id)
+        )
+        if set(reviewer_lineage) != {
+            "reviewer_response_sha256",
+            "reviewer_reservation_id",
+            "reviewer_request_id",
+        }:
+            raise CorpusError("reviewer provider lineage")
+        decide = acceptance or acceptance_reason
+        reason = decide(row, review)
+        if reason is None:
+            fingerprint = semantic_fingerprint(row)
+            normalized = _normalized(row)
+            if fingerprint in seen:
+                reason = "semantic_duplicate"
+            elif any(
+                SequenceMatcher(None, normalized, item).ratio() >= 0.92 for item in normalized_seen
+            ):
+                reason = "near_duplicate"
+        if reason:
+            rejected.append(
+                {
+                    "task_id": task_id,
+                    "split": row["split"],
+                    "reason": reason,
+                    **author_lineage,
+                    **reviewer_lineage,
+                }
+            )
+        else:
+            review_payload = review.model_dump(mode="json")
+            accepted.append(
+                {
+                    **row,
+                    "synthetic_only": True,
+                    "review": review_payload,
+                    "review_sha256": _sha(_canonical(review_payload)),
+                    **author_lineage,
+                    **reviewer_lineage,
+                }
+            )
+            seen.add(fingerprint)
+            normalized_seen.append(normalized)
+    if pair_resolution is None:
+        return _corpus_v1_pair_resolution(rows, accepted, rejected)
+    return pair_resolution(rows, accepted, rejected)
 
 
 def _identity_projection(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -1933,6 +2028,10 @@ def _validate_packet_resolution(
     }
     resolved = [*accepted, *rejected]
     ids = [row.get("task_id") for row in resolved]
+    from benchmarks.saracura_universal_pilot import pilot_task_ids
+
+    if pilot_task_ids().intersection(task_id for task_id in ids if isinstance(task_id, str)):
+        raise CorpusError("pilot task cannot enter packet")
     if len(ids) != len(set(ids)) or set(ids) != set(slots):
         raise CorpusError("packet resolution coverage")
     fingerprints: set[str] = set()
@@ -2294,10 +2393,25 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 @dataclass
 class BudgetLedger:
-    """Parameterized four-stage ledger; the larger local/server debit wins."""
+    """Parameterized multi-stage ledger; the larger local/server debit wins.
+
+    Corpus ledgers keep reading the module stage constants, so existing
+    monkeypatches and bytes stay in force. A pilot ledger carries its own policy.
+    """
 
     entries: list[dict[str, str]] = field(default_factory=list)
     provider_journal: list[dict[str, Any]] = field(default_factory=list)
+    policy: LedgerPolicy = field(default_factory=_default_ledger_policy)
+
+    def _stage_limits(self) -> Mapping[str, Decimal]:
+        if self.policy.schema_version == CORPUS_LEDGER_POLICY.schema_version:
+            return STAGE_LIMITS
+        return self.policy.entry_stages
+
+    def _total_budget(self) -> Decimal:
+        if self.policy.schema_version == CORPUS_LEDGER_POLICY.schema_version:
+            return TOTAL_BUDGET
+        return self.policy.total_budget
 
     def spent(self, stage: str) -> Decimal:
         return sum(
@@ -2306,15 +2420,16 @@ class BudgetLedger:
         )
 
     def reserve(self, stage: str, local_worst_case: Decimal) -> None:
-        if stage not in STAGE_LIMITS or local_worst_case < 0:
+        limits = self._stage_limits()
+        if stage not in limits or local_worst_case < 0:
             raise CorpusError("budget stage")
         if any(entry["status"] == "overspent" for entry in self.entries):
             raise CorpusError("budget terminal overspend")
-        if self.spent(stage) + local_worst_case > STAGE_LIMITS[stage]:
+        if self.spent(stage) + local_worst_case > limits[stage]:
             raise CorpusError("stage budget exhausted")
         if (
             sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) + local_worst_case
-            > TOTAL_BUDGET
+            > self._total_budget()
         ):
             raise CorpusError("total budget exhausted")
 
@@ -2370,10 +2485,13 @@ class BudgetLedger:
             response_sha256=response_sha256,
             status="settled",
         )
-        if self.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]]:
+        if self.spent(entry["stage"]) > self._stage_limits()[entry["stage"]]:
             entry["status"] = "overspent"
             raise CorpusError("reported stage budget exhausted")
-        if sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) > TOTAL_BUDGET:
+        if (
+            sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal())
+            > self._total_budget()
+        ):
             entry["status"] = "overspent"
             raise CorpusError("reported total budget exhausted")
 
@@ -2421,8 +2539,9 @@ class BudgetLedger:
         }
         self.entries.append(entry)
         if (
-            self.spent(stage) > STAGE_LIMITS[stage]
-            or sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal()) > TOTAL_BUDGET
+            self.spent(stage) > self._stage_limits()[stage]
+            or sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal())
+            > self._total_budget()
         ):
             entry["status"] = "overspent"
             raise CorpusError("reported budget exhausted")
@@ -2430,7 +2549,7 @@ class BudgetLedger:
     def record_provider_journal(
         self,
         *,
-        stage: Literal["corpus_author", "corpus_reviewer"],
+        stage: str,
         reservation_id: str,
         task_ids: Sequence[str],
     ) -> None:
@@ -2446,6 +2565,7 @@ class BudgetLedger:
         )
         if (
             entry is None
+            or stage not in self.policy.journal_stages
             or entry["stage"] != stage
             or entry["status"] not in {"settled", "overspent", "uncertain"}
             or not task_ids
@@ -2478,7 +2598,7 @@ class BudgetLedger:
 
     def as_json(self, *, final: bool = False, stop_reason: str | None = None) -> dict[str, Any]:
         return {
-            "schema_version": "phase4e-cost-ledger.v2",
+            "schema_version": self.policy.schema_version,
             "final": final,
             "entries": self.entries,
             "provider_journal": self.provider_journal,
@@ -2489,13 +2609,12 @@ class BudgetLedger:
     def from_json(cls, value: Mapping[str, Any]) -> BudgetLedger:
         if set(value) != {"schema_version", "final", "entries", "provider_journal", "stop_reason"}:
             raise CorpusError("ledger shape")
-        if (
-            value["schema_version"] != "phase4e-cost-ledger.v2"
-            or not isinstance(value["entries"], list)
-            or not isinstance(value["provider_journal"], list)
+        policy = ledger_policy_for_schema(value["schema_version"])
+        if not isinstance(value["entries"], list) or not isinstance(
+            value["provider_journal"], list
         ):
             raise CorpusError("ledger identity")
-        ledger = cls()
+        ledger = cls(policy=policy)
         required_entry = {
             "stage",
             "reservation_id",
@@ -2519,7 +2638,7 @@ class BudgetLedger:
             except ArithmeticError as error:
                 raise CorpusError("ledger entry") from error
             if (
-                entry["stage"] not in STAGE_LIMITS
+                entry["stage"] not in ledger._stage_limits()
                 or local_worst_case < 0
                 or provider_cost < 0
                 or debit != max(local_worst_case, provider_cost)
@@ -2553,9 +2672,9 @@ class BudgetLedger:
                 raise CorpusError("ledger entry")
             ledger.entries.append(cast(dict[str, str], entry))
             over_budget = (
-                ledger.spent(entry["stage"]) > STAGE_LIMITS[entry["stage"]]
+                ledger.spent(entry["stage"]) > ledger._stage_limits()[entry["stage"]]
                 or sum((Decimal(item["debit_usd"]) for item in ledger.entries), Decimal())
-                > TOTAL_BUDGET
+                > ledger._total_budget()
             )
             if over_budget != (entry["status"] == "overspent"):
                 raise CorpusError("ledger budget")
@@ -2579,7 +2698,7 @@ class BudgetLedger:
                 None,
             )
             if (
-                stage not in {"corpus_author", "corpus_reviewer"}
+                stage not in ledger.policy.journal_stages
                 or not isinstance(reservation_id, str)
                 or not isinstance(request_id, str)
                 or not isinstance(response_sha256, str)
@@ -2662,13 +2781,16 @@ def resume_ledger(directory: Path) -> BudgetLedger:
 
 
 def request_worst_case(
-    stage: Literal["corpus_author", "corpus_reviewer"],
+    stage: str,
     request_payload: bytes,
     max_output_tokens: int,
+    *,
+    prices: Mapping[str, tuple[Decimal, Decimal]] | None = None,
 ) -> Decimal:
-    if stage not in PRICES or not request_payload or max_output_tokens < 0:
+    table = PRICES if prices is None else prices
+    if stage not in table or not request_payload or max_output_tokens < 0:
         raise CorpusError("budget request")
-    input_price, output_price = PRICES[stage]
+    input_price, output_price = table[stage]
     # Reserve against the complete, canonical final provider request: messages,
     # strict schema, provider controls, and every other input field are included.
     return (
@@ -2737,6 +2859,38 @@ def stop_projection(resolved: Sequence[Mapping[str, Any]], plan: Mapping[str, An
     return None
 
 
+def provider_request_bytes(
+    *,
+    stage: str,
+    model: str,
+    messages: Sequence[Mapping[str, str]],
+    response_schema: Mapping[str, Any],
+    max_output_tokens: int,
+    author_stage: str,
+    author_model: str,
+) -> bytes:
+    """Canonical provider body shared by preflight and transport."""
+
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": list(messages),
+        "max_tokens": max_output_tokens,
+        "temperature": 0,
+        "provider": provider_preferences(stage),
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": RESPONSE_SCHEMA_NAME,
+                "strict": True,
+                "schema": response_schema,
+            },
+        },
+    }
+    if stage == author_stage and model == author_model:
+        request["reasoning_effort"] = "none"
+    return _canonical(request)
+
+
 class OpenRouterCorpusClient:
     """Injected transport boundary. It has no environment or credential lookup."""
 
@@ -2747,15 +2901,34 @@ class OpenRouterCorpusClient:
         allow_network: bool = False,
         ledger: BudgetLedger | None = None,
         ledger_directory: Path | None = None,
+        policy: LedgerPolicy | None = None,
+        author_stage: str = "corpus_author",
+        reviewer_stage: str = "corpus_reviewer",
+        author_model: str = AUTHOR_MODEL,
+        reviewer_model: str = REVIEWER_MODEL,
     ) -> None:
         if not allow_network or transport is None:
             raise CorpusError("network requires explicit injected transport")
         if ledger_directory is None:
             raise CorpusError("network requires durable ledger")
+        self.policy = policy or CORPUS_LEDGER_POLICY
+        if self.policy.automatic_retries != 0:
+            raise CorpusError("automatic retries are closed")
+        if (
+            author_stage not in self.policy.journal_stages
+            or reviewer_stage not in self.policy.journal_stages
+        ):
+            raise CorpusError("budget stage")
+        self.author_stage = author_stage
+        self.reviewer_stage = reviewer_stage
+        self.author_model = author_model
+        self.reviewer_model = reviewer_model
         self._transport = transport
         self._ledger_directory = ledger_directory
         self._last_journal: dict[str, Any] | None = None
         resumed = resume_ledger(ledger_directory)
+        if resumed.entries and resumed.policy.schema_version != self.policy.schema_version:
+            raise CorpusError("ledger resume mismatch")
         if (
             ledger is not None
             and ledger.entries
@@ -2775,8 +2948,8 @@ class OpenRouterCorpusClient:
         """Submit planned author slots using the fixed author protocol."""
         _validate_author_batch(slots)
         return self._request(
-            stage="corpus_author",
-            model=AUTHOR_MODEL,
+            stage=self.author_stage,
+            model=self.author_model,
             messages=author_messages(slots),
             response_schema=author_schema(slots),
             max_output_tokens=max_output_tokens,
@@ -2793,8 +2966,8 @@ class OpenRouterCorpusClient:
     ) -> dict[str, Any]:
         """Submit exactly one locally validated row through the blind protocol."""
         return self._request(
-            stage="corpus_reviewer",
-            model=REVIEWER_MODEL,
+            stage=self.reviewer_stage,
+            model=self.reviewer_model,
             messages=reviewer_messages([row]),
             response_schema=reviewer_schema(1),
             max_output_tokens=max_output_tokens,
@@ -2802,7 +2975,7 @@ class OpenRouterCorpusClient:
             task_ids=[row.task_id],
         )
 
-    def last_journal(self, stage: Literal["corpus_author", "corpus_reviewer"]) -> dict[str, Any]:
+    def last_journal(self, stage: str) -> dict[str, Any]:
         """Return the durable journal record produced by the immediately prior request."""
 
         if self._last_journal is None or self._last_journal["stage"] != stage:
@@ -2812,7 +2985,7 @@ class OpenRouterCorpusClient:
     def _close_uncertain(
         self,
         *,
-        stage: Literal["corpus_author", "corpus_reviewer"],
+        stage: str,
         reservation_id: str,
         task_ids: Sequence[str],
         response_sha256: str | None = None,
@@ -2830,7 +3003,7 @@ class OpenRouterCorpusClient:
     def _request(
         self,
         *,
-        stage: Literal["corpus_author", "corpus_reviewer"],
+        stage: str,
         model: str,
         messages: Sequence[Mapping[str, str]],
         response_schema: Mapping[str, Any],
@@ -2840,25 +3013,23 @@ class OpenRouterCorpusClient:
     ) -> dict[str, Any]:
         if not api_key:
             raise CorpusError("pinned provider request")
-        request: dict[str, Any] = {
-            "model": model,
-            "messages": list(messages),
-            "max_tokens": max_output_tokens,
-            "temperature": 0,
-            "provider": provider_preferences(stage),
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": RESPONSE_SCHEMA_NAME,
-                    "strict": True,
-                    "schema": response_schema,
-                },
-            },
-        }
-        if stage == "corpus_author" and model == AUTHOR_MODEL:
-            request["reasoning_effort"] = "none"
-        body = _canonical(request)
-        worst = request_worst_case(stage, body, max_output_tokens)
+        if self.policy.automatic_retries != 0:
+            raise CorpusError("automatic retries are closed")
+        body = provider_request_bytes(
+            stage=stage,
+            model=model,
+            messages=messages,
+            response_schema=response_schema,
+            max_output_tokens=max_output_tokens,
+            author_stage=self.author_stage,
+            author_model=self.author_model,
+        )
+        prices = (
+            None
+            if self.policy.schema_version == CORPUS_LEDGER_POLICY.schema_version
+            else self.policy.prices
+        )
+        worst = request_worst_case(stage, body, max_output_tokens, prices=prices)
         reservation_id = "reservation-" + _sha(_canonical({"stage": stage, "body": body.hex()}))
         self.ledger.reserve_request(stage, reservation_id, worst)
         write_ledger_snapshot(self._ledger_directory, self.ledger)

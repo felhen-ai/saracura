@@ -19,6 +19,9 @@ phase4e-comparison-plan.json
 phase4e-comparison-accepted.jsonl
 phase4e-comparison-cost-ledger.json
 phase4e-comparison-report.json
+.artifacts/phase4e/pilot-plan-*/
+.artifacts/phase4e/pilot-work-*/
+.artifacts/phase4e/pilot-report-*/
 base-states.jsonl
 split-plan.json
 contributors.json

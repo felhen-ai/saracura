@@ -26,6 +26,7 @@ from benchmarks.saracura_universal_policy import (
     STAGE_LIMITS,
     TOTAL_BUDGET,
     Phase4EPolicyError,
+    require_phase4e_authorization,
     validate_phase4e_policy,
 )
 from saracura.backends.base import BackendCapabilities, ScoredChoice
@@ -270,6 +271,12 @@ def test_phase4e_policy_and_phase3b_exception_are_closed_and_bound(
         "comparison_reviewer": Decimal("1.25"),
     } == STAGE_LIMITS
     assert sum(STAGE_LIMITS.values()) == TOTAL_BUDGET == Decimal("17.00")
+    assert policy["authorizations"]["synthetic_generation_authorized"] is False
+    assert policy["authorizations"]["synthetic_research_training_authorized"] is False
+    with pytest.raises(Phase4EPolicyError, match="not authorized before a reviewed pilot PASS"):
+        require_phase4e_authorization("synthetic_generation")
+    with pytest.raises(Phase4EPolicyError, match="not authorized before a reviewed pilot PASS"):
+        require_phase4e_authorization("synthetic_research_training")
     assert phase3b["workflow_revision"] == synthetic_policy["workflow_revision"]
     assert phase3b["author_model"] == synthetic_policy["author_model"]
     assert phase3b["reviewer_model"] == synthetic_policy["reviewer_model"]

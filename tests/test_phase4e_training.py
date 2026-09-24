@@ -20,6 +20,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def historical_training_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the frozen trainer below the current post-pilot policy gate."""
+
+    monkeypatch.setattr(training, "require_phase4e_authorization", lambda _action: {})
+
+
 def _torch() -> Any:
     return pytest.importorskip("torch")
 

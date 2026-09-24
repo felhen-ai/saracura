@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from benchmarks import saracura_universal_corpus as corpus
+from benchmarks import saracura_universal_pilot as pilot
 from benchmarks import saracura_universal_training as training
 from benchmarks.io import atomic_create
+from benchmarks.saracura_universal_policy import require_phase4e_authorization
 from saracura.contracts.models import ChoiceCriterion
 
 _AUTHOR_SINGLE_MAX_OUTPUT_TOKENS = 640
@@ -89,30 +91,23 @@ def write_plan(output: Path) -> Path:
 
 def _provider_body(
     *,
-    stage: Literal["corpus_author", "corpus_reviewer"],
+    stage: str,
     model: str,
     messages: Sequence[Mapping[str, str]],
     response_schema: Mapping[str, Any],
     max_output_tokens: int,
+    author_stage: str = "corpus_author",
+    author_model: str = corpus.AUTHOR_MODEL,
 ) -> bytes:
-    request: dict[str, Any] = {
-        "model": model,
-        "messages": list(messages),
-        "max_tokens": max_output_tokens,
-        "temperature": 0,
-        "provider": corpus.provider_preferences(stage),
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": corpus.RESPONSE_SCHEMA_NAME,
-                "strict": True,
-                "schema": response_schema,
-            },
-        },
-    }
-    if stage == "corpus_author" and model == corpus.AUTHOR_MODEL:
-        request["reasoning_effort"] = "none"
-    return _canonical(request)
+    return corpus.provider_request_bytes(
+        stage=stage,
+        model=model,
+        messages=messages,
+        response_schema=response_schema,
+        max_output_tokens=max_output_tokens,
+        author_stage=author_stage,
+        author_model=author_model,
+    )
 
 
 def _preflight_request(
@@ -689,6 +684,7 @@ def run_corpus(
     """Execute the deliberate provider lane with no-clobber task resolution."""
     if not allow_network:
         raise corpus.CorpusError("corpus requires literal --allow-network")
+    require_phase4e_authorization("synthetic_generation")
     # This is the only environment read in this module.  It is never accepted
     # by argparse, persisted, included in an exception, or printed.
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -916,6 +912,18 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--packet", type=Path, required=True)
     verify.add_argument("--embeddings", type=Path, required=True)
     verify.add_argument("--training", type=Path, required=True)
+    pilot_plan = commands.add_parser("pilot-plan")
+    pilot_plan.add_argument("--output", type=Path, required=True)
+    pilot_run = commands.add_parser("pilot")
+    pilot_run.add_argument("--plan", type=Path, required=True)
+    pilot_run.add_argument("--snapshot", type=Path, required=True)
+    pilot_run.add_argument("--work-dir", type=Path, required=True)
+    pilot_run.add_argument("--report", type=Path, required=True)
+    pilot_run.add_argument("--artifact-root", type=Path, required=True)
+    pilot_run.add_argument("--allow-network", action="store_true")
+    import_ledgers = commands.add_parser("import-ledgers")
+    import_ledgers.add_argument("--source", type=Path, required=True)
+    import_ledgers.add_argument("--artifact-root", type=Path, required=True)
     return parser
 
 
@@ -945,6 +953,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "verify":
             run_verify(args.packet, args.embeddings, args.training)
+        elif args.command == "pilot-plan":
+            pilot.write_pilot_plan(args.output)
+        elif args.command == "pilot":
+            pilot.run_pilot(
+                args.plan,
+                args.snapshot,
+                args.work_dir,
+                args.report,
+                args.artifact_root,
+                allow_network=args.allow_network,
+            )
+        elif args.command == "import-ledgers":
+            pilot.import_research_artifacts(args.source, args.artifact_root)
         else:  # argparse makes this unreachable; keep it fail-closed.
             raise ValueError("unknown pipeline command")
     except (

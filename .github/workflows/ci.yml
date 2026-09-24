@@ -117,7 +117,7 @@ jobs:
       # local MiniLM lane below.
       - run: uv sync --locked --dev
       - run: uv run python benchmarks/validate_default_environment.py
-      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py tests/test_phase4e_pipeline.py
+      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py tests/test_phase4e_pipeline.py tests/test_phase4e_pilot.py
       # Synthetic tensors only: the isolated ML extra is exercised without a
       # model snapshot, provider, cache discovery, or MPS.
       - run: uv sync --locked --dev --extra local-minilm

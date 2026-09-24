@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from benchmarks.data_policy_registry import (
     Phase4EUniversalSyntheticException,
@@ -168,8 +168,8 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     }:
         raise Phase4EPolicyError("planning policy is invalid")
     if policy["authorizations"] != {
-        "synthetic_generation_authorized": True,
-        "synthetic_research_training_authorized": True,
+        "synthetic_generation_authorized": False,
+        "synthetic_research_training_authorized": False,
         "real_checkpoint_present": False,
         "runtime_registration_authorized": False,
         "calibration_authorized": False,
@@ -203,4 +203,19 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         or Decimal(str(manifest_total)) != stage_total
     ):
         raise Phase4EPolicyError("Phase 4E budget equivalence is invalid")
+    return policy
+
+
+def require_phase4e_authorization(
+    action: Literal["synthetic_generation", "synthetic_research_training"],
+) -> dict[str, Any]:
+    """Fail closed while the protocol pilot keeps corpus and training at NO-GO."""
+
+    policy = validate_phase4e_policy()
+    key = {
+        "synthetic_generation": "synthetic_generation_authorized",
+        "synthetic_research_training": "synthetic_research_training_authorized",
+    }[action]
+    if policy["authorizations"].get(key) is not True:
+        raise Phase4EPolicyError(f"{action} is not authorized before a reviewed pilot PASS")
     return policy

@@ -200,8 +200,9 @@ automação.
 uv run python -m benchmarks.phase4e_pipeline plan \
   --output .artifacts/phase4e/plan.json
 
-# Apenas corpus pode usar rede. OPENROUTER_API_KEY entra de forma efêmera pelo
-# ambiente do operador; nunca é argumento nem entra em artefato.
+# Apenas corpus e pilot podem usar rede, e cada um exige --allow-network
+# literal. OPENROUTER_API_KEY entra de forma efêmera pelo ambiente do operador;
+# nunca é argumento nem entra em artefato.
 uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
   --plan .artifacts/phase4e/plan.json \
   --snapshot <snapshot-minilm-verificado> \
@@ -225,10 +226,35 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
 ```
 
 As requisições de corpus são fixadas em HTTPS do OpenRouter, sem redirects e
-proxies. O limite revisado é USD 17,00 não fungíveis: USD 5,00 para autor, USD
-10,00 para revisor, USD 0,75 para autor da comparação e USD 1,25 para revisor da
-comparação. Uma reserva durável pré-envio que permaneça sem resolução bloqueia
-o resume; o comando não repete uma cobrança possivelmente efetuada.
+proxies. Cada diretório de trabalho tem tetos próprios e não fungíveis: USD 5,00
+para o autor do corpus, USD 10,00 para o revisor, USD 0,75 para o autor da
+comparação e USD 1,25 para o revisor da comparação. Esses tetos não reiniciam a
+autorização cumulativa separada de USD 17,00 da Fase 4E. O piloto de protocolo
+de aceite é um comando distinto, com tetos de USD 0,50 e USD 1,00 e um limite
+de plano completo de USD 1,50 dentro dessa mesma autorização cumulativa. Uma
+reserva durável pré-envio que permaneça sem resolução bloqueia o resume; o
+comando não repete uma cobrança possivelmente efetuada.
+
+A política atual mantém as entradas legadas `corpus` e `train` fechadas. Elas
+só podem ser reativadas por uma revisão de política posterior ao piloto, depois
+de um `PASS`; o próprio piloto nunca altera essas autorizações.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline pilot-plan \
+  --output .artifacts/phase4e/pilot-plan-v1/plan.json
+
+uv run python -m benchmarks.phase4e_pipeline import-ledgers \
+  --source .artifacts/phase4e \
+  --artifact-root <raiz-duravel-dos-ledgers-phase4e>
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
+  --plan .artifacts/phase4e/pilot-plan-v1/plan.json \
+  --snapshot <snapshot-minilm-verificado> \
+  --work-dir .artifacts/phase4e/pilot-work-v1 \
+  --report .artifacts/phase4e/pilot-report-v1 \
+  --artifact-root <raiz-duravel-dos-ledgers-phase4e> \
+  --allow-network
+```
 
 ## Gate de dados, licença e privacidade da Fase 2C
 

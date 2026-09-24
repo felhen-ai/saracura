@@ -1006,9 +1006,24 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
   --packet .artifacts/phase4e/accepted-packet \
   --embeddings .artifacts/phase4e/embedding-capsule \
   --training .artifacts/phase4e/training/saracura-universal-v0
+
+uv run python -m benchmarks.phase4e_pipeline pilot-plan \
+  --output .artifacts/phase4e/pilot-plan-v1/plan.json
+
+uv run python -m benchmarks.phase4e_pipeline import-ledgers \
+  --source .artifacts/phase4e \
+  --artifact-root <durable-phase4e-research-ledger-root>
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
+  --plan .artifacts/phase4e/pilot-plan-v1/plan.json \
+  --snapshot <verified-minilm-snapshot> \
+  --work-dir .artifacts/phase4e/pilot-work-v1 \
+  --report .artifacts/phase4e/pilot-report-v1 \
+  --artifact-root <durable-phase4e-research-ledger-root> \
+  --allow-network
 ```
 
-`corpus` is the only network-capable stage. It requires the literal
+`corpus` and `pilot` are the only network-capable stages. `corpus` requires the literal
 `--allow-network` flag, reads only `OPENROUTER_API_KEY`, uses the pinned HTTPS
 host with redirects and proxies disabled, persists the reservation ledger
 before each request, and records response digests rather than credentials. Its
@@ -1026,7 +1041,17 @@ separates a planned cross-locale family, and every reviewer request contains
 exactly one validated row. At each required ten-batch boundary the command
 persists and applies the Wilson stop projection. It seals the packet only after
 all 1,600 slots are resolved and every corpus minimum passes. `plan`, `extract`,
-`train`, and `verify` construct no socket.
+`train`, `verify`, and `pilot-plan` construct no socket.
+
+`pilot` also requires literal `--allow-network` and the same pinned transport.
+It takes an explicit `--artifact-root`, records that absolute root, and refuses
+to start when the scanned cumulative debit or provider-reported cost is below
+`benchmarks/manifests/phase4e-spend-baseline.v1.json`. Open reservations count
+at their full debit. The command has no `--packet` argument, does not seal a
+training packet, and does not apply the corpus Wilson stop. An uncertain
+transport attempt, an unresolved identity, or a missing provider journal makes
+the immutable report `INCONCLUSIVE`. Its stage caps are USD 0.50 author and USD
+1.00 reviewer, inside the existing cumulative USD 17.00 authorization.
 
 Revision v0 extraction and training are CPU-only so descriptor-bound
 re-derivation is byte-exact across processes. MPS is reserved for later runtime
