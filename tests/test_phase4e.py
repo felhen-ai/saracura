@@ -510,7 +510,7 @@ def test_laya_cli_prevalidation_rejects_phase4e_workflow_before_candidate_access
     assert captured.value.payload.code == ErrorCode.WORKFLOW_UNSUPPORTED
 
 
-def test_phase4e_workflow_contract_has_the_lower_cardinality_before_backend_access() -> None:
+def test_phase4e_workflow_contract_is_unsupported_before_backend_access() -> None:
     backend = _FakeUniversalBackend(
         frozenset({(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)})
     )
@@ -532,7 +532,7 @@ def test_phase4e_workflow_contract_has_the_lower_cardinality_before_backend_acce
             request
         )
 
-    assert captured.value.payload.code == ErrorCode.CARDINALITY_EXCEEDED
+    assert captured.value.payload.code == ErrorCode.WORKFLOW_UNSUPPORTED
     assert backend.validate_calls == backend.score_calls == 0
 
 
@@ -547,13 +547,17 @@ def test_phase4e_contract_paths_are_network_and_optional_ml_free(
     monkeypatch.setattr(socket, "getaddrinfo", blocked_network)
     validate_phase4e_policy()
     SaracuraUniversalRanker(_FakeEncoder(), _parameters()).score(_task())
-    default_workflows().validate(
-        _request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
-        "universal",
-        _FakeUniversalBackend(
-            frozenset({(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)})
-        ).capabilities,
-    )
+    with pytest.raises(SaracuraError) as captured:
+        default_workflows().validate(
+            _request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
+            "universal",
+            _FakeUniversalBackend(
+                frozenset(
+                    {(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)}
+                )
+            ).capabilities,
+        )
+    assert captured.value.payload.code == ErrorCode.WORKFLOW_UNSUPPORTED
 
     assert not {
         "torch",

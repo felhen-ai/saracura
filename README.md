@@ -241,17 +241,17 @@ authorizations.
 
 ```bash
 uv run python -m benchmarks.phase4e_pipeline pilot-plan \
-  --output .artifacts/phase4e/pilot-plan-v9/plan.json
+  --output .artifacts/phase4e/pilot-plan-v10/plan.json
 
 uv run python -m benchmarks.phase4e_pipeline import-ledgers \
   --source .artifacts/phase4e \
   --artifact-root <durable-phase4e-research-ledger-root>
 
 uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
-  --plan .artifacts/phase4e/pilot-plan-v9/plan.json \
+  --plan .artifacts/phase4e/pilot-plan-v10/plan.json \
   --snapshot <verified-minilm-snapshot> \
-  --work-dir .artifacts/phase4e/pilot-work-v9 \
-  --report .artifacts/phase4e/pilot-report-v9 \
+  --work-dir .artifacts/phase4e/pilot-work-v10 \
+  --report .artifacts/phase4e/pilot-report-v10 \
   --artifact-root <durable-phase4e-research-ledger-root> \
   --allow-network
 ```

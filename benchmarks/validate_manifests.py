@@ -17,6 +17,7 @@ from benchmarks.saracura_universal_pilot import (
     RECOVERY_POLICY_V6_PATH,
     RECOVERY_POLICY_V7_PATH,
     RECOVERY_POLICY_V8_PATH,
+    RECOVERY_POLICY_V9_PATH,
     validate_pilot_policy,
     validate_pilot_recovery_policy,
     validate_spend_baseline,
@@ -54,6 +55,7 @@ HISTORICAL_PILOT_RECOVERY_POLICIES = {
         (6, RECOVERY_POLICY_V6_PATH),
         (7, RECOVERY_POLICY_V7_PATH),
         (8, RECOVERY_POLICY_V8_PATH),
+        (9, RECOVERY_POLICY_V9_PATH),
     )
 }
 
@@ -92,7 +94,7 @@ def validate_routed_manifest(path: Path) -> None:
     if schema_version == "phase4e-protocol-pilot-policy.v1":
         validate_pilot_policy(path)
         return
-    if schema_version == "phase4e-protocol-pilot-recovery.v9":
+    if schema_version == "phase4e-protocol-pilot-recovery.v10":
         validate_pilot_recovery_policy(path)
         return
     if schema_version in HISTORICAL_PILOT_RECOVERY_POLICIES:

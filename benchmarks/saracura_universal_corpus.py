@@ -226,7 +226,7 @@ PILOT_LEDGER_POLICY_V2 = LedgerPolicy(
     automatic_retries=4,
     enforce_budget=False,
 )
-PILOT_LEDGER_POLICY = LedgerPolicy(
+PILOT_LEDGER_POLICY_V3 = LedgerPolicy(
     schema_version="phase4e-pilot-cost-ledger.v3",
     entry_stages={
         "pilot_author": Decimal("0"),
@@ -241,6 +241,21 @@ PILOT_LEDGER_POLICY = LedgerPolicy(
     automatic_retries=4,
     enforce_budget=False,
 )
+PILOT_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-pilot-cost-ledger.v4",
+    entry_stages={
+        "pilot_author": Decimal("0"),
+        "pilot_reviewer": Decimal("0"),
+    },
+    total_budget=Decimal("0"),
+    prices={
+        "pilot_author": (Decimal("0.40"), Decimal("1.60")),
+        "pilot_reviewer": (Decimal("2.00"), Decimal("8.00")),
+    },
+    journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
+    automatic_retries=4,
+    enforce_budget=False,
+)
 
 
 def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
@@ -250,6 +265,8 @@ def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
         return PILOT_LEDGER_POLICY_V1
     if schema == PILOT_LEDGER_POLICY_V2.schema_version:
         return PILOT_LEDGER_POLICY_V2
+    if schema == PILOT_LEDGER_POLICY_V3.schema_version:
+        return PILOT_LEDGER_POLICY_V3
     if schema == PILOT_LEDGER_POLICY.schema_version:
         return PILOT_LEDGER_POLICY
     raise CorpusError("ledger identity")

@@ -48,10 +48,7 @@ class WorkflowRegistry:
         key = (request.workflow.id, request.workflow.revision)
         schema = self._schemas.get(key)
         if schema is None:
-            if key in {
-                (UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION),
-                (UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
-            }:
+            if key == (UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION):
                 return self._validate_universal_choice(request, execution_tier, capabilities)
             raise SaracuraError(
                 ErrorCode.WORKFLOW_UNSUPPORTED,
@@ -124,10 +121,7 @@ class WorkflowRegistry:
                 "Dynamic universal workflows support at most ten questions.",
                 "/questions",
             )
-        max_criteria = (
-            8 if request.workflow.revision == SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION else 20
-        )
-        if any(len(question.criteria) > max_criteria for question in request.questions):
+        if any(len(question.criteria) > 20 for question in request.questions):
             raise SaracuraError(
                 ErrorCode.CARDINALITY_EXCEEDED,
                 "Dynamic universal workflow criteria exceed the reviewed limit.",

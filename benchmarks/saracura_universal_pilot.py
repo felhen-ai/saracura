@@ -36,26 +36,28 @@ RECOVERY_POLICY_V5_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-re
 RECOVERY_POLICY_V6_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v6.json"
 RECOVERY_POLICY_V7_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v7.json"
 RECOVERY_POLICY_V8_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v8.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v9.json"
+RECOVERY_POLICY_V9_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v9.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v10.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v9"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v10"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
 PILOT_AUTHOR_MODEL = "openai/gpt-4.1-mini"
-PILOT_REVIEWER_MODEL = "google/gemini-3.8-flash"
+PILOT_REVIEWER_MODEL = "openai/gpt-4.1"
 PILOT_TRANSPORT_TIMEOUT_SECONDS = 120
 PILOT_PROVIDER_POLICY = {
-    "allow_fallbacks": True,
+    "order": ["Azure"],
+    "allow_fallbacks": False,
     "require_parameters": True,
     "data_collection": "deny",
     "zdr": True,
 }
 AUTHOR_MAX_OUTPUT_TOKENS = 1024
 REVIEWER_MAX_OUTPUT_TOKENS = 512
-PILOT_REVIEWER_TEMPERATURE = None
-PILOT_REVIEWER_REASONING = {"effort": "minimal", "exclude": True}
+PILOT_REVIEWER_TEMPERATURE = 0
+PILOT_REVIEWER_REASONING = None
 _BOUNDARY = "\U0001f9ea"
 _BOUNDARY_STATE_CODEPOINTS = 180
 _AUTHOR_LINEAGE = (
@@ -315,7 +317,7 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "reviewer_request",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v9",
+        "schema_version": "phase4e-protocol-pilot-recovery.v10",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
@@ -331,8 +333,8 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
             },
             REVIEWER_STAGE: {
                 "id": PILOT_REVIEWER_MODEL,
-                "input_usd_per_million": "0.75",
-                "output_usd_per_million": "3.75",
+                "input_usd_per_million": "2.00",
+                "output_usd_per_million": "8.00",
             },
         },
         "provider_policy": PILOT_PROVIDER_POLICY,
@@ -720,7 +722,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v9", file_path=True)
+    _require_component(output, "pilot-plan-v10", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1202,7 +1204,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v9",
+        "schema_version": "phase4e-protocol-pilot-report.v10",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1358,9 +1360,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v9", file_path=True)
-    _require_component(work_dir, "pilot-work-v9")
-    _require_component(report_dir, "pilot-report-v9")
+    _require_component(plan_path, "pilot-plan-v10", file_path=True)
+    _require_component(work_dir, "pilot-work-v10")
+    _require_component(report_dir, "pilot-report-v10")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
