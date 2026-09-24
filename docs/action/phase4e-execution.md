@@ -134,3 +134,13 @@ The 10 resolved rows included 1 accepted row, 4 `review_quality_fictional`, 4 `r
 The work tree was copied create-only to `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v5`; the post-copy inventory SHA-256 is `36fb9a6198a685ffa2c2f2b5c7267f630d75a1b88d72816b4644887a75b1c877`.
 
 V5 is `INCONCLUSIVE` by interruption and is not resumable. The next protocol must replace the inherited schema title and add an explicit schema description for the observable genericity field before another create-only run.
+
+## V6 diagnostic outcome
+
+V6 removed every provider-facing `fictional` key, title and reason code, replacing them with the observable genericity contract. This fixed the systematic zero-acceptance behavior, but the run was stopped after 36 of 70 pairs because `PASS` had become mathematically impossible: 12 of 72 rows were accepted, so even accepting all 68 remaining rows would reach only 80, below the minimum of 98.
+
+The resolved distribution was 24 genericity rejections, 16 exclusivity rejections, 11 local semantic duplicates, 6 explicit review rejections, 3 exhausted reviewer responses and 12 accepted rows. This is no longer a wire-schema defect; it is evidence that the Qwen3 30B-A3B author plus Llama 3.3 70B reviewer pair cannot meet the current protocol threshold reliably.
+
+The ledger has 120 settled calls and one open reservation from interruption during a provider response. Settled provider-reported cost was USD 0.06145967 and settled conservative debit was USD 0.54864810; no USD 10 reporting milestone was crossed. The work tree was copied create-only to `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v6`, and the post-copy inventory SHA-256 is `59afe660f0ad9b6ff6fe3e01585bed73c631f1f95c5097233eb4991ecc6ec76e`.
+
+V6 is `INCONCLUSIVE` by deliberate early termination and is not resumable. The next protocol should change the model pair while preserving the now-validated genericity wire contract and all acceptance thresholds.
