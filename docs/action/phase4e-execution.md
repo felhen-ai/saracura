@@ -27,7 +27,7 @@ sensitivity: public
 
 ## Decision
 
-Phase 4E.2c implementation is `GO`. The execution-recovery pilot resolved all 140 tasks without an operational failure, but its quality decision is `FAIL`: a systematically ambiguous fictionality instruction caused 127 rows to fail the same reviewer gate. Corpus generation and training remain `NO-GO` until that protocol defect is corrected and a complete pilot reaches `PASS`.
+Phase 4E.2 remains `NO-GO` for corpus generation and training. V10 proved the stable Azure-only GPT-4.1 Mini/GPT-4.1 transport, but ended `INCONCLUSIVE` after 122 resolved tasks and one transport-uncertain reviewer call. Its dominant defect is now isolated: the reviewer emitted repeated diagnostic criterion roles, which the stricter internal semantic-attestation model rejected even though semantic disagreement is explicitly non-blocking for pilot acceptance. A new create-only protocol must decouple that diagnostic disagreement from response validity and complete with `PASS` before Phase 4E.3.
 
 ## Cumulative spend through 2026-09-24
 
@@ -202,3 +202,25 @@ The create-only evidence bindings are:
 | sealed ledger file | `3c12ab1b618d0cdf6921e2c67c70606e1667f747ea90dad4dc717be7b7006580` |
 
 Provider-compatibility probes outside the research ledger reported an additional USD 0.00965475. Combined with v9, the diagnostic cycle consumed USD 0.03175665 and did not cross a USD 10 milestone. Three consecutive exact-schema probes of GPT-4.1 as reviewer then completed through Azure with valid structured output in 1.7-2.2 seconds. The next create-only run therefore keeps GPT-4.1 Mini as author and replaces only the reviewer with GPT-4.1; all prompts, privacy settings and quality gates remain unchanged.
+
+## V10 stable-reviewer outcome
+
+V10 kept GPT-4.1 Mini as author, moved the independent reviewer to GPT-4.1, pinned both stages to Azure under ZDR/no-collection routing, disabled provider fallback and restored the installed-runtime boundary for the still-planned Phase 4E workflow. The transport remained stable for 343 settled calls. The 344th call, a reviewer request, became transport-uncertain and stopped the run with 18 tasks unresolved.
+
+The partial result was 65 accepted, 57 rejected and 18 unresolved rows, with 18 complete accepted pairs. PT-BR accepted 39 rows and English accepted 26. There were no local privacy violations or reviewer privacy flags. The rejection distribution was 35 exhausted reviewer responses, 16 local semantic duplicates, 5 reviewer answer disagreements and 1 exclusivity rejection. Response diagnostics recorded no author failure, 195 reviewer-validation failures, 12 retry recoveries and no orphaned settled call.
+
+The reviewer failures were not output truncation. A controlled 512-versus-1024-token probe across option counts 2 through 8 completed with `finish_reason=stop` at both limits. A repeated six-option probe then reproduced the precise issue five times: every response contained six roles and one `matches_rule`, but only two unique roles. The provider JSON Schema cannot express the internal Pydantic distinct-role validator through its supported strict-schema subset; a probe adding `uniqueItems` was rejected before inference. Because semantic disagreement is diagnostic and explicitly non-blocking in this pilot, treating repeated inferred roles as a malformed provider response is a protocol-layer defect rather than a quality-gate failure.
+
+The v10 run reported USD 0.6513888 in provider cost and USD 5.0675728 in conservative debit; no USD 10 reporting milestone was crossed. Research-ledger cumulative totals became USD 1.69272184 provider-reported and USD 12.18934848 conservative. V10-related provider probes outside the research ledger added USD 0.0540308, so the full v10 diagnostic cycle consumed USD 0.7054196.
+
+The create-only evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan file | `0d8a4425c4cda7bd6e34a4bfcb01dca1fefcd7f3600da84694b0dc1223c91bca` |
+| post-copy research inventory | `e7ecd54c457d2f438dd3e3e19a3021cd7bcedfd7565d74e4ec2d1708cdd6de18` |
+| report-declared ledger | `ac990c4bc1c8efcde532d39df7f8cff855b5e09c2d26910dcfc48d5a641151d8` |
+| sealed report file | `4a2f8f2c2296932aa4ff84fa4691d5b16c9dae58928f4746b468dab83297ad5c` |
+| sealed ledger file | `2ad191c02396c4c6e6d82adcf6cdc87698c858b4831620b4376cf837eb5e60ba` |
+
+V10 is immutable and non-resumable because its ledger contains one uncertain call. The next create-only run must preserve every quality threshold and answer-blind field, treat repeated reviewer semantic roles as a valid diagnostic disagreement instead of a transport failure, and extend only the fixed transport timeout enough to finish the 140-task protocol.
