@@ -859,7 +859,21 @@ def reviewer_schema(batch_size: int) -> dict[str, Any]:
         raise CorpusError("invalid reviewer batch")
     schema = ReviewerGeneratedRecord.model_json_schema()
     definitions = schema.pop("$defs", {})
-    result: dict[str, Any] = {
+    attestation = definitions.get("SemanticEquivalenceAttestation")
+    if not isinstance(attestation, dict):
+        raise CorpusError("reviewer schema")
+    attestation_properties = attestation.get("properties")
+    if not isinstance(attestation_properties, dict):
+        raise CorpusError("reviewer schema")
+    attestation_properties["selected_role"] = {
+        "type": "string",
+        "enum": ["matches_rule"],
+    }
+    schema_properties = schema.get("properties")
+    if not isinstance(schema_properties, dict):
+        raise CorpusError("reviewer schema")
+    schema_properties["semantic_equivalence_attestation"] = attestation
+    return {
         "type": "object",
         "additionalProperties": False,
         "required": ["reviews"],
@@ -872,9 +886,6 @@ def reviewer_schema(batch_size: int) -> dict[str, Any]:
             }
         },
     }
-    if definitions:
-        result["$defs"] = definitions
-    return result
 
 
 def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
@@ -1129,14 +1140,16 @@ def materialize_reviewer_record(
         try:
             full = ReviewerRecord.model_validate(record)
         except ValidationError as error:
-            raise CorpusError("review record schema") from error
+            raise CorpusError(
+                f"review record schema ({_safe_validation_details(error)})"
+            ) from error
         if full.task_id != row.task_id:
             raise CorpusError("review task identity")
         return full.model_dump(mode="json")
     try:
         generated = ReviewerGeneratedRecord.model_validate(record).model_dump(mode="json")
     except ValidationError as error:
-        raise CorpusError("review record schema") from error
+        raise CorpusError(f"review record schema ({_safe_validation_details(error)})") from error
     generated["task_id"] = row.task_id
     return generated
 
@@ -1294,13 +1307,36 @@ def _known_contract_path(path: str) -> str:
     if re.fullmatch(r"criteria\.\d+\.description", path):
         return "criteria.description"
     if path in {
+        "task_id",
+        "status",
+        "selected_criterion_id",
+        "reason_codes",
+        "natural_language",
+        "fictional",
+        "exclusive_options",
+        "private_or_sensitive",
         "semantic_equivalence_attestation",
         "semantic_equivalence_attestation.scenario",
         "semantic_equivalence_attestation.criterion_roles",
         "semantic_equivalence_attestation.selected_role",
     }:
         return path
+    if re.fullmatch(r"reason_codes\.\d+", path):
+        return "reason_codes"
     return "unknown"
+
+
+def _safe_validation_details(error: ValidationError) -> str:
+    """Render only static field taxonomy and Pydantic error types."""
+
+    signatures: list[str] = []
+    for item in error.errors(include_input=False, include_url=False)[:8]:
+        path = ".".join(str(part) for part in item["loc"]).casefold()
+        error_type = str(item["type"]).casefold()
+        if not re.fullmatch(r"[a-z0-9_]+", error_type):
+            error_type = "unknown"
+        signatures.append(f"{_known_contract_path(path)}:{error_type}")
+    return "_".join(signatures)[:160] or "unknown:unknown"
 
 
 def classify_author_rows(

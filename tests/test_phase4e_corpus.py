@@ -481,7 +481,8 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
         author_schema(mismatched_pair)
 
     review = corpus.reviewer_schema(1)
-    assert "$defs" in review
+    assert "$defs" not in review
+    assert "$ref" not in json.dumps(review)
     assert set(review["properties"]["reviews"]["items"]["properties"]) == {
         "status",
         "selected_criterion_id",
@@ -491,6 +492,13 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
         "exclusive_options",
         "private_or_sensitive",
         "semantic_equivalence_attestation",
+    }
+    review_attestation = review["properties"]["reviews"]["items"]["properties"][
+        "semantic_equivalence_attestation"
+    ]
+    assert review_attestation["properties"]["selected_role"] == {
+        "type": "string",
+        "enum": ["matches_rule"],
     }
 
 
@@ -547,6 +555,20 @@ def test_semantic_attestations_are_provider_emitted_not_position_derived() -> No
         {**generated_review, "semantic_equivalence_attestation": attestation}, typed
     )
     assert materialized["semantic_equivalence_attestation"] == attestation
+    marker = "provider_private_review_key"
+    with pytest.raises(
+        CorpusError, match=r"review record schema \(unknown:extra_forbidden\)"
+    ) as caught:
+        corpus.materialize_reviewer_record(
+            {
+                **generated_review,
+                "semantic_equivalence_attestation": attestation,
+                marker: "never persist",
+            },
+            typed,
+        )
+    assert marker not in str(caught.value)
+    assert "never persist" not in str(caught.value)
 
 
 def test_same_gold_position_with_different_closed_author_semantics_rejects_pair() -> None:

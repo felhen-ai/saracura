@@ -802,7 +802,7 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
         "corpus_author": Decimal("4.4112031"),
-        "corpus_reviewer": Decimal("9.99871629"),
+        "corpus_reviewer": Decimal("9.71017229"),
     }
     assert totals["corpus_author"] < Decimal("5")
     assert totals["corpus_reviewer"] < Decimal("10")

@@ -298,6 +298,11 @@ rejected content. Schema and task-contract codes may append a bounded,
 sanitized Pydantic field-path/error-type signature; input values and exception
 payloads remain prohibited. Field paths come only from a static local allowlist;
 provider-controlled or otherwise unknown locations collapse to `unknown`.
+The reviewer schema likewise inlines its semantic attestation and binds
+`selected_role=matches_rule`, without `$defs` or `$ref`. If local reviewer
+validation still fails, the surfaced diagnostic contains only a static
+field-path taxonomy and Pydantic error type; provider-controlled keys and
+values collapse to `unknown` and are never persisted.
 
 The Wilson stop is evaluated at each ten-author-batch boundary once at least 20
 planned tasks have resolved. Deterministic impossibility is always
@@ -394,7 +399,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.4112031 for the author and USD 9.99871629 for the
+preflight is currently USD 4.4112031 for the author and USD 9.71017229 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the
