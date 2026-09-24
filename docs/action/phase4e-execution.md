@@ -124,3 +124,13 @@ The work tree was copied create-only to the durable research root at `~/Library/
 | sealed ledger file | `0d2314472ee30c5627f07eea51bc41812e57a4f5d55385e1c874b33f716894f8` |
 
 V4 is not resumable because its ledger contains one transport-uncertain call. Phase 4E.3 remains blocked pending a complete `PASS`.
+
+## V5 diagnostic outcome
+
+V5 renamed the provider field to `generic_or_invented` and mapped it locally to the stable internal `fictional` field. It was stopped after five resolved pairs because the provider-facing JSON Schema still inherited `title: "Fictional"` from the internal Pydantic field. That hidden semantic label meant the provider continued receiving the concept V5 intended to remove.
+
+The 10 resolved rows included 1 accepted row, 4 `review_quality_fictional`, 4 `review_quality_exclusive_options` and 1 `semantic_duplicate`. The work ledger contains 15 settled calls and one open reservation from interruption during an author response. Settled provider-reported cost was USD 0.00729730 and settled conservative debit was USD 0.07053515; no USD 10 reporting milestone was crossed. The open reservation must never be replayed.
+
+The work tree was copied create-only to `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v5`; the post-copy inventory SHA-256 is `36fb9a6198a685ffa2c2f2b5c7267f630d75a1b88d72816b4644887a75b1c877`.
+
+V5 is `INCONCLUSIVE` by interruption and is not resumable. The next protocol must replace the inherited schema title and add an explicit schema description for the observable genericity field before another create-only run.
