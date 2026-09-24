@@ -16,7 +16,9 @@ from decimal import Decimal
 from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
+
+from pydantic import Field
 
 from benchmarks import saracura_universal_corpus as corpus
 from benchmarks.data_policy_registry import (
@@ -37,16 +39,17 @@ RECOVERY_POLICY_V6_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-re
 RECOVERY_POLICY_V7_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v7.json"
 RECOVERY_POLICY_V8_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v8.json"
 RECOVERY_POLICY_V9_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v9.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v10.json"
+RECOVERY_POLICY_V10_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v10.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v11.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v10"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v11"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
 PILOT_AUTHOR_MODEL = "openai/gpt-4.1-mini"
 PILOT_REVIEWER_MODEL = "openai/gpt-4.1"
-PILOT_TRANSPORT_TIMEOUT_SECONDS = 120
+PILOT_TRANSPORT_TIMEOUT_SECONDS = 240
 PILOT_PROVIDER_POLICY = {
     "order": ["Azure"],
     "allow_fallbacks": False,
@@ -91,6 +94,26 @@ _PERSISTED_DIAGNOSTIC_KEYS = (
     "reviewer_response_failures",
     "retry_recoveries",
 )
+
+
+class PilotSemanticEquivalenceAttestation(corpus._Closed):
+    """Non-blocking reviewer observation; repeated roles are diagnostic evidence."""
+
+    scenario: corpus.ScenarioCode
+    criterion_roles: list[corpus.CriterionRole] = Field(min_length=2, max_length=8)
+    selected_role: Literal["matches_rule"]
+
+
+class PilotReviewerRecord(corpus._Closed):
+    task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
+    status: Literal["accepted", "rejected"]
+    selected_criterion_id: str | None
+    reason_codes: list[corpus.ReviewerReasonCode] = Field(max_length=8)
+    natural_language: bool
+    fictional: bool
+    exclusive_options: bool
+    private_or_sensitive: bool
+    semantic_equivalence_attestation: PilotSemanticEquivalenceAttestation
 
 
 def _canonical(value: Any) -> bytes:
@@ -317,14 +340,14 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "reviewer_request",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v10",
+        "schema_version": "phase4e-protocol-pilot-recovery.v11",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
         "cost_mode": "report_only",
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
-        "review_protocol": "genericity-schema-metadata.v1",
+        "review_protocol": "genericity-schema-metadata.v2",
         "models": {
             AUTHOR_STAGE: {
                 "id": PILOT_AUTHOR_MODEL,
@@ -632,7 +655,11 @@ def bind_pilot_reviewer_record(record: Mapping[str, Any], task_id: str) -> dict[
     normalized["reason_codes"] = [
         "fictional" if code == "real_world_anchor" else code for code in reason_codes
     ]
-    return corpus.bind_reviewer_record(normalized, task_id)
+    normalized["task_id"] = task_id
+    try:
+        return PilotReviewerRecord.model_validate(normalized).model_dump(mode="json")
+    except Exception as error:
+        raise corpus.CorpusError("review record pilot schema") from error
 
 
 def pilot_acceptance(row: Mapping[str, Any], review: corpus.ReviewerRecord) -> str | None:
@@ -722,7 +749,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v10", file_path=True)
+    _require_component(output, "pilot-plan-v11", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1113,7 +1140,7 @@ def _semantic_kind(row: Mapping[str, Any], review: Mapping[str, Any]) -> str | N
         author = corpus.SemanticEquivalenceAttestation.model_validate(
             row["semantic_equivalence_attestation"]
         )
-        reviewer = corpus.SemanticEquivalenceAttestation.model_validate(
+        reviewer = PilotSemanticEquivalenceAttestation.model_validate(
             review["semantic_equivalence_attestation"]
         )
         selected = next(
@@ -1125,7 +1152,7 @@ def _semantic_kind(row: Mapping[str, Any], review: Mapping[str, Any]) -> str | N
         return None
     return corpus._attestation_disagreement_reason(
         author,
-        reviewer,
+        cast(corpus.SemanticEquivalenceAttestation, reviewer),
         option_count=len(row["criteria"]),
         selected_position=selected,
     )
@@ -1204,7 +1231,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v10",
+        "schema_version": "phase4e-protocol-pilot-report.v11",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1360,9 +1387,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v10", file_path=True)
-    _require_component(work_dir, "pilot-work-v10")
-    _require_component(report_dir, "pilot-report-v10")
+    _require_component(plan_path, "pilot-plan-v11", file_path=True)
+    _require_component(work_dir, "pilot-work-v11")
+    _require_component(report_dir, "pilot-report-v11")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
@@ -1696,6 +1723,7 @@ def _run_pilot_batch(
         reviewer_lineages=reviewer_lineages,
         acceptance=pilot_acceptance,
         pair_resolution=pilot_pair_resolution,
+        review_model=PilotReviewerRecord,
     )
     outcomes = [
         *[(item, "rejected") for item in rejected_author],

@@ -1802,13 +1802,14 @@ def resolve_reviews(
         tuple[list[dict[str, Any]], list[dict[str, Any]]],
     ]
     | None = None,
+    review_model: type[BaseModel] = ReviewerRecord,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(reviews, list) or len(reviews) != len(rows):
         raise CorpusError("review record count")
     by_id: dict[str, ReviewerRecord] = {}
     for raw in reviews:
         try:
-            review = ReviewerRecord.model_validate(raw)
+            review = cast(ReviewerRecord, review_model.model_validate(raw))
         except ValidationError as error:
             raise CorpusError("review schema") from error
         if review.task_id in by_id:
