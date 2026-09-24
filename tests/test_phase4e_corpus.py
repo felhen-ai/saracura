@@ -1326,14 +1326,8 @@ def test_presend_reservation_is_atomic_and_charged_after_transport_errors(
     assert resumed.spent("corpus_author") > 0
     assert resumed.provider_journal[0]["task_ids"] == [slot["task_id"]]
     assert resumed.provider_journal[0]["reservation_id"] == resumed.entries[0]["reservation_id"]
-    if kind == "timeout":
-        assert resumed.entries[0]["response_sha256"] == "0" * 64
-        assert resumed.entries[0]["request_id"] == resumed.entries[0]["reservation_id"]
-    else:
-        assert resumed.entries[0]["response_sha256"] != "0" * 64
-        assert resumed.entries[0]["request_id"] == corpus._local_response_request_id(
-            resumed.entries[0]["reservation_id"], resumed.entries[0]["response_sha256"]
-        )
+    assert resumed.entries[0]["response_sha256"] == "0" * 64
+    assert resumed.entries[0]["request_id"] == resumed.entries[0]["reservation_id"]
 
 
 def test_fake_transport_is_pinned_resumable_and_never_needs_socket(

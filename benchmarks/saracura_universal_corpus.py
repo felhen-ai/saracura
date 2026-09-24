@@ -241,7 +241,7 @@ PILOT_LEDGER_POLICY_V3 = LedgerPolicy(
     automatic_retries=4,
     enforce_budget=False,
 )
-PILOT_LEDGER_POLICY = LedgerPolicy(
+PILOT_LEDGER_POLICY_V4 = LedgerPolicy(
     schema_version="phase4e-pilot-cost-ledger.v4",
     entry_stages={
         "pilot_author": Decimal("0"),
@@ -251,6 +251,21 @@ PILOT_LEDGER_POLICY = LedgerPolicy(
     prices={
         "pilot_author": (Decimal("0.40"), Decimal("1.60")),
         "pilot_reviewer": (Decimal("2.00"), Decimal("8.00")),
+    },
+    journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
+    automatic_retries=4,
+    enforce_budget=False,
+)
+PILOT_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-pilot-cost-ledger.v5",
+    entry_stages={
+        "pilot_author": Decimal("0"),
+        "pilot_reviewer": Decimal("0"),
+    },
+    total_budget=Decimal("0"),
+    prices={
+        "pilot_author": (Decimal("2.00"), Decimal("8.00")),
+        "pilot_reviewer": (Decimal("0.40"), Decimal("1.60")),
     },
     journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
     automatic_retries=4,
@@ -267,6 +282,8 @@ def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
         return PILOT_LEDGER_POLICY_V2
     if schema == PILOT_LEDGER_POLICY_V3.schema_version:
         return PILOT_LEDGER_POLICY_V3
+    if schema == PILOT_LEDGER_POLICY_V4.schema_version:
+        return PILOT_LEDGER_POLICY_V4
     if schema == PILOT_LEDGER_POLICY.schema_version:
         return PILOT_LEDGER_POLICY
     raise CorpusError("ledger identity")
@@ -3078,11 +3095,10 @@ class OpenRouterCorpusClient:
         stage: str,
         reservation_id: str,
         task_ids: Sequence[str],
-        response_sha256: str | None = None,
     ) -> None:
         """Terminally bind an outcome-unknown attempt to its planned tasks."""
 
-        self.ledger.mark_uncertain(reservation_id, response_sha256)
+        self.ledger.mark_uncertain(reservation_id)
         write_ledger_snapshot(self._ledger_directory, self.ledger)
         self.ledger.record_provider_journal(
             stage=stage, reservation_id=reservation_id, task_ids=task_ids
@@ -3161,7 +3177,6 @@ class OpenRouterCorpusClient:
                 stage=stage,
                 reservation_id=reservation_id,
                 task_ids=task_ids,
-                response_sha256=_sha(raw) if "raw" in locals() and isinstance(raw, bytes) else None,
             )
             raise
         except (
@@ -3176,7 +3191,6 @@ class OpenRouterCorpusClient:
                 stage=stage,
                 reservation_id=reservation_id,
                 task_ids=task_ids,
-                response_sha256=_sha(raw) if "raw" in locals() and isinstance(raw, bytes) else None,
             )
             if "status" in locals() and status != 200:
                 raise CorpusError(f"provider HTTP {status}") from error

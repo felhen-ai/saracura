@@ -40,16 +40,17 @@ RECOVERY_POLICY_V7_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-re
 RECOVERY_POLICY_V8_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v8.json"
 RECOVERY_POLICY_V9_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v9.json"
 RECOVERY_POLICY_V10_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v10.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v11.json"
+RECOVERY_POLICY_V11_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v11.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v12.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v11"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v12"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
-PILOT_AUTHOR_MODEL = "openai/gpt-4.1-mini"
-PILOT_REVIEWER_MODEL = "openai/gpt-4.1"
-PILOT_TRANSPORT_TIMEOUT_SECONDS = 240
+PILOT_AUTHOR_MODEL = "openai/gpt-4.1"
+PILOT_REVIEWER_MODEL = "openai/gpt-4.1-mini"
+PILOT_TRANSPORT_TIMEOUT_SECONDS = 120
 PILOT_PROVIDER_POLICY = {
     "order": ["Azure"],
     "allow_fallbacks": False,
@@ -93,6 +94,7 @@ _PERSISTED_DIAGNOSTIC_KEYS = (
     "author_response_failures",
     "reviewer_response_failures",
     "retry_recoveries",
+    "transport_uncertain_calls",
 )
 
 
@@ -340,24 +342,24 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "reviewer_request",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v11",
+        "schema_version": "phase4e-protocol-pilot-recovery.v12",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
         "cost_mode": "report_only",
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
-        "review_protocol": "genericity-schema-metadata.v2",
+        "review_protocol": "transport-uncertain-as-rejection.v1",
         "models": {
             AUTHOR_STAGE: {
                 "id": PILOT_AUTHOR_MODEL,
-                "input_usd_per_million": "0.40",
-                "output_usd_per_million": "1.60",
+                "input_usd_per_million": "2.00",
+                "output_usd_per_million": "8.00",
             },
             REVIEWER_STAGE: {
                 "id": PILOT_REVIEWER_MODEL,
-                "input_usd_per_million": "2.00",
-                "output_usd_per_million": "8.00",
+                "input_usd_per_million": "0.40",
+                "output_usd_per_million": "1.60",
             },
         },
         "provider_policy": PILOT_PROVIDER_POLICY,
@@ -749,7 +751,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v11", file_path=True)
+    _require_component(output, "pilot-plan-v12", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1231,7 +1233,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v11",
+        "schema_version": "phase4e-protocol-pilot-report.v12",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1255,6 +1257,7 @@ def build_pilot_report(
             "author_failures": diagnostics["author_response_failures"],
             "reviewer_failures": diagnostics["reviewer_response_failures"],
             "retry_recoveries": diagnostics["retry_recoveries"],
+            "transport_uncertain_calls": diagnostics["transport_uncertain_calls"],
             "orphaned_settled_calls": diagnostics["orphaned_settled_calls"],
         },
         "local_privacy_violations": diagnostics["local_privacy"],
@@ -1293,6 +1296,7 @@ def _blank_diagnostics() -> dict[str, int]:
         "author_response_failures": 0,
         "reviewer_response_failures": 0,
         "retry_recoveries": 0,
+        "transport_uncertain_calls": 0,
         "orphaned_settled_calls": 0,
         "operational_failures": 0,
         "missing_journal": 0,
@@ -1387,9 +1391,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v11", file_path=True)
-    _require_component(work_dir, "pilot-work-v11")
-    _require_component(report_dir, "pilot-report-v11")
+    _require_component(plan_path, "pilot-plan-v12", file_path=True)
+    _require_component(work_dir, "pilot-work-v12")
+    _require_component(report_dir, "pilot-report-v12")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
@@ -1459,13 +1463,22 @@ def run_pilot(
     restored_diagnostics, diagnostics_complete = _load_pilot_diagnostics(work_dir, plan, completed)
     for key, value in restored_diagnostics.items():
         diagnostics[key] = value
-    operational = any(
-        entry["status"] in {"uncertain", "reserved"} for entry in client.ledger.entries
+    try:
+        _require_bound_uncertain_resolutions(
+            client.ledger,
+            resolved,
+            diagnostics["transport_uncertain_calls"],
+        )
+        bound_uncertain = True
+    except corpus.CorpusError:
+        bound_uncertain = False
+    operational = (
+        any(entry["status"] == "reserved" for entry in client.ledger.entries) or not bound_uncertain
     )
     if not diagnostics_complete:
         diagnostics["missing_diagnostics"] = 1
         operational = True
-    if any(entry["status"] == "uncertain" for entry in client.ledger.entries):
+    if not bound_uncertain:
         diagnostics["uncertain"] = 1
     try:
         client.ledger.require_complete_provider_journal()
@@ -1500,7 +1513,7 @@ def run_pilot(
                     maximum_attempts=maximum_attempts,
                 )
             except corpus.CorpusError:
-                if not any(entry["status"] == "uncertain" for entry in client.ledger.entries):
+                if not client.ledger.entries or client.ledger.entries[-1]["status"] != "uncertain":
                     raise
                 diagnostics["operational_failures"] += 1
                 operational = True
@@ -1518,6 +1531,16 @@ def run_pilot(
                 )
                 next_cost_report += report_interval
     all_ids = {cast(str, slot["task_id"]) for slot in slots}
+    final_resolved = pipeline._load_resolved(work_dir, plan)
+    try:
+        _require_bound_uncertain_resolutions(
+            client.ledger,
+            final_resolved,
+            diagnostics["transport_uncertain_calls"],
+        )
+    except corpus.CorpusError:
+        diagnostics["uncertain"] = 1
+        operational = True
     if completed != all_ids and not operational:
         # A quiet shortfall is still unresolved and therefore inconclusive.
         operational = True
@@ -1559,6 +1582,68 @@ def run_pilot(
     return report_path
 
 
+def _uncertain_lineage(
+    client: corpus.OpenRouterCorpusClient,
+    actor: Literal["author", "reviewer"],
+    expected_stage: str,
+) -> dict[str, str]:
+    if not client.ledger.entries:
+        raise corpus.CorpusError("uncertain lineage")
+    entry = client.ledger.entries[-1]
+    if entry["status"] != "uncertain" or entry["stage"] != expected_stage:
+        raise corpus.CorpusError("uncertain lineage")
+    return {
+        f"{actor}_response_sha256": entry["response_sha256"],
+        f"{actor}_reservation_id": entry["reservation_id"],
+        f"{actor}_request_id": entry["request_id"],
+    }
+
+
+def _require_bound_uncertain_resolutions(
+    ledger: corpus.BudgetLedger,
+    resolved: Mapping[str, Mapping[str, Any]],
+    handled_count: int,
+) -> None:
+    uncertain = [entry for entry in ledger.entries if entry["status"] == "uncertain"]
+    if handled_count != len(uncertain):
+        raise corpus.CorpusError("unbound uncertain resolution")
+    journals = {
+        (journal["stage"], journal["reservation_id"]): journal
+        for journal in ledger.provider_journal
+    }
+    if len(journals) != len(ledger.provider_journal):
+        raise corpus.CorpusError("unbound uncertain resolution")
+    for entry in uncertain:
+        if entry["response_sha256"] != "0" * 64 or entry["request_id"] != entry["reservation_id"]:
+            raise corpus.CorpusError("unbound uncertain resolution")
+        journal = journals.get((entry["stage"], entry["reservation_id"]))
+        if journal is None:
+            raise corpus.CorpusError("unbound uncertain resolution")
+        actor = "author" if entry["stage"] == AUTHOR_STAGE else "reviewer"
+        if actor == "reviewer" and entry["stage"] != REVIEWER_STAGE:
+            raise corpus.CorpusError("unbound uncertain resolution")
+        expected_lineage = {
+            f"{actor}_response_sha256": entry["response_sha256"],
+            f"{actor}_reservation_id": entry["reservation_id"],
+            f"{actor}_request_id": entry["request_id"],
+        }
+        expected_reason = f"{actor}_transport_uncertain"
+        task_ids = journal["task_ids"]
+        if not isinstance(task_ids, list) or not task_ids:
+            raise corpus.CorpusError("unbound uncertain resolution")
+        for task_id in task_ids:
+            resolution = resolved.get(task_id)
+            row = resolution.get("row") if resolution is not None else None
+            if (
+                resolution is None
+                or resolution.get("status") != "rejected"
+                or not isinstance(row, dict)
+                or row.get("reason") != expected_reason
+                or any(row.get(key) != value for key, value in expected_lineage.items())
+            ):
+                raise corpus.CorpusError("unbound uncertain resolution")
+
+
 def _run_pilot_batch(
     pipeline: Any,
     client: corpus.OpenRouterCorpusClient,
@@ -1593,7 +1678,32 @@ def _run_pilot_batch(
         except corpus.CorpusError:
             diagnostics["author_response_failures"] += 1
             if client.ledger.entries and client.ledger.entries[-1]["status"] == "uncertain":
-                raise
+                diagnostics["transport_uncertain_calls"] += 1
+                uncertain_lineage = _uncertain_lineage(client, "author", AUTHOR_STAGE)
+                rows = [
+                    {
+                        "task_id": slot["task_id"],
+                        "split": slot["split"],
+                        "reason": "author_transport_uncertain",
+                        **uncertain_lineage,
+                    }
+                    for slot in slots
+                ]
+                pipeline._store_call_resolution(
+                    work_dir,
+                    slots,
+                    [(row, "rejected") for row in rows],
+                )
+                _store_pilot_diagnostics(
+                    work_dir,
+                    slots,
+                    {
+                        key: diagnostics[key] - diagnostics_before[key]
+                        for key in _PERSISTED_DIAGNOSTIC_KEYS
+                    },
+                )
+                rejected.extend(rows)
+                return
             author_lineage = corpus.lineage_from_journal(
                 client.last_journal(AUTHOR_STAGE), "author", expected_stage=AUTHOR_STAGE
             )
@@ -1667,7 +1777,20 @@ def _run_pilot_batch(
             except corpus.CorpusError:
                 diagnostics["reviewer_response_failures"] += 1
                 if client.ledger.entries and client.ledger.entries[-1]["status"] == "uncertain":
-                    raise
+                    diagnostics["transport_uncertain_calls"] += 1
+                    reviewer_lineages[task_id] = _uncertain_lineage(
+                        client, "reviewer", REVIEWER_STAGE
+                    )
+                    reviewer_failures.append(
+                        {
+                            "task_id": task_id,
+                            "split": row["split"],
+                            "reason": "reviewer_transport_uncertain",
+                            **author_lineage,
+                            **reviewer_lineages[task_id],
+                        }
+                    )
+                    break
                 journal = client.last_journal(REVIEWER_STAGE)
                 reviewer_lineages[task_id] = corpus.lineage_from_journal(
                     journal, "reviewer", expected_stage=REVIEWER_STAGE
@@ -1696,15 +1819,16 @@ def _run_pilot_batch(
                     continue
                 break
         if review is None:
-            reviewer_failures.append(
-                {
-                    "task_id": task_id,
-                    "split": row["split"],
-                    "reason": "reviewer_response_failure",
-                    **author_lineage,
-                    **reviewer_lineages[task_id],
-                }
-            )
+            if not any(failure["task_id"] == task_id for failure in reviewer_failures):
+                reviewer_failures.append(
+                    {
+                        "task_id": task_id,
+                        "split": row["split"],
+                        "reason": "reviewer_response_failure",
+                        **author_lineage,
+                        **reviewer_lineages[task_id],
+                    }
+                )
             continue
         reviews.append(review)
         reviewed_rows.append(row)

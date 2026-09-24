@@ -240,17 +240,17 @@ de um `PASS`; o próprio piloto nunca altera essas autorizações.
 
 ```bash
 uv run python -m benchmarks.phase4e_pipeline pilot-plan \
-  --output .artifacts/phase4e/pilot-plan-v11/plan.json
+  --output .artifacts/phase4e/pilot-plan-v12/plan.json
 
 uv run python -m benchmarks.phase4e_pipeline import-ledgers \
   --source .artifacts/phase4e \
   --artifact-root <raiz-duravel-dos-ledgers-phase4e>
 
 uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
-  --plan .artifacts/phase4e/pilot-plan-v11/plan.json \
+  --plan .artifacts/phase4e/pilot-plan-v12/plan.json \
   --snapshot <snapshot-minilm-verificado> \
-  --work-dir .artifacts/phase4e/pilot-work-v11 \
-  --report .artifacts/phase4e/pilot-report-v11 \
+  --work-dir .artifacts/phase4e/pilot-work-v12 \
+  --report .artifacts/phase4e/pilot-report-v12 \
   --artifact-root <raiz-duravel-dos-ledgers-phase4e> \
   --allow-network
 ```
