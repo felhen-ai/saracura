@@ -27,7 +27,7 @@ sensitivity: public
 
 ## Decision
 
-Phase 4E.2 remains `NO-GO` for corpus generation and training. V10 proved the stable Azure-only GPT-4.1 Mini/GPT-4.1 transport, but ended `INCONCLUSIVE` after 122 resolved tasks and one transport-uncertain reviewer call. Its dominant defect is now isolated: the reviewer emitted repeated diagnostic criterion roles, which the stricter internal semantic-attestation model rejected even though semantic disagreement is explicitly non-blocking for pilot acceptance. A new create-only protocol must decouple that diagnostic disagreement from response validity and complete with `PASS` before Phase 4E.3.
+Phase 4E.2 remains `NO-GO` for corpus generation and training. V11 eliminated every reviewer-schema failure and showed that the remaining gap is author quality, especially duplicated English tasks, plus rare Azure tail latency. A sampled GPT-4.1 author produced 20/20 locally valid rows with zero exact duplicate, while GPT-4.1 Mini independently accepted 20/20 previously clean rows as reviewer. The next create-only protocol therefore swaps those two checkpoints and treats a transport-uncertain call as a conservative rejection of only its precommitted tasks instead of invalidating the remaining benchmark.
 
 ## Cumulative spend through 2026-09-24
 
@@ -224,3 +224,23 @@ The create-only evidence bindings are:
 | sealed ledger file | `2ad191c02396c4c6e6d82adcf6cdc87698c858b4831620b4376cf837eb5e60ba` |
 
 V10 is immutable and non-resumable because its ledger contains one uncertain call. The next create-only run must preserve every quality threshold and answer-blind field, treat repeated reviewer semantic roles as a valid diagnostic disagreement instead of a transport failure, and extend only the fixed transport timeout enough to finish the 140-task protocol.
+
+## V11 non-blocking-diagnostics outcome
+
+V11 made repeated reviewer roles a diagnostic criterion-role disagreement while keeping the strict corpus model unchanged. That correction worked completely: all 134 attempted reviews were structurally valid, with zero reviewer failure or retry. The run reached 134 resolved tasks before the next author request exceeded 240 seconds and became uncertain, leaving its pair and the two subsequent pairs unresolved.
+
+The partial result was 96 accepted, 38 rejected and 6 unresolved rows, with 37 complete accepted pairs. PT-BR accepted 57 rows and English accepted 39. The English result could reach at most 42 even if all three unresolved English rows were accepted, below the protocol minimum of 45; a transport-only rerun with the same deterministic model pair would therefore not fix quality. Rejections were concentrated in 16 English semantic duplicates and 11 English answer disagreements; PT-BR had 8 answer disagreements and 2 explicit review rejections. There were no privacy flags, reviewer-schema failures or orphaned settled calls.
+
+The v11 run reported USD 0.4641744 in provider cost and USD 2.5762804 in conservative debit; no USD 10 milestone was crossed. Research-ledger cumulative totals became USD 2.15689624 provider-reported and USD 14.76562888 conservative. V11-related model and endpoint probes outside the ledger added USD 0.1877528, so the full v11 diagnostic cycle consumed USD 0.6519272.
+
+The create-only evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan file | `f2ce28182acadf97e46087295d0f0f8e7a3087ca9ffa15d5c6c4d68fa8304695` |
+| post-copy research inventory | `c19ad65bcf0054955deddc25de00628d2a8562f8cadefe66f3a1c9eadc4af1c8` |
+| report-declared ledger | `9d4ef6ed6d164ef5a01715d27b0bf96da0caf05845ee96abcc382fb0fe7f5d10` |
+| sealed report file | `a9f3e3c4900705264d7c0f18a5d224002199121f5d60c5dba8e59b393ce0e453` |
+| sealed ledger file | `1ad79bd3f1ee6446164169255269c926014a369937e58d22706c7d63a0bdfa5a` |
+
+Two bounded quality probes selected the next model pair. GPT-4.1 authored 20/20 locally valid sampled tasks with zero exact duplicate and one near-duplicate, costing USD 0.06416. GPT-4.1 Mini then independently reviewed 20 previously accepted rows with 20/20 acceptance, no transport or schema failure, median latency 1.984 seconds and USD 0.0115272 cost. V12 will use GPT-4.1 as author and GPT-4.1 Mini as reviewer, preserve Azure/ZDR/no-fallback routing and every quality threshold, and conservatively reject only the tasks attached to any transport-uncertain call while continuing the rest of the precommitted plan.
