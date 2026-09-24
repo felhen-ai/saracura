@@ -9,7 +9,7 @@ status: active
 canonical: docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
 globalRef: qmd://saracura/docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
 reviewCadenceDays: 14
-lastReviewedAt: 2026-09-23
+lastReviewedAt: 2026-09-24
 sourceRefs:
   - https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   - https://github.com/huggingface/sentence-transformers
@@ -47,6 +47,117 @@ universal checkpoint. It may start from a general-purpose pretrained encoder,
 as normal downstream model development does, but it must not consume Laya
 weights, tokenizer bytes, logits, temperatures, labels, generated decisions,
 or hidden representations. Laya remains an external benchmark adapter only.
+
+## Empirical protocol record and mandatory pilot gate
+
+Pilot-spec critique round: 6, final. Prior rounds established the empirical gate,
+isolated pilot architecture, source-policy treatment, budget model, and
+machine-readable spend baseline. Under the Harness contract, this round closes
+those recorded decisions rather than reopening settled alternatives.
+The round-6 privacy blocker is resolved by rejecting every flagged row while
+gating the aggregate reviewer-flag rate at 7/140 and local detection at zero.
+Two late findings that prior rounds could have raised were nevertheless closed
+with registry v1/v2 coexistence and a durable external artifact root. The
+orchestrator therefore records `GO` for Phase 4E.2b implementation; corpus and
+training remain `NO-GO`.
+
+The provider lane is operational, but the current semantic acceptance contract
+is not viable and must not advance to training. The immutable local execution
+record through 2026-09-24 contains 46 `corpus-work*` directories and 2,117
+charged ledger entries: 2,099 settled and 18 legacy open reservations. It records
+USD 0.81263107 in provider-reported cost and USD 5.12153043 in conservative
+debit. These are cumulative research facts. The USD 17 implementation guard in
+existing code is per work directory; it is technically distinct from the scope
+of the operator's Phase authorization, which must be explicit before real pilot
+transport.
+
+On 2026-09-24 the operator explicitly chose the conservative interpretation:
+USD 17.00 is the cumulative Phase 4E authorization through completion of the
+protocol pilot. The historical USD 5.12153043 debit already includes USD
+0.01971612 from the 18 open reservations. Adding the pilot's USD 1.50 summed
+hard cap gives USD 6.62153043, below authorization; the lower approximately USD
+1.2081 calculated-plan estimate is reported separately and never replaces that
+proof. Phase 4E.3 always requires a renewed
+cumulative authorization after the pilot, regardless of whether the USD 5/USD
+10 corpus stage caps themselves change.
+
+The protocol regimes produced:
+
+| Regime | Evidence | Resolved | Accepted | Result |
+|---|---|---:|---:|---|
+| Pre-semantic-attestation Gemini | `corpus-work-v32` | 232 | 184 | 79%, then cell-level Wilson stop |
+| Exact semantic attestation, Gemini | `corpus-work-v33` through `v35` | 129 | 0 | v35 global Wilson stop; v33/v34 interrupted earlier |
+| Exact semantic attestation, Qwen author plus Llama reviewer | `corpus-work-v44` and `v46` | 40 | 0 | global Wilson stop at 0/20 in each run |
+
+Intermediate v37-v41 runs resolved 100 additional zero-acceptance records while
+hardening author schemas; v43 and v45 exposed reviewer-response and timeout
+recovery gaps and remain diagnostic evidence rather than quality measurements.
+The v46 rejection distribution was ten scenario disagreements, five ordered
+criterion-role disagreements, four fictionality failures, and one answer
+disagreement. Exact agreement on the auxiliary scenario and full ordered role
+sequence is therefore not a construct-valid proxy for whether the example can
+train a choice ranker. The current planner also chooses scenarios independently
+of domain, creating avoidable cross-ontology combinations. This evidence
+supersedes the earlier assumption that exact reviewer semantic attestation
+could be used directly as an acceptance gate.
+
+Training remains **NO-GO** until a separate precommitted protocol pilot passes.
+That pilot must be represented by a reviewed policy/manifest revision and must:
+
+- use 140 new task identities derived from seed
+  `saracura-phase4e-protocol-pilot-v1`, disjoint from every corpus identity;
+- contain 70 PT-BR/English pairs, ten pairs for each option count from 2 through
+  8, distributed deterministically across all twelve domains;
+- choose the author scenario from a closed domain-compatible scenario map
+  committed before any provider call; each domain maps to a non-empty ordered
+  list of closed scenario codes, and seeded selection within that list is part
+  of the immutable plan;
+- keep the reviewer blind to answer, author attestation, pair, split, gold
+  position, sibling, and planner target;
+- accept a pilot example only when the blind reviewer selects the same option
+  and all natural-language, fictionality, exclusivity, privacy, capacity,
+  leakage, provenance, and paired-locale gates pass;
+- retain reviewer scenario and ordered role agreement as closed aggregate
+  diagnostics, never as provider prose and never as a pilot acceptance gate;
+- prohibit pilot rows from any training packet, checkpoint, calibration set,
+  benchmark claim, or runtime registration;
+- resolve all 140 identities without applying the corpus Wilson early stop,
+  even if a pilot threshold becomes deterministically impossible mid-run;
+- return `INCONCLUSIVE`, rather than quality failure, if any transport attempt
+  is `uncertain`, unresolved, or lacks a durable journal;
+- pass only with at least 98 of 140 accepted overall, at least 45 of 70 accepted
+  in each locale, at least 11 of 20 accepted for each option count, zero locally
+  detected privacy violations, and at most 7 of 140 reviewer privacy flags;
+  every flagged row is still rejected and reported; and
+- publish an immutable pilot report with descriptive 10-member cell rates,
+  locale and option-count gates, diagnostic disagreement rates, operational
+  failures, and the descriptive global one-sided 95% Wilson interval before revising corpus
+  allocation, minimums, or budget.
+
+Passing the pilot authorizes a new spec/manifest review, not corpus generation
+by itself. That review must replace the corpus's exact auxiliary-attestation
+acceptance gate with the pilot rule: blind answer agreement plus the existing
+quality/privacy/capacity gates, with reviewer scenario and ordered roles retained
+only as aggregate diagnostics. For paired families, both locale members must
+pass that rule and retain byte-identical author targets; reviewer diagnostic
+attestations need not match each other. The review must also derive per-cell
+overplanning from the measured pilot rates, make every required cell minimum
+feasible with explicit margin, and make the corpus planner use the exact same
+manifest-owned domain-to-scenario map and seeded within-list selection measured
+by the pilot. The revision includes the source-policy registry model, policy
+validator, planner, acceptance resolver, and conservative preflight—not only
+manifest bytes. It must record cumulative spend and obtain operator agreement
+before increasing either provider-stage budget beyond the currently authorized
+USD 5/USD 10 limits. Until that reviewed replacement lands, the
+current exact-attestation corpus rule remains fail-closed and no further corpus
+generation is authorized.
+
+A failed pilot is never rerun with the same seed or identities. It authorizes
+only a reviewed diagnosis and pilot-v2 proposal with a new suffix seed; it does
+not authorize corpus generation, training, or weakening a gate. An
+`INCONCLUSIVE` pilot likewise requires a reviewed operational correction and a
+new disjoint seed. Every outcome and its cumulative spend remain in the
+committed execution record before a successor pilot can be authorized.
 
 The reviewed general-purpose base is
 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` at immutable
@@ -179,8 +290,9 @@ route the new manifest by its exact schema version.
 
 The Phase 4E exception uses the same already authorized OpenRouter author and
 reviewer identities unless a current preflight invalidates their availability,
-pricing ceiling, or provider policy. The operator's current authorization for
-this execution is bounded to the USD 17.00 new-spend safety envelope below.
+pricing ceiling, or provider policy. The operator's current authorization is a
+cumulative USD 17.00 Phase 4E new-spend envelope across all work directories;
+the per-run caps below are defense in depth and do not reset that authorization.
 This guards against runaway spend; it is not a product budget or a reason to
 abandon useful work. It may be increased by explicit operator agreement when
 execution evidence shows that more is needed:
@@ -325,10 +437,13 @@ attestation or reasoning, or any field derived from the answer. It independently
 selects one criterion or rejects the task and independently emits the same
 closed semantic attestation shape. It also validates natural language, internal
 sufficiency, option exclusivity, fictionality, privacy, and absence of sensitive
-patterns. Only exact answer agreement and exact author/reviewer attestation
-agreement are accepted; the reviewer output never rewrites the row. A paired
-family counts only when the two author attestations and two independent reviewer
-attestations are byte-equivalent after canonicalization.
+patterns. Under the now-blocked corpus-v1 contract, only exact answer agreement
+and exact author/reviewer attestation agreement are accepted; the reviewer
+output never rewrites the row. A paired family counts only when the two author
+attestations and two independent reviewer attestations are byte-equivalent after
+canonicalization. The empirical record above invalidates this auxiliary gate;
+it remains documented here solely so old artifacts can be reproduced and must
+be replaced through the post-pilot review before another corpus run.
 
 The planner creates 1,600 candidate task slots, including 300 cross-locale
 paired families distributed proportionally across train, dev, and holdout.
@@ -407,11 +522,11 @@ is a non-reasoning endpoint and does not advertise `reasoning_effort`, so its
 request omits that unsupported parameter while `require_parameters=true`
 prevents silent rerouting. Neither response may contain or persist a reasoning
 trace.
-The current Phase 4E execution has a USD 17.00 new-spend safety envelope,
-partitioned into four nonfungible stages: USD 5.00 corpus author, USD 10.00
-corpus reviewer, USD 0.75 comparison author, and USD 1.25 comparison reviewer.
-This envelope prevents an unattended runaway; it is not a hard project ceiling
-and may be raised through explicit operator agreement. At the reviewed ceilings
+Each corpus/comparison work directory has four nonfungible hard caps: USD 5.00
+corpus author, USD 10.00 corpus reviewer, USD 0.75 comparison author, and USD
+1.25 comparison reviewer. These guards prevent an unattended runaway but do not
+reset or replace the cumulative USD 17.00 Phase authorization, which may be
+raised only through explicit operator agreement. At the reviewed ceilings
 of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
@@ -670,10 +785,127 @@ The immutable packet schema for this phase is v2 and uses the physically split
 train/dev, holdout, and identity-only payloads defined above. There is no
 fallback to the v1 combined `accepted.jsonl` in the production training path.
 
+### Phase 4E.2b: isolated acceptance-protocol pilot
+
+Before any further corpus run, implement a separate `pilot-plan`/`pilot` command
+path and a closed pilot-policy manifest. This is an explicit revision of the
+existing `phase4e_saracura_universal_synthetic` source-policy exception, not a
+third exception: the registry must still accept exactly two exception IDs. The
+existing `training-data-source-policies.v1.json` and
+`support-routing-protocol.v1.json` remain byte-identical for historical Phase
+4B packets. A parallel `training-data-source-policies.v2.json` carries the same
+two IDs and adds one closed `protocol_pilot` object to the Phase 4E exception;
+the pilot policy binds the v2 digest, while old consumers remain bound to v1.
+The `protocol_pilot` object authorizes 140
+provider-authored rows solely for protocol evaluation, with training,
+calibration, publication, claims, and runtime use all false. Its pilot split,
+seed, count, and schema are separate from the three allowed training splits and
+the validator must reject any pilot row entering `AcceptedPacketRow`, packet
+sealing, extraction, or training.
+The committed execution record stores both registry digests. Manifest routing
+and tests prove that Phase 4B/human consumers continue resolving only v1 and
+that only the Phase 4E pilot resolves v2; no packet is silently rebound.
+
+The pilot manifest owns the 140-task seed,
+the exact 70-pair allocation, thresholds, distinct `pilot_author` and
+`pilot_reviewer` stages capped at USD 0.50 and USD 1.00 respectively, and a
+domain-to-scenario map that is total over all twelve domains. Every map value is
+a non-empty ordered list of closed scenario codes; seeded selection within that
+list is validated as part of plan immutability. The manifest review itself is
+the precommit act for the exact map. Pilot preflight uses the same conservative
+ceilings as corpus accounting—USD 0.30/M input and USD 2.50/M output for the
+author, USD 0.71/M input and output for the reviewer—not lower listed endpoint
+prices. The reviewed estimate is approximately USD 0.3333 author and USD 0.8748
+reviewer. The implementation must calculate exact canonical-body bounds into
+the immutable pilot plan and prove they are no more than USD 0.50 and USD 1.00;
+the summed hard cap is USD 1.50 even when the calculated plan bound is lower.
+All bounds must fit before the first request. The
+allocation assigns ten pairs to each option count; domains rotate in canonical
+order, so ten domains receive six pairs and two receive five. Pilot slots use a
+pilot-owned model and schema with a non-training split marker; it must not widen
+the corpus models' closed split Literal. Corpus validators must reject the pilot
+seed, schema version, and task IDs in every accepted-packet or training path.
+
+The pilot runner reuses the reviewed transport, privacy, capacity, ledger,
+lineage, and blind-review primitives, but its acceptance function is an explicit
+parameter that cannot change the corpus-v1 default. Pair resolution is likewise
+pilot-owned rather than falling through the corpus's exact-attestation pair
+logic. Author target mismatch
+remains a rejection. Reviewer scenario and ordered-role disagreement are
+counted in the immutable aggregate report but do not reject an otherwise valid
+pilot choice. The pilot has no `--packet` argument, never calls packet sealing,
+does not apply the corpus Wilson early stop, and resolves all 140 identities
+unless a safety or budget gate stops the run.
+
+The pilot review view omits `family_id` as well as pair metadata so the shared
+pair identity cannot be inferred across isolated requests. Gold positions use
+deterministic round-robin within every locale/option-count cell, with
+per-position counts differing by at most one, before any provider result.
+
+Shared transport and ledger code is parameterized rather than changing corpus
+constants: corpus defaults and bytes remain identical, while a pilot policy
+injects its own stage names, the conservative prices above, USD 1.50 total, and
+zero automatic retries.
+Known rate limits or transport ambiguity stop as `INCONCLUSIVE`; no retry
+allowance exists outside the precommitted complete-plan bound.
+
+Pair-level author target mismatch rejects both siblings. Reviewer answer or
+quality rejection applies to that locale member; the other member may still be
+accepted and each locale/option-count cell counts accepted members, not pairs.
+Pair completeness remains a separately reported diagnostic and a post-pilot
+corpus-planning input. The report includes complete-pair yield and its own
+one-sided 95% Wilson interval in addition to member-level rates.
+
+Artifacts live only under `.artifacts/phase4e/pilot-plan-*`,
+`.artifacts/phase4e/pilot-work-*`, and `.artifacts/phase4e/pilot-report-*`, are
+gitignored, no-clobber, and contain the immutable plan, closed accepted/rejected
+resolution rows, cost ledger, per-cell counts, global Wilson interval, auxiliary
+semantic diagnostics, and a pass/fail decision. Fake-transport tests must prove
+identity disjointness, full domain-map validation, reviewer blindness, disabled
+corpus Wilson stop, diagnostic-only semantic disagreement, no packet/training
+route, terminal resume behavior, full-debit accounting of open reservations,
+and refusal when scanned totals fall below the committed baseline before the
+first real pilot call.
+
+Phase 4E.2b also creates a committed human execution record at
+`docs/action/phase4e-execution.md`, a machine-readable closed baseline at
+`benchmarks/manifests/phase4e-spend-baseline.v1.json` routed through
+`benchmarks.validate_manifests`, and a no-clobber cumulative spend
+index under the durable platform state root returned by
+`platformdirs.user_state_path("saracura") / "phase4e" / "research-ledgers"`.
+The `pilot` command requires and records an explicit `--artifact-root`; the
+durable root above is canonical on this Mac, while `.artifacts/phase4e` remains
+only the source of the historical import. Before pilot transport, the index scans the newest valid ledger
+snapshot from every Phase 4E work directory, counts open reservations at their
+full debit, and proves that historical conservative debit plus the pilot's USD
+1.50 complete-plan bound remains within the operator-authorized cumulative USD
+17.00. The baseline fixes the as-of date, directory count, entry/status counts,
+provider-reported cost, and conservative debit stated above. A parameterized
+multi-stage ledger reader selects the closed corpus or pilot policy by directory
+schema and never weakens either validator. It must refuse a checkout whose
+scanned cumulative totals are lower than the committed machine-readable
+baseline, preventing a fresh worktree from appearing to reset spend. The
+immutable pilot report repeats both provider-reported and
+conservative cumulative totals. The pilot stage caps are hard run guards inside
+that existing cumulative authorization; a larger pilot or later corpus budget
+still requires renewed operator agreement.
+
+Before implementation can merge, all historical ledger, resolution, and Wilson
+artifacts used by the baseline are copied create-only into the canonical durable
+root, verified by file digest and aggregate counts, and re-read from that root.
+The report records its absolute root and inventory digest. Worktree cleanup is
+allowed only after this verification; a clone on another machine must import a
+verified bundle or fail closed.
+
+The same increment updates both READMEs to distinguish per-work-directory hard
+caps from the cumulative authorization and adds the implemented `pilot-plan`
+and `pilot` commands to this spec's validation section.
+
 ### Phase 4E.3: real checkpoint and runtime
 
-With the operator's existing authorization and credential boundary, generate
-the real synthetic packet within the new cumulative budget, train locally on the
+Only after the pilot and its required post-pilot spec/manifest review, generate
+the real synthetic packet within the newly agreed per-stage run budget and the
+documented cumulative research spend, then train locally on the
 verified MiniLM snapshot, seal the checkpoint, add the `saracura-universal`
 runtime/CLI, and execute device-specific CPU and MPS conformance. Embedding
 capsules and deterministic-repeat gates are ABI-bound to their extraction
@@ -700,7 +932,8 @@ publication review explicitly changes that boundary.
    descriptions, order preservation, NFC, length framing, capacity rejection,
    non-finite values, and variable-option masks.
 4. Provider tests prove explicit network opt-in, pinned host/models, ZDR/data
-   controls, cumulative budget, no secret leakage, no-clobber resume, and
+   controls, per-work-directory enforcement plus cumulative baseline enforcement, no
+   secret leakage, no-clobber resume, and
    reviewer blindness to the author answer.
 5. Split tests prove family/cross-locale isolation and zero train/dev/holdout or
    comparison overlap under exact and normalized duplicate scans.
@@ -806,8 +1039,13 @@ All runtime behavior is opt-in and research-only. Existing fixture,
 `minilm-routing`, and `laya-universal` paths remain unchanged. No service,
 mailbox, production runtime, account setting, or external automation is
 modified. Rollback is a Git revert of the Phase 4E commits plus recoverable
-removal of the explicitly named local Phase 4E artifact directories after their
-digests and reports have been recorded. Provider spend is not recoverable.
+removal of the explicitly named worktree-local Phase 4E artifact directories
+after their verified create-only import into the durable platform state root.
+The durable research ledger and committed spend baseline are not removed by a
+Git revert: a future pilot continues to count historical spend. Deleting that
+root is a separate destructive research-record operation outside rollback and
+would make all future provider runs fail closed. Provider spend is not
+recoverable.
 
 ## Risks
 
