@@ -162,3 +162,23 @@ The create-only evidence bindings are:
 | sealed ledger file | `fd57c76de7821bd3efb9348bab4d4d88744e702e3c20bc44591e8973cd83af38` |
 
 The next create-only run keeps the v7 model pair and raises only the fixed transport timeout from 30 to 120 seconds. This is an operational correction, not a quality-gate relaxation.
+
+## V8 provider-compatibility outcome
+
+V8 kept the v7 model pair and raised only the live pilot transport timeout to 120 seconds. The first author call settled, but the first reviewer returned a provider-routing error before inference and was conservatively recorded as `uncertain`; all 140 tasks therefore remained unresolved and the run stopped `INCONCLUSIVE`.
+
+The post-run diagnostic isolated the request incompatibility. Under the required ZDR/no-collection policy, OpenRouter retained a Google Vertex endpoint for Gemini 3.8 Flash. That endpoint does not advertise `temperature`, while the shared request builder unconditionally sent `temperature: 0`; with `require_parameters: true`, OpenRouter rejected the reviewer request during parameter filtering. A separate exact-schema probe proved that the same endpoint succeeds when reviewer `temperature` is omitted and reasoning is explicitly set to minimal. Privacy routing and strict parameter enforcement do not need to be relaxed.
+
+The v8 run reported USD 0.0006108 in provider cost and USD 0.0092205 in conservative debit; no USD 10 reporting milestone was crossed. Cumulative totals became USD 1.01923114 provider-reported and USD 7.02020883 conservative. Its one settled author call and one uncertain reviewer call make v8 non-resumable.
+
+The create-only evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan | `906f3340ea361e7d0905972daa368ce49dcfb4b3b65f9063b0e296cb495e0d87` |
+| post-copy research inventory | `b200a0cff597c25465614ffab2cc5ccb92ae69199da8800d20e51bd3e7de4cec` |
+| report-declared ledger | `1552b3dc6dc15bc1211c44fa416cf80b3832ffab955e4aa7baa0f802acc78ade` |
+| sealed report file | `ccfc1e23f604cd13251508eb58c25e6fd721ea6526aa33155683ac7a09bc3fba` |
+| sealed ledger file | `e26680d87e9bbe7a3dd24d9fc0f05a76283d73d65607deb88d67746ac0d16602` |
+
+The next create-only run removes `temperature` only from the Gemini reviewer request, binds its exact reasoning/output policy into the immutable plan and preserves the author request, quality gates and privacy policy.
