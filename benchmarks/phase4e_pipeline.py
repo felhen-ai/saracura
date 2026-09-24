@@ -731,7 +731,7 @@ def run_corpus(
             author_lineage = corpus.lineage_from_journal(
                 client.last_journal("corpus_author"), "author"
             )
-            authored = author_response.get("records")
+            authored = corpus.decode_author_response(author_response, slots)
             usable, capacity_rejected = corpus.validate_author_rows_with_verified_minilm(
                 authored, slots, snapshot
             )

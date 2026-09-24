@@ -27,6 +27,7 @@ from benchmarks.saracura_universal_corpus import (
     author_schema,
     build_plan,
     classify_author_rows,
+    decode_author_response,
     resolve_reviews,
     resume_ledger,
     reviewer_messages,
@@ -234,7 +235,7 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     unpaired = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
     assert "gold_position" in json.dumps(author_messages([unpaired]))
     assert "semantic_target" in json.dumps(author_messages([unpaired]))
-    assert "sole top-level key is records" in author_messages([unpaired])[0]["content"]
+    assert "flat JSON object" in author_messages([unpaired])[0]["content"]
 
 
 def test_author_prompts_share_closed_role_definitions_and_forbid_role_labels() -> None:
@@ -415,40 +416,59 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
     pair_id = next(slot["pair_id"] for slot in plan["slots"] if slot["pair_id"])
     pair = [slot for slot in plan["slots"] if slot["pair_id"] == pair_id]
     schema = author_schema(pair)
-    records = schema["properties"]["records"]
-    assert records["minItems"] == records["maxItems"] == 2
     assert "$defs" not in schema
     assert "$ref" not in json.dumps(schema)
-    assert records["items"]["properties"]["state"]["properties"]["summary"] == {
+    properties = schema["properties"]
+    assert set(schema["required"]) == set(properties)
+    assert properties["record_0_state_summary"] == {
         "type": "string",
         "minLength": 1,
         "maxLength": 180,
     }
-    criterion = records["items"]["properties"]["criteria"]["items"]
-    assert criterion["properties"]["description"]["maxLength"] == 120
-    assert set(records["items"]["properties"]) == {
-        "instruction",
-        "state",
-        "criteria",
-        "selected_index",
-        "semantic_equivalence_attestation",
-    }
+    assert properties["record_0_criterion_0_description"]["maxLength"] == 120
+    assert properties["record_0_selected_index"] == {"type": "integer", "enum": [0]}
     target = pair[0]["semantic_target"]
-    properties = records["items"]["properties"]
-    assert properties["selected_index"] == {"type": "integer", "enum": [0]}
-    attestation = properties["semantic_equivalence_attestation"]
-    assert attestation["properties"] == {
-        "scenario": {"type": "string", "enum": [target["scenario"]]},
-        "criterion_roles": {
-            "type": "array",
-            "prefixItems": [
-                {"type": "string", "enum": [role]} for role in target["criterion_roles"]
-            ],
-            "minItems": pair[0]["option_count"],
-            "maxItems": pair[0]["option_count"],
-        },
-        "selected_role": {"type": "string", "enum": ["matches_rule"]},
+    assert properties["record_0_scenario"] == {
+        "type": "string",
+        "enum": [target["scenario"]],
     }
+    assert properties["record_0_criterion_0_role"] == {
+        "type": "string",
+        "enum": [target["criterion_roles"][0]],
+    }
+    assert properties["record_1_selected_role"] == {
+        "type": "string",
+        "enum": ["matches_rule"],
+    }
+    assert not any(value.get("type") in {"object", "array"} for value in properties.values())
+
+    wire: dict[str, Any] = {}
+    for index, slot in enumerate(pair):
+        target = slot["semantic_target"]
+        prefix = f"record_{index}_"
+        wire[f"{prefix}instruction"] = f"Instruction {index}"
+        wire[f"{prefix}state_summary"] = f"State {index}"
+        wire[f"{prefix}selected_index"] = 0
+        wire[f"{prefix}scenario"] = target["scenario"]
+        wire[f"{prefix}selected_role"] = "matches_rule"
+        for criterion_index, role in enumerate(target["criterion_roles"]):
+            wire[f"{prefix}criterion_{criterion_index}_description"] = (
+                f"Criterion {index}-{criterion_index}"
+            )
+            wire[f"{prefix}criterion_{criterion_index}_role"] = role
+    decoded = decode_author_response(wire, pair)
+    assert len(decoded) == 2
+    assert decoded[0]["instruction"] == "Instruction 0"
+    assert decoded[1]["semantic_equivalence_attestation"] == {
+        **pair[1]["semantic_target"],
+        "selected_role": "matches_rule",
+    }
+    tampered = decode_author_response({**wire, "provider_private_marker": "never persist"}, pair)
+    usable, rejected = classify_author_rows(tampered, pair, _Counter())
+    assert usable == []
+    assert {row["reason"] for row in rejected} == {"author_record_schema__unknown:extra_forbidden"}
+    assert "provider_private_marker" not in json.dumps(rejected)
+    assert "never persist" not in json.dumps(rejected)
     with pytest.raises(CorpusError, match="cross-locale author batch"):
         author_schema(pair[:1])
     mismatched_pair = json.loads(json.dumps(pair))

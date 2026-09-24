@@ -697,7 +697,15 @@ class AcceptedPacketRow(_Closed):
         return self
 
 
-def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
+def _author_wire_properties(slot: Mapping[str, Any], index: int) -> dict[str, dict[str, Any]]:
+    """Return a flat Gemini-compatible schema for one logical author record.
+
+    The pinned route has demonstrated that object schemas nested inside array
+    items can be reduced to empty objects in transit. Flat scalar properties
+    keep every semantic constraint provider-visible; local code rehydrates the
+    logical record before the authoritative Pydantic validation.
+    """
+
     required = {
         "task_id",
         "family_id",
@@ -712,52 +720,39 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
     if not required <= set(slot):
         raise CorpusError("author batch slot")
     target = _planned_semantic_target(slot)
-    schema = AuthorGeneratedRecord.model_json_schema()
-    schema.pop("$defs", None)
-    properties = cast(dict[str, dict[str, Any]], schema["properties"])
     option_count = slot["option_count"]
     if not isinstance(option_count, int) or not 2 <= option_count <= 8:
         raise CorpusError("author batch option count")
-    properties["state"] = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["summary"],
-        "properties": {
-            "summary": {"type": "string", "minLength": 1, "maxLength": 180},
+    prefix = f"record_{index}_"
+    properties: dict[str, dict[str, Any]] = {
+        f"{prefix}instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+        },
+        f"{prefix}state_summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180,
+        },
+        f"{prefix}selected_index": {"type": "integer", "enum": [0]},
+        f"{prefix}scenario": {"type": "string", "enum": [target["scenario"]]},
+        f"{prefix}selected_role": {
+            "type": "string",
+            "enum": [target["selected_role"]],
         },
     }
-    properties["criteria"] = {
-        "type": "array",
-        "minItems": option_count,
-        "maxItems": option_count,
-        "items": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["description"],
-            "properties": {
-                "description": {"type": "string", "minLength": 1, "maxLength": 120},
-            },
-        },
-    }
-    properties["selected_index"] = {"type": "integer", "enum": [0]}
-    properties["semantic_equivalence_attestation"] = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["scenario", "criterion_roles", "selected_role"],
-        "properties": {
-            "scenario": {"type": "string", "enum": [target["scenario"]]},
-            "criterion_roles": {
-                "type": "array",
-                "prefixItems": [
-                    {"type": "string", "enum": [role]} for role in target["criterion_roles"]
-                ],
-                "minItems": option_count,
-                "maxItems": option_count,
-            },
-            "selected_role": {"type": "string", "enum": [target["selected_role"]]},
-        },
-    }
-    return schema
+    for criterion_index, role in enumerate(target["criterion_roles"]):
+        properties[f"{prefix}criterion_{criterion_index}_description"] = {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+        }
+        properties[f"{prefix}criterion_{criterion_index}_role"] = {
+            "type": "string",
+            "enum": [role],
+        }
+    return properties
 
 
 def _validate_author_batch(slots: Sequence[Mapping[str, Any]]) -> None:
@@ -784,32 +779,76 @@ def _validate_author_batch(slots: Sequence[Mapping[str, Any]]) -> None:
 def author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Return an exact response schema for this planned author request.
 
-    A paired family is deliberately a two-record response: no provider request
-    can represent only one locale member or add a replacement identity.
+    The transport schema is deliberately flat because the pinned Gemini route
+    has returned empty objects for schemas nested inside array items. The
+    logical response remains one or two records and is reconstructed locally.
     """
 
     _validate_author_batch(slots)
-    first = slots[0]
-    if any(slot["option_count"] != first["option_count"] for slot in slots):
-        raise CorpusError("author batch option count")
-    item_schema = _author_slot_schema(first)
-    definitions = item_schema.pop("$defs", {})
-    result: dict[str, Any] = {
+    properties: dict[str, dict[str, Any]] = {}
+    for index, slot in enumerate(slots):
+        properties.update(_author_wire_properties(slot, index))
+    return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["records"],
-        "properties": {
-            "records": {
-                "type": "array",
-                "minItems": len(slots),
-                "maxItems": len(slots),
-                "items": item_schema,
-            }
-        },
+        "required": list(properties),
+        "properties": properties,
     }
-    if definitions:
-        result["$defs"] = definitions
-    return result
+
+
+def decode_author_response(
+    payload: Mapping[str, Any], slots: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Rehydrate the flat provider wire format without retaining unknown keys."""
+
+    _validate_author_batch(slots)
+    if set(payload) == {"records"}:
+        legacy_records = payload["records"]
+        if not isinstance(legacy_records, list):
+            raise CorpusError("author record count")
+        return [dict(record) if isinstance(record, Mapping) else {} for record in legacy_records]
+    if not payload:
+        raise CorpusError("author record count")
+    expected = {
+        key for index, slot in enumerate(slots) for key in _author_wire_properties(slot, index)
+    }
+    unexpected = bool(set(payload) - expected)
+    output_records: list[dict[str, Any]] = []
+    for index, slot in enumerate(slots):
+        prefix = f"record_{index}_"
+        option_count = cast(int, slot["option_count"])
+        record: dict[str, Any] = {}
+        instruction_key = f"{prefix}instruction"
+        if instruction_key in payload:
+            record["instruction"] = payload[instruction_key]
+        state_key = f"{prefix}state_summary"
+        record["state"] = {"summary": payload[state_key]} if state_key in payload else {}
+        criteria: list[dict[str, Any]] = []
+        roles: list[Any] = []
+        for criterion_index in range(option_count):
+            description_key = f"{prefix}criterion_{criterion_index}_description"
+            role_key = f"{prefix}criterion_{criterion_index}_role"
+            criteria.append(
+                {"description": payload[description_key]} if description_key in payload else {}
+            )
+            if role_key in payload:
+                roles.append(payload[role_key])
+        record["criteria"] = criteria
+        selected_index_key = f"{prefix}selected_index"
+        if selected_index_key in payload:
+            record["selected_index"] = payload[selected_index_key]
+        attestation: dict[str, Any] = {"criterion_roles": roles}
+        scenario_key = f"{prefix}scenario"
+        selected_role_key = f"{prefix}selected_role"
+        if scenario_key in payload:
+            attestation["scenario"] = payload[scenario_key]
+        if selected_role_key in payload:
+            attestation["selected_role"] = payload[selected_role_key]
+        record["semantic_equivalence_attestation"] = attestation
+        if unexpected:
+            record["_wire_schema_error"] = True
+        output_records.append(record)
+    return output_records
 
 
 def reviewer_schema(batch_size: int) -> dict[str, Any]:
@@ -840,7 +879,7 @@ def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": "Return a JSON object whose sole top-level key is records, one generated record per supplied slot in order. Each record has instruction, state, criteria, selected_index, and semantic_equivalence_attestation; criteria have description only. Restate each closed semantic_target exactly, materialize it in rule, facts, and options, and set selected_index=0. "
+            "content": "Return the flat JSON object defined by the response schema, one numbered field group per supplied slot in order. Each group contains instruction, state summary, criterion descriptions, selected index, scenario, criterion roles, and selected role. Restate each closed semantic_target exactly, materialize it in rule, facts, and options, and set every selected_index=0. "
             + SCENARIO_CODEBOOK
             + " "
             + CRITERION_ROLE_CODEBOOK
