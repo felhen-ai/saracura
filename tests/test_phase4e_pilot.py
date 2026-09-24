@@ -155,12 +155,15 @@ def _baseline_root(root: Path, *, debit_delta: Decimal = Decimal()) -> Path:
     return root
 
 
-def _completion(payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+def _completion(payload: dict[str, Any], *, cost: str = "0") -> tuple[int, dict[str, str], bytes]:
     return (
         200,
         {},
         json.dumps(
-            {"usage": {"cost": 0}, "choices": [{"message": {"content": json.dumps(payload)}}]}
+            {
+                "usage": {"cost": cost},
+                "choices": [{"message": {"content": json.dumps(payload)}}],
+            }
         ).encode(),
     )
 
@@ -237,7 +240,7 @@ def test_registry_v1_bytes_stay_bound_and_v2_is_pilot_only() -> None:
     assert "protocol_pilot" not in get_args(AcceptedPacketRow.model_fields["split"].annotation)
 
 
-def test_pilot_plan_is_disjoint_balanced_and_within_caps(tmp_path: Path) -> None:
+def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path) -> None:
     output = tmp_path / "pilot-plan-v1" / "plan.json"
     pilot.write_pilot_plan(output)
     plan = json.loads(output.read_bytes())
@@ -281,19 +284,58 @@ def test_pilot_plan_is_disjoint_balanced_and_within_caps(tmp_path: Path) -> None
             assert len(positions) == 10
             counts = Counter(positions)
             assert max(counts.values()) - min(counts.values()) <= 1
-    preflight = plan["preflight"]
-    assert Decimal(preflight["pilot_author_usd"]) <= Decimal("0.50")
-    assert Decimal(preflight["pilot_reviewer_usd"]) <= Decimal("1.00")
-    assert Decimal(preflight["total_usd"]) <= Decimal("1.50")
-    assert Decimal(preflight["pilot_author_usd"]) + Decimal(
-        preflight["pilot_reviewer_usd"]
-    ) == Decimal(preflight["total_usd"])
+    estimate = plan["cost_estimate"]
+    assert estimate["mode"] == "report_only"
+    assert estimate["report_interval_usd"] == "10.00"
+    assert Decimal(estimate["pilot_author_usd"]) + Decimal(
+        estimate["pilot_reviewer_usd"]
+    ) == Decimal(estimate["total_usd"])
     with pytest.raises(corpus.CorpusError, match="pilot plan cannot enter corpus"):
         corpus.validate_plan(plan)
     with pytest.raises(corpus.CorpusError, match="pilot task cannot enter packet"):
         corpus._validate_packet_resolution([], [{"task_id": next(iter(pilot_ids))}], {"slots": []})
     with pytest.raises(ValidationError):
         AcceptedPacketRow.model_validate({"split": "protocol_pilot"})
+
+
+def test_v2_ledger_reports_cost_without_enforcing_a_ceiling(tmp_path: Path) -> None:
+    task_id = pilot.build_plan()["slots"][0]["task_id"]
+
+    def transport(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body
+        return _completion({}, cost="25.00")
+
+    client = corpus.OpenRouterCorpusClient(
+        transport=transport,
+        allow_network=True,
+        ledger_directory=tmp_path / "ledger",
+        policy=corpus.PILOT_LEDGER_POLICY,
+        author_stage=pilot.AUTHOR_STAGE,
+        reviewer_stage=pilot.REVIEWER_STAGE,
+    )
+    request = {
+        "stage": pilot.AUTHOR_STAGE,
+        "model": corpus.AUTHOR_MODEL,
+        "messages": [{"role": "user", "content": "test"}],
+        "response_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+        },
+        "max_output_tokens": 1,
+        "api_key": "test-key",
+        "task_ids": [task_id],
+    }
+    client._request(**request)
+    client._request(**request)
+    assert [entry["status"] for entry in client.ledger.entries] == ["settled", "settled"]
+    assert sum(Decimal(entry["provider_cost_usd"]) for entry in client.ledger.entries) == Decimal(
+        "50.00"
+    )
+    assert len({entry["reservation_id"] for entry in client.ledger.entries}) == 2
+    client.ledger.require_complete_provider_journal()
 
 
 def test_domain_map_must_cover_every_domain(tmp_path: Path) -> None:
@@ -461,7 +503,7 @@ def test_open_reservations_count_toward_the_baseline(tmp_path: Path) -> None:
     assert scan.open_reservation_debit_usd == Decimal("0.01971612")
     assert scan.conservative_debit_usd == Decimal("5.12153043")
     assert scan.provider_reported_cost_usd == Decimal("0.81263107")
-    pilot.require_pilot_spend_headroom(root)
+    pilot.require_pilot_research_history(root)
 
 
 def test_inventory_rejects_an_unlisted_ledger_snapshot(tmp_path: Path) -> None:
@@ -471,7 +513,7 @@ def test_inventory_rejects_an_unlisted_ledger_snapshot(tmp_path: Path) -> None:
         corpus._canonical(corpus.BudgetLedger().as_json()) + b"\n"
     )
     with pytest.raises(corpus.CorpusError, match="inventory does not match artifact root"):
-        pilot.require_pilot_spend_headroom(root)
+        pilot.require_pilot_research_history(root)
 
 
 def test_ledger_chain_rejects_a_newer_snapshot_that_hides_spend(tmp_path: Path) -> None:
@@ -633,6 +675,118 @@ def test_fake_transport_passes_with_diagnostic_semantic_disagreement(
     assert "packet" not in pilot.run_pilot.__code__.co_varnames
 
 
+def test_settled_malformed_review_retries_and_cost_only_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _baseline_root(tmp_path / "root")
+    plan_path = tmp_path / "pilot-plan-v2" / "plan.json"
+    pilot.write_pilot_plan(plan_path)
+    plan = json.loads(plan_path.read_bytes())
+    by_id = {slot["task_id"]: slot for slot in plan["slots"]}
+    monkeypatch.setenv("OPENROUTER_API_KEY", "pilot-secret")
+    author_calls = 0
+    reviewer_calls = 0
+
+    def transport(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        nonlocal author_calls, reviewer_calls
+        del method, url, headers
+        message = json.loads(json.loads(body)["messages"][1]["content"])
+        if "slots" in message:
+            author_calls += 1
+            wire = _author_wire(message["slots"])
+            if author_calls == 1:
+                wire["record_0_instruction"] = "x" * 121
+            return _completion(wire, cost="0.10")
+        reviewer_calls += 1
+        if reviewer_calls == 1:
+            return _completion({}, cost="0.10")
+        slot = by_id[message["tasks"][0]["task_id"]]
+        return _completion(
+            _reviewer_payload(slot, disagree_answer=False, disagree_scenario=False),
+            cost="0.10",
+        )
+
+    report = json.loads(
+        pilot.run_pilot(
+            plan_path,
+            None,
+            tmp_path / "pilot-work-recovery",
+            tmp_path / "pilot-report-recovery",
+            root,
+            allow_network=True,
+            transport=transport,
+            counter=_Counter(),
+        ).read_bytes()
+    )
+    assert author_calls == 71
+    assert reviewer_calls == 141
+    assert report["decision"] == "PASS"
+    assert report["accepted_count"] == 140
+    assert report["response_diagnostics"] == {
+        "author_failures": 1,
+        "reviewer_failures": 1,
+        "retry_recoveries": 2,
+        "orphaned_settled_calls": 0,
+    }
+    assert Decimal(report["provider_reported_cost_usd"]) == Decimal("21.20")
+    output = capsys.readouterr().out
+    assert "crossed USD 10.00" in output
+    assert "crossed USD 20.00" in output
+    assert "final provider spend USD 21.20" in output
+
+
+def test_settled_http_error_is_not_retried_and_other_pairs_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _baseline_root(tmp_path / "root")
+    plan_path = tmp_path / "pilot-plan-v2" / "plan.json"
+    pilot.write_pilot_plan(plan_path)
+    plan = json.loads(plan_path.read_bytes())
+    by_id = {slot["task_id"]: slot for slot in plan["slots"]}
+    monkeypatch.setenv("OPENROUTER_API_KEY", "pilot-secret")
+    author_calls = 0
+    reviewer_calls = 0
+
+    def transport(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        nonlocal author_calls, reviewer_calls
+        del method, url, headers
+        message = json.loads(json.loads(body)["messages"][1]["content"])
+        if "slots" in message:
+            author_calls += 1
+            completion = _completion(_author_wire(message["slots"]))
+            if author_calls == 1:
+                return 500, completion[1], completion[2]
+            return completion
+        reviewer_calls += 1
+        slot = by_id[message["tasks"][0]["task_id"]]
+        return _completion(_reviewer_payload(slot, disagree_answer=False, disagree_scenario=False))
+
+    report = json.loads(
+        pilot.run_pilot(
+            plan_path,
+            None,
+            tmp_path / "pilot-work-http",
+            tmp_path / "pilot-report-http",
+            root,
+            allow_network=True,
+            transport=transport,
+            counter=_Counter(),
+        ).read_bytes()
+    )
+    assert author_calls == 70
+    assert reviewer_calls == 138
+    assert report["decision"] == "PASS"
+    assert report["accepted_count"] == 138
+    assert report["rejected_count"] == 2
+    assert report["unresolved_count"] == 0
+    assert report["response_diagnostics"]["author_failures"] == 1
+    assert report["response_diagnostics"]["retry_recoveries"] == 0
+
+
 def test_fake_transport_resolves_all_140_without_wilson_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -731,6 +885,52 @@ def test_uncertain_transport_is_terminal_and_inconclusive(
     )
     assert calls == 0
     assert second["decision"] == "INCONCLUSIVE"
+
+
+def test_resume_never_replays_a_settled_call_without_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _baseline_root(tmp_path / "root")
+    plan_path = tmp_path / "pilot-plan-v2" / "plan.json"
+    pilot.write_pilot_plan(plan_path)
+    plan = json.loads(plan_path.read_bytes())
+    pair = plan["slots"][:2]
+    work = tmp_path / "pilot-work-orphaned-settlement"
+    ledger = corpus.BudgetLedger(policy=corpus.PILOT_LEDGER_POLICY)
+    reservation_id = "reservation-" + "a" * 64
+    ledger.reserve_request(pilot.AUTHOR_STAGE, reservation_id, Decimal("0.01"))
+    ledger.settle_request(reservation_id, "settled-request", Decimal("0.001"), "b" * 64)
+    ledger.record_provider_journal(
+        stage=pilot.AUTHOR_STAGE,
+        reservation_id=reservation_id,
+        task_ids=[slot["task_id"] for slot in pair],
+    )
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "pilot-secret")
+    calls = 0
+
+    def forbidden_transport(*args: object, **kwargs: object) -> tuple[int, dict[str, str], bytes]:
+        nonlocal calls
+        del args, kwargs
+        calls += 1
+        raise AssertionError("orphaned settlement must not be replayed")
+
+    report = json.loads(
+        pilot.run_pilot(
+            plan_path,
+            None,
+            work,
+            tmp_path / "pilot-report-orphaned-settlement",
+            root,
+            allow_network=True,
+            transport=forbidden_transport,
+            counter=_Counter(),
+        ).read_bytes()
+    )
+    assert calls == 0
+    assert report["decision"] == "INCONCLUSIVE"
+    assert report["unresolved_count"] == 140
+    assert report["response_diagnostics"]["orphaned_settled_calls"] == 1
 
 
 def test_resume_restores_persisted_diagnostics_without_another_call(

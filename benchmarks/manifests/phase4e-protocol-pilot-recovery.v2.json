@@ -1,0 +1,9 @@
+{
+  "schema_version": "phase4e-protocol-pilot-recovery.v2",
+  "id": "phase4e-protocol-pilot-recovery",
+  "recovery_of": "phase4e-protocol-pilot-policy.v1",
+  "plan_schema_version": "phase4e-protocol-pilot-plan.v2",
+  "cost_mode": "report_only",
+  "cost_report_interval_usd": "10.00",
+  "maximum_attempts_per_request": 5
+}

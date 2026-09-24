@@ -172,7 +172,7 @@ class CorpusError(ValueError):
 
 @dataclass(frozen=True)
 class LedgerPolicy:
-    """Closed stage prices and caps. Corpus callers keep the module defaults."""
+    """Closed stage prices plus optional legacy budget enforcement."""
 
     schema_version: str
     entry_stages: Mapping[str, Decimal]
@@ -180,6 +180,7 @@ class LedgerPolicy:
     prices: Mapping[str, tuple[Decimal, Decimal]]
     journal_stages: frozenset[str]
     automatic_retries: int
+    enforce_budget: bool
 
 
 def _default_ledger_policy() -> LedgerPolicy:
@@ -193,8 +194,9 @@ CORPUS_LEDGER_POLICY = LedgerPolicy(
     prices=dict(PRICES),
     journal_stages=frozenset({"corpus_author", "corpus_reviewer"}),
     automatic_retries=0,
+    enforce_budget=True,
 )
-PILOT_LEDGER_POLICY = LedgerPolicy(
+PILOT_LEDGER_POLICY_V1 = LedgerPolicy(
     schema_version="phase4e-pilot-cost-ledger.v1",
     entry_stages={
         "pilot_author": Decimal("0.50"),
@@ -207,12 +209,30 @@ PILOT_LEDGER_POLICY = LedgerPolicy(
     },
     journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
     automatic_retries=0,
+    enforce_budget=True,
+)
+PILOT_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-pilot-cost-ledger.v2",
+    entry_stages={
+        "pilot_author": Decimal("0"),
+        "pilot_reviewer": Decimal("0"),
+    },
+    total_budget=Decimal("0"),
+    prices={
+        "pilot_author": (Decimal("0.30"), Decimal("2.50")),
+        "pilot_reviewer": (Decimal("0.71"), Decimal("0.71")),
+    },
+    journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
+    automatic_retries=4,
+    enforce_budget=False,
 )
 
 
 def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
     if schema == CORPUS_LEDGER_POLICY.schema_version:
         return CORPUS_LEDGER_POLICY
+    if schema == PILOT_LEDGER_POLICY_V1.schema_version:
+        return PILOT_LEDGER_POLICY_V1
     if schema == PILOT_LEDGER_POLICY.schema_version:
         return PILOT_LEDGER_POLICY
     raise CorpusError("ledger identity")
@@ -2423,6 +2443,8 @@ class BudgetLedger:
         limits = self._stage_limits()
         if stage not in limits or local_worst_case < 0:
             raise CorpusError("budget stage")
+        if not self.policy.enforce_budget:
+            return
         if any(entry["status"] == "overspent" for entry in self.entries):
             raise CorpusError("budget terminal overspend")
         if self.spent(stage) + local_worst_case > limits[stage]:
@@ -2485,10 +2507,13 @@ class BudgetLedger:
             response_sha256=response_sha256,
             status="settled",
         )
-        if self.spent(entry["stage"]) > self._stage_limits()[entry["stage"]]:
+        if (
+            self.policy.enforce_budget
+            and self.spent(entry["stage"]) > self._stage_limits()[entry["stage"]]
+        ):
             entry["status"] = "overspent"
             raise CorpusError("reported stage budget exhausted")
-        if (
+        if self.policy.enforce_budget and (
             sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal())
             > self._total_budget()
         ):
@@ -2538,7 +2563,7 @@ class BudgetLedger:
             "status": "settled",
         }
         self.entries.append(entry)
-        if (
+        if self.policy.enforce_budget and (
             self.spent(stage) > self._stage_limits()[stage]
             or sum((Decimal(item["debit_usd"]) for item in self.entries), Decimal())
             > self._total_budget()
@@ -2671,7 +2696,7 @@ class BudgetLedger:
             if any(item["reservation_id"] == entry["reservation_id"] for item in ledger.entries):
                 raise CorpusError("ledger entry")
             ledger.entries.append(cast(dict[str, str], entry))
-            over_budget = (
+            over_budget = ledger.policy.enforce_budget and (
                 ledger.spent(entry["stage"]) > ledger._stage_limits()[entry["stage"]]
                 or sum((Decimal(item["debit_usd"]) for item in ledger.entries), Decimal())
                 > ledger._total_budget()
@@ -2912,8 +2937,8 @@ class OpenRouterCorpusClient:
         if ledger_directory is None:
             raise CorpusError("network requires durable ledger")
         self.policy = policy or CORPUS_LEDGER_POLICY
-        if self.policy.automatic_retries != 0:
-            raise CorpusError("automatic retries are closed")
+        if self.policy.automatic_retries < 0:
+            raise CorpusError("automatic retries")
         if (
             author_stage not in self.policy.journal_stages
             or reviewer_stage not in self.policy.journal_stages
@@ -2936,7 +2961,12 @@ class OpenRouterCorpusClient:
             and ledger.entries != resumed.entries
         ):
             raise CorpusError("ledger resume mismatch")
-        self.ledger = resumed if resumed.entries else ledger or resumed
+        if resumed.entries:
+            self.ledger = resumed
+        elif ledger is not None:
+            self.ledger = ledger
+        else:
+            self.ledger = BudgetLedger(policy=self.policy)
 
     def author(
         self,
@@ -3013,8 +3043,8 @@ class OpenRouterCorpusClient:
     ) -> dict[str, Any]:
         if not api_key:
             raise CorpusError("pinned provider request")
-        if self.policy.automatic_retries != 0:
-            raise CorpusError("automatic retries are closed")
+        if self.policy.automatic_retries < 0:
+            raise CorpusError("automatic retries")
         body = provider_request_bytes(
             stage=stage,
             model=model,
@@ -3030,7 +3060,13 @@ class OpenRouterCorpusClient:
             else self.policy.prices
         )
         worst = request_worst_case(stage, body, max_output_tokens, prices=prices)
-        reservation_id = "reservation-" + _sha(_canonical({"stage": stage, "body": body.hex()}))
+        reservation_payload: dict[str, Any] = {"stage": stage, "body": body.hex()}
+        if self.policy.automatic_retries:
+            reservation_payload["attempt"] = sum(
+                entry["stage"] == stage and entry["task_ids"] == sorted(task_ids)
+                for entry in self.ledger.provider_journal
+            )
+        reservation_id = "reservation-" + _sha(_canonical(reservation_payload))
         self.ledger.reserve_request(stage, reservation_id, worst)
         write_ledger_snapshot(self._ledger_directory, self.ledger)
         try:

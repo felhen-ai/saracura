@@ -242,11 +242,10 @@ def _response_content(response: Mapping[str, Any]) -> dict[str, Any]:
         raise corpus.CorpusError("provider response content (missing)") from error
     if not isinstance(message, Mapping):
         raise corpus.CorpusError("provider response content (message)")
-    if message.get("reasoning") not in (None, "", []) or message.get("reasoning_details") not in (
-        None,
-        [],
-    ):
-        raise corpus.CorpusError("provider response reasoning")
+    # Some OpenRouter providers attach reasoning metadata even when strict
+    # structured output is honored. It is untrusted transport metadata: ignore
+    # it and return only the decoded content below. Nothing from those fields is
+    # retained in rows, ledgers, diagnostics, or reports.
     if not isinstance(content, str):
         raise corpus.CorpusError("provider response content type")
     try:

@@ -27,15 +27,15 @@ sensitivity: public
 
 ## Decision
 
-Phase 4E.2b implementation is `GO`. The first reviewed protocol pilot is `INCONCLUSIVE`, so corpus generation and training remain `NO-GO`. The pilot seed is burned and this record does not authorize another provider call, a retry, corpus generation, or training.
+Phase 4E.2c implementation is `GO`. The execution-recovery pilot resolved all 140 tasks without an operational failure, but its quality decision is `FAIL`: a systematically ambiguous fictionality instruction caused 127 rows to fail the same reviewer gate. Corpus generation and training remain `NO-GO` until that protocol defect is corrected and a complete pilot reaches `PASS`.
 
 ## Cumulative spend through 2026-09-24
 
 The local research history contains 46 `corpus-work*` directories and 2,117 charged ledger entries: 2,099 settled and 18 open reservations. Provider-reported cost is USD 0.81263107. Conservative debit is USD 5.12153043, which already includes USD 0.01971612 from the 18 open reservations. These figures are fixed in `benchmarks/manifests/phase4e-spend-baseline.v1.json`.
 
-The operator's cumulative Phase 4E authorization is USD 17.00. Adding the pilot's USD 1.50 complete-plan bound to the historical debit gave a pre-run maximum of USD 6.62153043, which remained inside that authorization. Per-directory caps of USD 5.00 / USD 10.00 / USD 0.75 / USD 1.25 do not reset this cumulative total. The pilot's own caps were USD 0.50 author and USD 1.00 reviewer.
+The former USD 17.00 cumulative authorization and per-run caps are historical v1 controls only. The operator removed the financial ceiling for subsequent research execution. V2 therefore records actual provider cost and conservative debit without using either value to authorize, block or stop work. The operator is informed whenever run-local provider-reported spend crosses another USD 10 and at run completion.
 
-The pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The post-pilot cumulative totals are USD 0.81575752 provider-reported and USD 5.15329537 conservative. No corpus or training spend was incurred.
+The v1 pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The v2 pilot reported USD 0.10454764 and conservatively debited USD 0.96313398. Post-v2 cumulative totals are USD 0.92030516 provider-reported and USD 6.11642935 conservative. No corpus or training spend was incurred.
 
 ## Registry digests
 
@@ -46,7 +46,7 @@ The pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The
 
 Human and Phase 4B consumers stay bound to the v1 registry. The protocol pilot is the only consumer of v2. v2 keeps the same two exception IDs and adds the closed `protocol_pilot` object to the Phase 4E exception. Pilot rows are evaluation-only and cannot enter a training packet.
 
-## Pilot outcome
+## V1 pilot outcome
 
 The protocol pilot used seed `saracura-phase4e-protocol-pilot-v1` and the immutable 140-task plan covering 70 PT-BR/English pairs and option counts 2 through 8. Its complete-plan preflight was USD 0.33295360 for the author and USD 0.86601256 for the reviewers, for USD 1.19896616 total within the stage and pilot caps.
 
@@ -70,4 +70,29 @@ The work tree was copied create-only to the durable research root at `~/Library/
 | sealed report file | `7b97255e1a2a47447303ee91c7b1fbb0a837f56d7ccac5b60be9e297ed4aebc1` |
 | sealed ledger file | `242361ec1fe5745fe154862ac701a2fcd8c69103798c92e0f9914819b9d7f74f` |
 
-There is no automatic retry for this seed. Any successor pilot requires a new reviewed protocol and manifest, a distinct seed, and renewed cumulative authorization. Phase 4E.3 remains blocked until such a pilot reaches a reviewed `PASS`.
+The v1 evidence remains immutable. It was superseded operationally by the v2 execution-recovery protocol below.
+
+## V2 execution-recovery outcome
+
+The v2 recovery kept the same answer-blind seed and 140 task identities, added report-only cost telemetry, stage-specific bounded response recovery, settled-call replay protection and continuation across locally rejected responses. It completed all 70 PT-BR/English pairs:
+
+- 0 accepted, 140 rejected and 0 unresolved tasks;
+- 0 complete accepted pairs, with both Wilson lower bounds at 0;
+- 133 completed blind reviews, with 86 scenario disagreements and 32 criterion-role disagreements recorded as non-blocking semantic diagnostics;
+- 0 author failures, 7 exhausted reviewer responses, 0 orphaned settled calls and 0 operational failures;
+- 0 local privacy violations and 0 reviewer privacy flags;
+- USD 0.10454764 provider-reported cost, below the first USD 10 reporting milestone.
+
+The rejection distribution is decisive: 127 rows failed `review_quality_fictional`, 7 failed after exhausted reviewer-response validation, 4 were explicitly rejected and 2 disagreed with the selected criterion. The reviewer instruction currently says that declared synthetic intent is not evidence while requiring `fictional=true`. For generic invented entities with no external provenance available to the blind reviewer, that makes the positive claim effectively unprovable. This is a protocol wording defect; it does not support a conclusion that the generated rows contain real people, organizations or private data.
+
+The work tree was copied create-only to the durable research root at `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v2`. The sealed evidence has these bindings:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan | `ff056cf6f128d73865a6e66711b99c98fa655f07a42e1703561154bf555c2359` |
+| post-copy research inventory | `4c2d2a89dc2bb701d6d77894e2950748c7bdad4651e5aeed1cb3c07c3efa44ec` |
+| report-declared ledger | `3263a957747eec369c89e7adcd50a45f58c2fec6a573d4c3c1d282c80538be10` |
+| sealed report file | `bef202e43d769aac54b874aa68d672e3a2dd9aed0b0e238cfd20b6a2e30baf30` |
+| sealed ledger file | `19e2ff03cbcf583da5a9a4d2d789dbf1cdbfb49c307a2aa1f7233bd9eef06392` |
+
+Phase 4E.3 remains blocked on quality evidence, not financial authorization. The next increment must replace the ambiguous fictionality test with an observable-content test for generic/invented entities versus identifiable real-world or sensitive identifiers, preserve all v2 blindness and privacy invariants, and rerun the protocol in new create-only v3 evidence paths.

@@ -105,7 +105,7 @@ def test_current_policy_blocks_corpus_after_network_opt_in_before_io(
     assert not (tmp_path / "work").exists()
 
 
-def test_response_content_rejects_reasoning_without_retaining_it() -> None:
+def test_response_content_ignores_reasoning_without_retaining_it() -> None:
     marker = "private reasoning marker"
     response = {
         "choices": [
@@ -115,9 +115,9 @@ def test_response_content_rejects_reasoning_without_retaining_it() -> None:
             }
         ]
     }
-    with pytest.raises(corpus.CorpusError, match=r"^provider response reasoning$") as caught:
-        pipeline._response_content(response)
-    assert marker not in str(caught.value)
+    decoded = pipeline._response_content(response)
+    assert decoded == {}
+    assert marker not in json.dumps(decoded)
     assert (
         pipeline._response_content(
             {"choices": [{"message": {"content": "{}", "reasoning_details": []}}]}
