@@ -30,10 +30,11 @@ from benchmarks.saracura_universal_policy import AUTHOR_MODEL, REVIEWER_MODEL
 ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-policy.v1.json"
 RECOVERY_POLICY_V2_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v2.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v3.json"
+RECOVERY_POLICY_V3_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v3.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v4.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v3"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v4"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
@@ -117,13 +118,16 @@ def _pilot_reviewer_system() -> str:
         "Choose the single scenario that directly explains the decision, ignoring merely "
         "incidental wording. Attest one scenario, distinct ordered roles, and "
         "selected_role=matches_rule at the chosen position. Select one criterion or reject. "
-        "Treat fictional as an observable content-safety flag, not a claim about hidden author "
-        "intent. Set fictional=true when every visible entity is generic or clearly invented and "
-        "the content contains no identifiable real person, real organization, account, URL, "
-        "credential, private record, or claim tied to a real record. The absence of those "
-        "identifiers is sufficient: do not require external provenance or an explicit synthetic "
-        "declaration. Set fictional=false only when visible content identifies or claims a real "
-        "person, organization, account, URL, credential, private record, or real-world record. "
+        "Evaluate fictional and private_or_sensitive only from instruction, state.summary, and "
+        "criteria[].description. Ignore task_id, criterion IDs, locale, domain, and JSON field "
+        "names for both judgments; they are trusted routing metadata. Treat fictional as an "
+        "observable content-safety flag, not a claim about hidden author intent. A name without "
+        "an observable real-world anchor must be treated as generic or invented: do not search, "
+        "speculate about name collisions, require external provenance, or require an explicit "
+        "synthetic declaration. Set fictional=true when the evaluated content has no URL, account "
+        "handle, credential, exact private address, official registration, known public-entity "
+        "claim, private record, or claim tied to a real record. Set fictional=false only when the "
+        "evaluated content visibly contains one of those real-world anchors. "
         "exclusive_options=true only if exactly one criterion is best. Check language, "
         "sufficiency, privacy, and sensitive patterns. You do not receive answer, author "
         "attestation, family, pair, gold position, sibling, or split metadata."
@@ -286,14 +290,14 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "review_protocol",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v3",
+        "schema_version": "phase4e-protocol-pilot-recovery.v4",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
         "cost_mode": "report_only",
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
-        "review_protocol": "observable-identifiers.v1",
+        "review_protocol": "content-fields-only.v1",
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -599,7 +603,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-")
+    _require_component(output, "pilot-plan-v4")
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1079,7 +1083,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v3",
+        "schema_version": "phase4e-protocol-pilot-report.v4",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1235,8 +1239,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(work_dir, "pilot-work-")
-    _require_component(report_dir, "pilot-report-")
+    _require_component(plan_path, "pilot-plan-v4")
+    _require_component(work_dir, "pilot-work-v4")
+    _require_component(report_dir, "pilot-report-v4")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
