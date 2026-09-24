@@ -711,7 +711,7 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     plan = corpus.build_plan()
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
-        "corpus_author": Decimal("4.7028424"),
+        "corpus_author": Decimal("4.1572324"),
         "corpus_reviewer": Decimal("9.99871629"),
     }
     assert totals["corpus_author"] < Decimal("5")
@@ -722,7 +722,7 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     monkeypatch.setattr(
         corpus,
         "STAGE_LIMITS",
-        {"corpus_author": Decimal("4.44"), "corpus_reviewer": Decimal("10.00")},
+        {"corpus_author": Decimal("4.00"), "corpus_reviewer": Decimal("10.00")},
     )
     monkeypatch.setattr(corpus, "TOTAL_BUDGET", Decimal("17.00"))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")

@@ -713,14 +713,31 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
         raise CorpusError("author batch slot")
     target = _planned_semantic_target(slot)
     schema = AuthorGeneratedRecord.model_json_schema()
+    schema.pop("$defs", None)
     properties = cast(dict[str, dict[str, Any]], schema["properties"])
     option_count = slot["option_count"]
     if not isinstance(option_count, int) or not 2 <= option_count <= 8:
         raise CorpusError("author batch option count")
+    properties["state"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["summary"],
+        "properties": {
+            "summary": {"type": "string", "minLength": 1, "maxLength": 180},
+        },
+    }
     properties["criteria"] = {
-        **properties["criteria"],
+        "type": "array",
         "minItems": option_count,
         "maxItems": option_count,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["description"],
+            "properties": {
+                "description": {"type": "string", "minLength": 1, "maxLength": 120},
+            },
+        },
     }
     properties["selected_index"] = {"type": "integer", "enum": [0]}
     properties["semantic_equivalence_attestation"] = {

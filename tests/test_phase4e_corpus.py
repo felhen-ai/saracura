@@ -397,7 +397,15 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
     schema = author_schema(pair)
     records = schema["properties"]["records"]
     assert records["minItems"] == records["maxItems"] == 2
-    assert "$defs" in schema and "$defs" not in records["items"]
+    assert "$defs" not in schema
+    assert "$ref" not in json.dumps(schema)
+    assert records["items"]["properties"]["state"]["properties"]["summary"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 180,
+    }
+    criterion = records["items"]["properties"]["criteria"]["items"]
+    assert criterion["properties"]["description"]["maxLength"] == 120
     assert set(records["items"]["properties"]) == {
         "instruction",
         "state",

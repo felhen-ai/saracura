@@ -266,7 +266,9 @@ threshold, reconciliation mismatch, fulfillment exception, access risk,
 schedule conflict, or content safety. The author response schema binds
 `selected_index=0` and the exact planned scenario and selected-first role list
 with inline single-value JSON Schema enums before transport; it avoids schema
-composition keywords that are not portable across the pinned provider route.
+composition keywords and schema references that are not portable across the
+pinned provider route. State and criterion constraints are also materialized
+inline, while the same Pydantic models remain the authoritative local validator.
 The reviewer receives the codebook
 but never the planned target. Author-side rejection evidence distinguishes a
 target mismatch, prohibited semantic-label leakage into task text, and other
@@ -366,7 +368,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.7028424 for the author and USD 9.99871629 for the
+preflight is currently USD 4.1572324 for the author and USD 9.99871629 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the
