@@ -343,9 +343,9 @@ def test_source_contract_failure_resolves_planned_slot_but_tampering_is_fatal() 
     }
     usable, rejected = classify_author_rows([generated], [slot], _Counter())
     assert usable == []
-    assert rejected == [
-        {"task_id": slot["task_id"], "split": slot["split"], "reason": "author_record_schema"}
-    ]
+    assert rejected[0]["task_id"] == slot["task_id"]
+    assert rejected[0]["split"] == slot["split"]
+    assert rejected[0]["reason"].startswith("author_record_schema__state.summary:")
 
     tampered = {**_record(slot), "domain": "tampered_domain"}
     with pytest.raises(CorpusError, match="author changed planner-owned field"):
@@ -383,11 +383,25 @@ def test_author_rejection_reasons_are_durable_and_content_free() -> None:
     for record, reason in (
         (target_mismatch, "semantic_target_mismatch"),
         (label_leakage, "semantic_label_leakage"),
-        (source_failure, "author_record_schema"),
+        (source_failure, "author_record_schema__state.summary:string_too_long"),
     ):
         usable, rejected = classify_author_rows([record], [slot], _Counter())
         assert usable == []
         assert rejected == [{"task_id": slot["task_id"], "split": slot["split"], "reason": reason}]
+
+
+def test_author_schema_reason_never_persists_provider_controlled_extra_key() -> None:
+    slot = next(
+        slot
+        for slot in build_plan()["slots"]
+        if slot["pair_id"] is None and slot["option_count"] == 2
+    )
+    record = {**_record(slot), "raw_marker_leak_123": "private provider value"}
+    usable, rejected = classify_author_rows([record], [slot], _Counter())
+    assert usable == []
+    assert rejected[0]["reason"] == "author_record_schema__unknown:extra_forbidden"
+    assert "raw_marker" not in rejected[0]["reason"]
+    assert "private" not in rejected[0]["reason"]
 
 
 def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_pair() -> None:

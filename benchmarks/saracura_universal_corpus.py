@@ -1199,19 +1199,7 @@ def validate_author_rows(
 
 def _author_rejection_reason(
     error: CorpusError,
-) -> Literal[
-    "semantic_target_mismatch",
-    "semantic_label_leakage",
-    "author_record_schema",
-    "author_state_schema",
-    "author_option_cardinality",
-    "author_gold_position_mismatch",
-    "author_semantic_attestation",
-    "author_criterion_identity",
-    "author_cross_locale_attestation",
-    "author_task_contract",
-    "source_contract",
-]:
+) -> str:
     """Classify a local author failure without retaining rejected content."""
 
     if str(error) == "author semantic target mismatch":
@@ -1220,7 +1208,7 @@ def _author_rejection_reason(
         return "semantic_label_leakage"
     message = str(error)
     if message.startswith("author record schema"):
-        return "author_record_schema"
+        return _bounded_contract_reason("author_record_schema", message)
     if message == "author state schema":
         return "author_state_schema"
     if message == "author option cardinality":
@@ -1234,8 +1222,42 @@ def _author_rejection_reason(
     if message in {"unpaired cross-locale attestation", "cross-locale semantic attestation"}:
         return "author_cross_locale_attestation"
     if message.startswith("author task contract"):
-        return "author_task_contract"
+        return _bounded_contract_reason("author_task_contract", message)
     return "source_contract"
+
+
+def _bounded_contract_reason(prefix: str, message: str) -> str:
+    """Retain only Pydantic field paths/error types, never rejected values."""
+
+    if "(" not in message or not message.endswith(")"):
+        return prefix
+    details = message.split("(", 1)[1][:-1].casefold()
+    signatures: list[str] = []
+    for detail in details.split(",")[:8]:
+        path, separator, error_type = detail.rpartition(":")
+        if not separator or not re.fullmatch(r"[a-z0-9_]+", error_type):
+            signatures.append("unknown:unknown")
+            continue
+        signatures.append(f"{_known_contract_path(path)}:{error_type}")
+    bounded = "_".join(signatures)[:160]
+    return f"{prefix}__{bounded}" if bounded else prefix
+
+
+def _known_contract_path(path: str) -> str:
+    """Map provider-influenced validation locations to a static taxonomy."""
+
+    if path in {"instruction", "state.summary", "selected_index"}:
+        return path
+    if re.fullmatch(r"criteria\.\d+\.description", path):
+        return "criteria.description"
+    if path in {
+        "semantic_equivalence_attestation",
+        "semantic_equivalence_attestation.scenario",
+        "semantic_equivalence_attestation.criterion_roles",
+        "semantic_equivalence_attestation.selected_role",
+    }:
+        return path
+    return "unknown"
 
 
 def classify_author_rows(

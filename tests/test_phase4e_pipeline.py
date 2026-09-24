@@ -584,7 +584,9 @@ def test_source_contract_resolution_is_durable_and_has_settled_author_lineage(
         if "row" in entry
     ]
     assert len(resolved) == 2
-    assert all(row["reason"] == "author_record_schema" for row in resolved)
+    assert all(
+        row["reason"] == "author_record_schema__state.summary:string_too_long" for row in resolved
+    )
     assert all(row["author_response_sha256"] for row in resolved)
     assert all(row["author_reservation_id"] for row in resolved)
     assert all(row["author_request_id"] == "source-contract-1" for row in resolved)

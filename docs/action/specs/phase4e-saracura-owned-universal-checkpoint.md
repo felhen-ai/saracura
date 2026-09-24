@@ -274,7 +274,10 @@ but never the planned target. Author-side rejection evidence distinguishes a
 target mismatch, prohibited semantic-label leakage into task text, and other
 closed schema, state, option-cardinality, gold-position, attestation, criterion
 identity, cross-locale, or typed task-contract failures without retaining
-rejected content.
+rejected content. Schema and task-contract codes may append a bounded,
+sanitized Pydantic field-path/error-type signature; input values and exception
+payloads remain prohibited. Field paths come only from a static local allowlist;
+provider-controlled or otherwise unknown locations collapse to `unknown`.
 
 The Wilson stop is evaluated at each ten-author-batch boundary once at least 20
 planned tasks have resolved. Deterministic impossibility is always
