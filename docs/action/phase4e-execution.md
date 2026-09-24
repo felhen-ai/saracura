@@ -144,3 +144,21 @@ The resolved distribution was 24 genericity rejections, 16 exclusivity rejection
 The ledger has 120 settled calls and one open reservation from interruption during a provider response. Settled provider-reported cost was USD 0.06145967 and settled conservative debit was USD 0.54864810; no USD 10 reporting milestone was crossed. The work tree was copied create-only to `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v6`, and the post-copy inventory SHA-256 is `59afe660f0ad9b6ff6fe3e01585bed73c631f1f95c5097233eb4991ecc6ec76e`.
 
 V6 is `INCONCLUSIVE` by deliberate early termination and is not resumable. The next protocol should change the model pair while preserving the now-validated genericity wire contract and all acceptance thresholds.
+
+## V7 model-pair outcome
+
+V7 changed the author to GPT-4.1 Mini and the independent reviewer to Gemini 3.8 Flash, retained ZDR/no-collection routing and versioned the report-only ledger prices. The first author call settled successfully, but the first reviewer exceeded the transport's fixed 30-second socket timeout. Its outcome is unknown, so the call was marked `uncertain` and the run correctly stopped `INCONCLUSIVE` with all 140 tasks unresolved.
+
+Settled provider-reported cost was USD 0.000926 and conservative debit was USD 0.00923025; no USD 10 reporting milestone was crossed. Cumulative totals became USD 1.01862034 provider-reported and USD 7.01098833 conservative. The v7 ledger contains one settled call and one uncertain call and must never be resumed.
+
+The create-only evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan | `40642b0226342204449fef7317f71141519f81665c0ccdefdb0c314af44e1b4a` |
+| post-copy research inventory | `71e8c87275d150240e87985a7985492291945363b16798565119bf3cd1b2990e` |
+| report-declared ledger | `cda6dad416ec3f02728bb41225268e5a5ea9afa45eff96e322d5a6fecbf6652b` |
+| sealed report file | `a48c61c831c059596e2447a29e14e42fae7129b43b2c504ffa289c08660c7f9e` |
+| sealed ledger file | `fd57c76de7821bd3efb9348bab4d4d88744e702e3c20bc44591e8973cd83af38` |
+
+The next create-only run keeps the v7 model pair and raises only the fixed transport timeout from 30 to 120 seconds. This is an operational correction, not a quality-gate relaxation.
