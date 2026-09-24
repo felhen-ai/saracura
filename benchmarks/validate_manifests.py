@@ -10,7 +10,14 @@ from benchmarks.data_policy_registry import load_registry_v2 as load_data_policy
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
 from benchmarks.saracura_universal_pilot import (
+    RECOVERY_POLICY_V2_PATH,
+    RECOVERY_POLICY_V3_PATH,
+    RECOVERY_POLICY_V4_PATH,
+    RECOVERY_POLICY_V5_PATH,
+    RECOVERY_POLICY_V6_PATH,
+    RECOVERY_POLICY_V7_PATH,
     validate_pilot_policy,
+    validate_pilot_recovery_policy,
     validate_spend_baseline,
 )
 from benchmarks.saracura_universal_policy import validate_phase4e_policy
@@ -34,6 +41,18 @@ REQUIRED_FIELDS = {
     "contains_personal_data",
     "purpose",
     "quality_claims_allowed",
+}
+
+HISTORICAL_PILOT_RECOVERY_POLICIES = {
+    f"phase4e-protocol-pilot-recovery.v{version}": path
+    for version, path in (
+        (2, RECOVERY_POLICY_V2_PATH),
+        (3, RECOVERY_POLICY_V3_PATH),
+        (4, RECOVERY_POLICY_V4_PATH),
+        (5, RECOVERY_POLICY_V5_PATH),
+        (6, RECOVERY_POLICY_V6_PATH),
+        (7, RECOVERY_POLICY_V7_PATH),
+    )
 }
 
 
@@ -70,6 +89,14 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "phase4e-protocol-pilot-policy.v1":
         validate_pilot_policy(path)
+        return
+    if schema_version == "phase4e-protocol-pilot-recovery.v8":
+        validate_pilot_recovery_policy(path)
+        return
+    if schema_version in HISTORICAL_PILOT_RECOVERY_POLICIES:
+        canonical = HISTORICAL_PILOT_RECOVERY_POLICIES[schema_version]
+        if raw != canonical.read_bytes():
+            raise ValueError(f"{path}: historical recovery policy must be canonical")
         return
     if schema_version == "phase4e-spend-baseline.v1":
         validate_spend_baseline(path)

@@ -41,3 +41,17 @@ def test_phase4c_manifests_route_through_closed_validators() -> None:
     root = Path(__file__).parents[1] / "benchmarks/manifests"
     validate_routed_manifest(root / "decision-backend-candidates.v1.json")
     validate_routed_manifest(root / "universal-bakeoff-plan.v1.json")
+
+
+def test_phase4e_recovery_manifests_route_through_closed_validators(tmp_path: Path) -> None:
+    root = Path(__file__).parents[1] / "benchmarks/manifests"
+    for version in range(2, 9):
+        source = root / f"phase4e-protocol-pilot-recovery.v{version}.json"
+        validate_routed_manifest(source)
+
+        tampered = tmp_path / source.name
+        payload = json.loads(source.read_bytes())
+        payload["cost_report_interval_usd"] = "11.00"
+        tampered.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError):
+            validate_routed_manifest(tampered)

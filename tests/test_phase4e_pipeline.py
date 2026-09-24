@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 from decimal import Decimal
@@ -44,6 +45,56 @@ def test_plan_is_no_clobber_and_constructs_no_socket(
     assert pipeline.main(["plan", "--output", str(output)]) == 0
     corpus.validate_plan(json.loads(output.read_bytes()))
     assert pipeline.main(["plan", "--output", str(output)]) == 2
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, 30.0])
+def test_openrouter_transport_rejects_invalid_timeout(timeout: object) -> None:
+    with pytest.raises(corpus.CorpusError, match=r"^provider transport timeout$"):
+        pipeline._openrouter_transport(timeout)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("configured, expected", [(None, 30), (120, 120)])
+def test_openrouter_transport_wires_timeout_without_opening_socket(
+    configured: int | None, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        status = 200
+
+        def getheaders(self) -> list[tuple[str, str]]:
+            return []
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    class FakeConnection:
+        def __init__(self, host: str, port: int, *, context: object, timeout: int) -> None:
+            captured.update(host=host, port=port, context=context, timeout=timeout)
+
+        def request(self, method: str, path: str, *, body: bytes, headers: dict[str, str]) -> None:
+            captured.update(method=method, path=path, body=body, headers=headers)
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(http.client, "HTTPSConnection", FakeConnection)
+    transport = (
+        pipeline._openrouter_transport()
+        if configured is None
+        else pipeline._openrouter_transport(configured)
+    )
+    assert transport(
+        "POST",
+        "https://openrouter.ai/api/v1/chat/completions",
+        {"content-type": "application/json"},
+        b"{}",
+    ) == (200, {}, b"{}")
+    assert captured["timeout"] == expected
+    assert captured["closed"] is True
 
 
 def test_corpus_requires_literal_network_opt_in_before_environment_or_io(

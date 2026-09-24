@@ -34,15 +34,17 @@ RECOVERY_POLICY_V3_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-re
 RECOVERY_POLICY_V4_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v4.json"
 RECOVERY_POLICY_V5_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v5.json"
 RECOVERY_POLICY_V6_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v6.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v7.json"
+RECOVERY_POLICY_V7_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v7.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v8.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v7"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v8"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
 PILOT_AUTHOR_MODEL = "openai/gpt-4.1-mini"
 PILOT_REVIEWER_MODEL = "google/gemini-3.8-flash"
+PILOT_TRANSPORT_TIMEOUT_SECONDS = 120
 PILOT_PROVIDER_POLICY = {
     "allow_fallbacks": True,
     "require_parameters": True,
@@ -306,9 +308,10 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "review_protocol",
         "models",
         "provider_policy",
+        "transport_timeout_seconds",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v7",
+        "schema_version": "phase4e-protocol-pilot-recovery.v8",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
@@ -329,6 +332,7 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
             },
         },
         "provider_policy": PILOT_PROVIDER_POLICY,
+        "transport_timeout_seconds": PILOT_TRANSPORT_TIMEOUT_SECONDS,
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -675,6 +679,7 @@ def build_plan() -> dict[str, Any]:
             REVIEWER_STAGE: PILOT_REVIEWER_MODEL,
         },
         "provider_policy_sha256": _sha(_canonical(PILOT_PROVIDER_POLICY)),
+        "transport_timeout_seconds": PILOT_TRANSPORT_TIMEOUT_SECONDS,
         "domain_scenario_map_sha256": _sha(_canonical(policy["domain_scenario_map"])),
         "slots": slots,
         "cost_estimate": {
@@ -698,7 +703,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v7", file_path=True)
+    _require_component(output, "pilot-plan-v8", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1180,7 +1185,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v7",
+        "schema_version": "phase4e-protocol-pilot-report.v8",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1336,9 +1341,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v7", file_path=True)
-    _require_component(work_dir, "pilot-work-v7")
-    _require_component(report_dir, "pilot-report-v7")
+    _require_component(plan_path, "pilot-plan-v8", file_path=True)
+    _require_component(work_dir, "pilot-work-v8")
+    _require_component(report_dir, "pilot-report-v8")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
@@ -1367,7 +1372,11 @@ def run_pilot(
     ledger = resumed if resumed.entries else corpus.BudgetLedger(policy=corpus.PILOT_LEDGER_POLICY)
     if ledger.policy.schema_version != corpus.PILOT_LEDGER_POLICY.schema_version:
         raise corpus.CorpusError("ledger resume mismatch")
-    chosen_transport = transport if transport is not None else pipeline._openrouter_transport()
+    chosen_transport = (
+        transport
+        if transport is not None
+        else pipeline._openrouter_transport(PILOT_TRANSPORT_TIMEOUT_SECONDS)
+    )
     client = corpus.OpenRouterCorpusClient(
         transport=cast(corpus.Transport, chosen_transport),
         allow_network=True,

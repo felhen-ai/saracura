@@ -268,8 +268,11 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
-def _openrouter_transport() -> Transport:
+def _openrouter_transport(timeout_seconds: int = 30) -> Transport:
     """Create the only live transport: fixed HTTPS, no proxy, no redirects."""
+
+    if type(timeout_seconds) is not int or timeout_seconds < 1:
+        raise corpus.CorpusError("provider transport timeout")
 
     context = ssl.create_default_context()
 
@@ -279,7 +282,9 @@ def _openrouter_transport() -> Transport:
         if method != "POST" or url != f"https://{_OPENROUTER_HOST}{_OPENROUTER_PATH}":
             raise corpus.CorpusError("pinned provider request")
         # http.client has neither proxy discovery nor redirect-following.
-        connection = http.client.HTTPSConnection(_OPENROUTER_HOST, 443, context=context, timeout=30)
+        connection = http.client.HTTPSConnection(
+            _OPENROUTER_HOST, 443, context=context, timeout=timeout_seconds
+        )
         try:
             connection.request(method, _OPENROUTER_PATH, body=body, headers=dict(headers))
             response = connection.getresponse()
