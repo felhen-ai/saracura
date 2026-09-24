@@ -246,6 +246,17 @@ action, overbroad action, or duplicate action. Rejection evidence distinguishes
 scenario-code disagreement from criterion-role disagreement without retaining
 provider reasoning or raw rejected content.
 
+They also receive the same concise scenario codebook: required next action,
+information only, suspected abuse, missing facts, deadline risk, policy breach,
+duplicate record, topic routing, rule eligibility, urgency priority, approval
+threshold, reconciliation mismatch, fulfillment exception, access risk,
+schedule conflict, or content safety. The author response schema binds
+`selected_index=0` and the exact planned scenario and selected-first role list
+with JSON Schema constants before transport. The reviewer receives the codebook
+but never the planned target. Author-side rejection evidence distinguishes a
+target mismatch, prohibited semantic-label leakage into task text, and other
+source-contract failure without retaining rejected content.
+
 The Wilson stop is evaluated at each ten-author-batch boundary once at least 20
 planned tasks have resolved. Deterministic impossibility is always
 authoritative; a Wilson projection cannot stop a cohort with fewer than 20
@@ -338,7 +349,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.7237182 for the author and USD 9.92714829 for the
+preflight is currently USD 4.6794424 for the author and USD 9.99871629 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the

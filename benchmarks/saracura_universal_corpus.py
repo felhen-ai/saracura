@@ -94,6 +94,23 @@ CRITERION_ROLES = (
     "overbroad_action",
     "duplicate_action",
 )
+SCENARIO_CODEBOOK = (
+    "Scenarios: action_required=required next action; "
+    "informational_only=information only; suspected_abuse=suspected abuse; "
+    "missing_information=missing facts; deadline_risk=deadline risk; "
+    "policy_violation=policy breach; duplicate_record=duplicate record; "
+    "topic_routing=topic routing; rule_eligibility=rule eligibility; "
+    "urgency_priority=urgency priority; threshold_approval=approval threshold; "
+    "reconciliation_mismatch=reconciliation mismatch; "
+    "fulfillment_exception=fulfillment exception; access_risk=access risk; "
+    "schedule_conflict=schedule conflict; content_safety=content safety."
+)
+CRITERION_ROLE_CODEBOOK = (
+    "Roles: matches_rule=match; contradicts_rule=conflict; "
+    "irrelevant_to_rule=irrelevant; insufficient_evidence=missing facts; "
+    "unsafe_action=unsafe; premature_action=early; overbroad_action=too broad; "
+    "duplicate_action=duplicate."
+)
 SPLIT_SIZES = {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240}
 PAIR_COUNTS = {"synthetic_train": 210, "synthetic_dev": 45, "synthetic_holdout": 45}
 PRICES = {
@@ -694,6 +711,7 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
     }
     if not required <= set(slot):
         raise CorpusError("author batch slot")
+    target = _planned_semantic_target(slot)
     schema = AuthorGeneratedRecord.model_json_schema()
     properties = cast(dict[str, dict[str, Any]], schema["properties"])
     option_count = slot["option_count"]
@@ -704,9 +722,17 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
         "minItems": option_count,
         "maxItems": option_count,
     }
-    properties["selected_index"] = {
-        **properties["selected_index"],
-        "maximum": option_count - 1,
+    properties["selected_index"] = {"const": 0}
+    properties["semantic_equivalence_attestation"] = {
+        "allOf": [properties["semantic_equivalence_attestation"]],
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["scenario", "criterion_roles", "selected_role"],
+        "properties": {
+            "scenario": {"const": target["scenario"]},
+            "criterion_roles": {"const": target["criterion_roles"]},
+            "selected_role": {"const": target["selected_role"]},
+        },
     }
     return schema
 
@@ -714,16 +740,22 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_author_batch(slots: Sequence[Mapping[str, Any]]) -> None:
     if not slots:
         raise CorpusError("invalid author batch")
-    pairs: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    for slot in slots:
-        pair_id = slot.get("pair_id")
-        if pair_id is not None:
-            if not isinstance(pair_id, str):
-                raise CorpusError("author batch pair")
-            pairs[pair_id].append(slot)
-    for members in pairs.values():
-        if len(members) != 2 or {member.get("locale") for member in members} != set(LOCALES):
+    if len(slots) > 2:
+        raise CorpusError("invalid author batch")
+    targets = [_planned_semantic_target(slot) for slot in slots]
+    if len(slots) == 1:
+        if slots[0].get("pair_id") is not None:
             raise CorpusError("cross-locale author batch")
+        return
+    pair_ids = {slot.get("pair_id") for slot in slots}
+    if (
+        len(pair_ids) != 1
+        or not isinstance(next(iter(pair_ids)), str)
+        or {slot.get("locale") for slot in slots} != set(LOCALES)
+    ):
+        raise CorpusError("cross-locale author batch")
+    if _canonical(targets[0]) != _canonical(targets[1]):
+        raise CorpusError("cross-locale author semantic target")
 
 
 def author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -781,10 +813,15 @@ def reviewer_schema(batch_size: int) -> dict[str, Any]:
 
 
 def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    _validate_author_batch(slots)
     return [
         {
             "role": "system",
-            "content": "Return only one JSON object whose sole top-level key is records; never return or echo a slots wrapper. Create exactly one generated-content record for each planned slot, in the same order as the supplied slots. Each record contains only instruction, state, criteria, selected_index, and semantic_equivalence_attestation; every criterion contains only description. Each slot has a closed semantic_target. Restate it exactly as semantic_equivalence_attestation, materialize its scenario and selected-first roles in the rule, facts, and options, and set selected_index=0. Criterion roles: matches_rule directly satisfies the decision rule; contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; premature_action acts before a prerequisite; overbroad_action exceeds the rule; duplicate_action repeats an already-required action. Infer roles from the rule, facts, and option meaning; do not write role labels into criterion descriptions. Do not write scenario or role labels into instruction or state.summary. Make state.summary contain an objective decision rule plus all facts needed to apply it. Make criteria distinct actions or labels that are logically mutually exclusive: exactly one must be correct, every distractor must conflict with the rule, and no two options may both apply. Distractor overlap may be lexical but never logical. Avoid subjective preferences, ties, conditional alternatives, compound options, and catch-all wording. The local pipeline binds planner metadata and criterion IDs, then moves the selected criterion and its authored role together to gold_position. Create synthetic tasks using only generic roles and generic entities; never use proper names. Keep instruction and every criterion description at most 120 characters and state.summary at most 180 characters. For a cross-locale pair, use equivalent meanings and exactly the same semantic attestation in both languages. Do not use personal data, credentials, real organizations, URLs, identifiers, the @ character, or digit sequences longer than four digits.",
+            "content": "Return a JSON object whose sole top-level key is records, one generated record per supplied slot in order. Each record has instruction, state, criteria, selected_index, and semantic_equivalence_attestation; criteria have description only. Restate each closed semantic_target exactly, materialize it in rule, facts, and options, and set selected_index=0. "
+            + SCENARIO_CODEBOOK
+            + " "
+            + CRITERION_ROLE_CODEBOOK
+            + " Infer roles from rule, facts, and options; do not write scenario or role labels in task text. State has the rule and needed facts; options are distinct, mutually exclusive, and have exactly one match. No ties, conditions, compounds, or catch-alls. Use generic fictional entities only: no personal data, credentials, real organizations, URLs, identifiers, @, or digit sequences over four. Instruction and criteria are at most 120 characters; state.summary at most 180 characters. Paired locales have equivalent meaning and identical attestations. Local code binds metadata, IDs, and gold position.",
         },
         {"role": "user", "content": _canonical({"slots": list(slots)}).decode("utf-8")},
     ]
@@ -805,7 +842,11 @@ def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]
     return [
         {
             "role": "system",
-            "content": "Return only one JSON object whose sole top-level key is reviews; never return or echo a tasks wrapper. Produce exactly one generated review containing only status, the chosen criterion ID, reason codes, the four quality flags for natural language, fictionality, exclusive options, and private or sensitive content, and an independently emitted closed semantic_equivalence_attestation. Criterion roles: matches_rule directly satisfies the decision rule; contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; premature_action acts before a prerequisite; overbroad_action exceeds the rule; duplicate_action repeats an already-required action. Infer roles from the rule, facts, and option meaning; do not write role labels into criterion descriptions. The attestation must state one closed scenario code, an ordered distinct closed criterion-role list, and selected_role=matches_rule at the chosen criterion position. Independently select one criterion or reject. Independently judge fictionality from the supplied content; do not treat provenance or stated synthetic intent as proof. Set fictional=true only when the content itself is fictional and contains no identifiable real person, organization, account, URL, credential, or private record. Set exclusive_options=true only when exactly one criterion is best under the supplied facts. Check natural language, internal sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
+            "content": "Return a JSON object whose sole top-level key is reviews, one review with status, chosen criterion ID, reason codes, four quality flags, and independent semantic_equivalence_attestation. "
+            + SCENARIO_CODEBOOK
+            + " "
+            + CRITERION_ROLE_CODEBOOK
+            + " Infer roles from rule, facts, and options; do not write role labels into criteria. Attest one scenario, distinct ordered roles, and selected_role=matches_rule at the chosen position. Select one criterion or reject. Independently judge fictionality from supplied content; do not treat provenance or stated synthetic intent as proof. fictional=true only for fictional content without an identifiable real person, organization, account, URL, credential, or private record. exclusive_options=true only if exactly one criterion is best. Check language, sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
         },
         {"role": "user", "content": payload},
     ]
@@ -1134,6 +1175,18 @@ def validate_author_rows(
     return result
 
 
+def _author_rejection_reason(
+    error: CorpusError,
+) -> Literal["semantic_target_mismatch", "semantic_label_leakage", "source_contract"]:
+    """Classify a local author failure without retaining rejected content."""
+
+    if str(error) == "author semantic target mismatch":
+        return "semantic_target_mismatch"
+    if str(error) == "author wrote semantic label into task text":
+        return "semantic_label_leakage"
+    return "source_contract"
+
+
 def classify_author_rows(
     records: Any, slots: Sequence[Mapping[str, Any]], counter: TokenCounter
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1155,7 +1208,11 @@ def classify_author_rows(
             if str(error) == "author changed planner-owned field":
                 raise
             rejected.append(
-                {"task_id": slot["task_id"], "split": slot["split"], "reason": "source_contract"}
+                {
+                    "task_id": slot["task_id"],
+                    "split": slot["split"],
+                    "reason": _author_rejection_reason(error),
+                }
             )
             continue
         try:
@@ -2013,7 +2070,7 @@ def seal_packet(
         }
         atomic_create(staged / "packet.json", _canonical(manifest) + b"\n")
         os.chmod(staged / "packet.json", 0o600)
-        validate_accepted_packet(staged)
+        validate_accepted_packet_pre_holdout(staged)
         _publish_packet_create_if_absent(staged, packet)
     except BaseException:
         if staged.exists():

@@ -231,9 +231,10 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     changed["split"] = "synthetic_dev"
     with pytest.raises(CorpusError, match="author record schema"):
         validate_author_rows([changed, _record(slots[1])], slots, _Counter())
-    assert "gold_position" in json.dumps(author_messages(slots))
-    assert "semantic_target" in json.dumps(author_messages(slots))
-    assert "sole top-level key is records" in author_messages(slots)[0]["content"]
+    unpaired = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    assert "gold_position" in json.dumps(author_messages([unpaired]))
+    assert "semantic_target" in json.dumps(author_messages([unpaired]))
+    assert "sole top-level key is records" in author_messages([unpaired])[0]["content"]
 
 
 def test_author_prompts_share_closed_role_definitions_and_forbid_role_labels() -> None:
@@ -242,19 +243,12 @@ def test_author_prompts_share_closed_role_definitions_and_forbid_role_labels() -
     row = ValidatedAuthorRow.model_validate(generated_row)
     author_prompt = author_messages([slot])[0]["content"]
     reviewer_prompt = reviewer_messages([row])[0]["content"]
-    definitions = (
-        "Criterion roles: matches_rule directly satisfies the decision rule; "
-        "contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; "
-        "insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; "
-        "premature_action acts before a prerequisite; overbroad_action exceeds the rule; "
-        "duplicate_action repeats an already-required action."
-    )
-    requirement = (
-        "Infer roles from the rule, facts, and option meaning; do not write role labels into "
-        "criterion descriptions."
-    )
-    assert definitions in author_prompt and definitions in reviewer_prompt
-    assert requirement in author_prompt and requirement in reviewer_prompt
+    assert corpus.SCENARIO_CODEBOOK in author_prompt
+    assert corpus.SCENARIO_CODEBOOK in reviewer_prompt
+    assert author_prompt.count(corpus.SCENARIO_CODEBOOK) == 1
+    assert reviewer_prompt.count(corpus.SCENARIO_CODEBOOK) == 1
+    assert "do not write scenario or role labels" in author_prompt
+    assert "do not write role labels" in reviewer_prompt
     assert "state.summary at most 180 characters" in author_prompt
 
 
@@ -301,7 +295,7 @@ def test_reviewer_blindness_is_structural_and_preserves_legitimate_text() -> Non
             corpus._validate_reviewer_task_view({**task, field: value})
 
     prompt = reviewer_messages([row])[0]["content"]
-    assert "Independently judge fictionality from the supplied content" in prompt
+    assert "Independently judge fictionality from supplied content" in prompt
     assert "do not treat provenance or stated synthetic intent as proof" in prompt
 
     cast(dict[str, Any], row.state)["invalid"] = object()
@@ -358,6 +352,44 @@ def test_source_contract_failure_resolves_planned_slot_but_tampering_is_fatal() 
         classify_author_rows([tampered], [slot], _Counter())
 
 
+def test_author_rejection_reasons_are_durable_and_content_free() -> None:
+    slot = next(
+        slot
+        for slot in build_plan()["slots"]
+        if slot["pair_id"] is None and slot["option_count"] == 2
+    )
+    generated = {
+        "instruction": "Choose the fictional route supported by the stated rule.",
+        "state": {"summary": "The fictional rule supports one route."},
+        "criteria": [
+            {"description": "Take the route supported by the rule."},
+            {"description": "Take the route that conflicts with the rule."},
+        ],
+        "selected_index": 0,
+        "semantic_equivalence_attestation": {
+            **slot["semantic_target"],
+            "selected_role": "matches_rule",
+        },
+    }
+    target_mismatch = json.loads(json.dumps(generated))
+    target_mismatch["semantic_equivalence_attestation"]["scenario"] = "content_safety"
+    if slot["semantic_target"]["scenario"] == "content_safety":
+        target_mismatch["semantic_equivalence_attestation"]["scenario"] = "action_required"
+    label_leakage = json.loads(json.dumps(generated))
+    label_leakage["instruction"] = slot["semantic_target"]["scenario"]
+    source_failure = json.loads(json.dumps(generated))
+    source_failure["state"] = {"summary": "x" * 181}
+
+    for record, reason in (
+        (target_mismatch, "semantic_target_mismatch"),
+        (label_leakage, "semantic_label_leakage"),
+        (source_failure, "source_contract"),
+    ):
+        usable, rejected = classify_author_rows([record], [slot], _Counter())
+        assert usable == []
+        assert rejected == [{"task_id": slot["task_id"], "split": slot["split"], "reason": reason}]
+
+
 def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_pair() -> None:
     plan = build_plan()
     pair_id = next(slot["pair_id"] for slot in plan["slots"] if slot["pair_id"])
@@ -373,8 +405,25 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
         "selected_index",
         "semantic_equivalence_attestation",
     }
+    target = pair[0]["semantic_target"]
+    properties = records["items"]["properties"]
+    assert properties["selected_index"] == {"const": 0}
+    attestation = properties["semantic_equivalence_attestation"]
+    assert attestation["properties"] == {
+        "scenario": {"const": target["scenario"]},
+        "criterion_roles": {"const": target["criterion_roles"]},
+        "selected_role": {"const": "matches_rule"},
+    }
     with pytest.raises(CorpusError, match="cross-locale author batch"):
         author_schema(pair[:1])
+    mismatched_pair = json.loads(json.dumps(pair))
+    mismatched_pair[1]["semantic_target"]["scenario"] = "content_safety"
+    if mismatched_pair[0]["semantic_target"]["scenario"] == "content_safety":
+        mismatched_pair[1]["semantic_target"]["scenario"] = "action_required"
+    with pytest.raises(CorpusError, match="cross-locale author semantic target"):
+        author_messages(mismatched_pair)
+    with pytest.raises(CorpusError, match="cross-locale author semantic target"):
+        author_schema(mismatched_pair)
 
     review = corpus.reviewer_schema(1)
     assert "$defs" in review
@@ -918,7 +967,12 @@ def test_packet_is_validated_in_a_sibling_staging_directory_before_atomic_publis
         }
         validated.append(staged)
 
-    monkeypatch.setattr(corpus, "validate_accepted_packet", validate)
+    monkeypatch.setattr(corpus, "validate_accepted_packet_pre_holdout", validate)
+    monkeypatch.setattr(
+        corpus,
+        "validate_accepted_packet",
+        lambda _staged: (_ for _ in ()).throw(AssertionError("seal opened holdout")),
+    )
     receipt = corpus.seal_packet(packet, {}, [], [], {})
     assert receipt == packet / "packet.json"
     assert validated and validated[0] != packet
