@@ -53,20 +53,12 @@ def _record(slot: Mapping[str, Any]) -> dict[str, Any]:
         {"id": f"route-{index}", "description": f"Route criterion {index}."}
         for index in range(int(slot["option_count"]))
     ]
-    roles = [
-        "matches_rule",
-        "contradicts_rule",
-        "irrelevant_to_rule",
-        "insufficient_evidence",
-        "unsafe_action",
-        "premature_action",
-        "overbroad_action",
-        "duplicate_action",
-    ][: int(slot["option_count"])]
+    target = cast(dict[str, Any], slot["semantic_target"])
+    roles = list(cast(list[str], target["criterion_roles"]))
     gold = int(slot["gold_position"])
-    roles[0], roles[gold] = roles[gold], roles[0]
+    roles.insert(gold, roles.pop(0))
     semantic_attestation = {
-        "scenario": "topic_routing",
+        "scenario": target["scenario"],
         "criterion_roles": roles,
         "selected_role": "matches_rule",
     }
@@ -149,6 +141,7 @@ def _complete_packet_resolution(
 def test_plan_is_preprovider_text_free_balanced_and_cross_locale_isolated() -> None:
     plan = build_plan()
     validate_plan(plan)
+    assert plan["schema_version"] == "phase4e-universal-plan.v2"
     assert len(plan["slots"]) == 1600
     assert not {"instruction", "state", "criteria", "selected_criterion_id"}.intersection(
         plan["slots"][0]
@@ -168,9 +161,52 @@ def test_plan_is_preprovider_text_free_balanced_and_cross_locale_isolated() -> N
             pairs.setdefault(row["pair_id"], []).append(row)
     assert len(pairs) == 300
     assert all({row["locale"] for row in pair} == {"pt-BR", "en"} for pair in pairs.values())
+    assert all(pair[0]["semantic_target"] == pair[1]["semantic_target"] for pair in pairs.values())
     assert {
         split: sum(1 for pair in pairs.values() if pair[0]["split"] == split) for split in SPLITS
     } == {"synthetic_train": 210, "synthetic_dev": 45, "synthetic_holdout": 45}
+
+    mutated = json.loads(json.dumps(plan))
+    mutated["slots"][0]["semantic_target"]["scenario"] = "content_safety"
+    with pytest.raises(CorpusError, match="immutable plan mismatch"):
+        validate_plan(mutated)
+
+
+def test_author_must_restate_the_selected_first_target_before_local_reordering() -> None:
+    slot = next(
+        slot
+        for slot in build_plan()["slots"]
+        if slot["pair_id"] is None and slot["option_count"] == 2 and slot["gold_position"] == 1
+    )
+    target = cast(dict[str, Any], slot["semantic_target"])
+    generated = {
+        "instruction": "Choose the fictional route supported by the stated rule.",
+        "state": {"summary": "The rule requires the sole route supported by the fictional facts."},
+        "criteria": [
+            {"description": "Take the route directly supported by the stated rule."},
+            {"description": "Take a route that conflicts with the stated rule."},
+        ],
+        "selected_index": 0,
+        "semantic_equivalence_attestation": {**target, "selected_role": "matches_rule"},
+    }
+    row = validate_author_rows([generated], [slot], _Counter())[0]
+    assert row["selected_criterion_id"] == "criterion-1"
+    assert row["semantic_equivalence_attestation"]["criterion_roles"] == [
+        target["criterion_roles"][1],
+        "matches_rule",
+    ]
+
+    mismatched = json.loads(json.dumps(generated))
+    mismatched["semantic_equivalence_attestation"]["scenario"] = "content_safety"
+    if target["scenario"] == "content_safety":
+        mismatched["semantic_equivalence_attestation"]["scenario"] = "action_required"
+    with pytest.raises(CorpusError, match="author semantic target mismatch"):
+        validate_author_rows([mismatched], [slot], _Counter())
+
+    labelled = json.loads(json.dumps(generated))
+    labelled["instruction"] = str(target["scenario"])
+    with pytest.raises(CorpusError, match="author wrote semantic label"):
+        validate_author_rows([labelled], [slot], _Counter())
 
 
 def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
@@ -181,6 +217,7 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     )
     assert "gold_position" not in reviewer_payload
     assert "selected_criterion_id" not in reviewer_payload
+    assert "semantic_target" not in reviewer_payload
     assert "synthetic_train" not in reviewer_payload
     with pytest.raises(CorpusError, match="tokenizer capacity"):
         validate_author_rows([_record(slot) for slot in slots], slots, _Counter(129))
@@ -195,6 +232,7 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     with pytest.raises(CorpusError, match="author record schema"):
         validate_author_rows([changed, _record(slots[1])], slots, _Counter())
     assert "gold_position" in json.dumps(author_messages(slots))
+    assert "semantic_target" in json.dumps(author_messages(slots))
     assert "sole top-level key is records" in author_messages(slots)[0]["content"]
 
 
@@ -358,25 +396,21 @@ def test_generated_author_choice_is_reordered_to_planned_gold_position() -> None
         for slot in build_plan()["slots"]
         if slot["pair_id"] is None and slot["option_count"] == 2
     )
-    selected_index = 1 - int(slot["gold_position"])
+    target = cast(dict[str, Any], slot["semantic_target"])
     generated = {
         "instruction": "Choose the route supported by the fictional state.",
         "state": {"summary": "Only route B satisfies the stated rule."},
         "criteria": [
-            {"description": "Route A does not satisfy the rule."},
             {"description": "Route B satisfies the rule."},
+            {"description": "Route A does not satisfy the rule."},
         ],
-        "selected_index": 1,
+        "selected_index": 0,
         "semantic_equivalence_attestation": {
-            "scenario": "topic_routing",
-            "criterion_roles": ["contradicts_rule", "matches_rule"],
+            "scenario": target["scenario"],
+            "criterion_roles": target["criterion_roles"],
             "selected_role": "matches_rule",
         },
     }
-    if selected_index == 0:
-        generated["criteria"].reverse()
-        generated["selected_index"] = 0
-        generated["semantic_equivalence_attestation"]["criterion_roles"].reverse()
     row = validate_author_rows([generated], [slot], _Counter())[0]
     gold = int(slot["gold_position"])
     assert row["selected_criterion_id"] == f"criterion-{gold}"
@@ -474,8 +508,8 @@ def test_generated_author_text_is_preserved_and_invalid_content_rejects() -> Non
         ],
         "selected_index": 0,
         "semantic_equivalence_attestation": {
-            "scenario": "topic_routing",
-            "criterion_roles": ["matches_rule", "contradicts_rule"],
+            "scenario": slot["semantic_target"]["scenario"],
+            "criterion_roles": slot["semantic_target"]["criterion_roles"],
             "selected_role": "matches_rule",
         },
     }
@@ -1203,6 +1237,20 @@ def test_impossible_capacity_remains_authoritative_below_wilson_eligibility() ->
         and slot["option_count"] == 2
     ]
     resolved = _resolved_with_cohort_outcomes(plan, cohort, observed=12, accepted=0)
+    assert stop_projection(resolved, plan) == "impossible_required_minimum"
+
+
+def test_impossible_capacity_is_active_even_before_twenty_total_resolutions() -> None:
+    plan = build_plan()
+    cohort = [
+        slot
+        for slot in plan["slots"]
+        if slot["split"] == "synthetic_dev"
+        and slot["locale"] == "pt-BR"
+        and slot["option_count"] == 2
+    ]
+    resolved = [{"task_id": slot["task_id"], "status": "rejected"} for slot in cohort[:12]]
+    assert len(resolved) == 12
     assert stop_projection(resolved, plan) == "impossible_required_minimum"
 
 

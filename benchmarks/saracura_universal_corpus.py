@@ -66,6 +66,34 @@ AXES: dict[str, tuple[str, str]] = {
     "distractor_overlap": ("low", "high"),
     "urgency": ("normal", "urgent"),
 }
+SCENARIO_CODES = (
+    "action_required",
+    "informational_only",
+    "suspected_abuse",
+    "missing_information",
+    "deadline_risk",
+    "policy_violation",
+    "duplicate_record",
+    "topic_routing",
+    "rule_eligibility",
+    "urgency_priority",
+    "threshold_approval",
+    "reconciliation_mismatch",
+    "fulfillment_exception",
+    "access_risk",
+    "schedule_conflict",
+    "content_safety",
+)
+CRITERION_ROLES = (
+    "matches_rule",
+    "contradicts_rule",
+    "irrelevant_to_rule",
+    "insufficient_evidence",
+    "unsafe_action",
+    "premature_action",
+    "overbroad_action",
+    "duplicate_action",
+)
 SPLIT_SIZES = {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240}
 PAIR_COUNTS = {"synthetic_train": 210, "synthetic_dev": 45, "synthetic_holdout": 45}
 PRICES = {
@@ -166,6 +194,20 @@ def _cell_counts(split: str) -> dict[tuple[str, int], int]:
     return result
 
 
+def _semantic_target(seed: str, task_id: str, option_count: int) -> dict[str, Any]:
+    """Derive the closed selected-first target before any provider call."""
+
+    if not 2 <= option_count <= len(CRITERION_ROLES):
+        raise CorpusError("semantic target option count")
+    distractors = sorted(
+        CRITERION_ROLES[1:], key=lambda role: _seeded(seed, "role", task_id, role)
+    )[: option_count - 1]
+    return {
+        "scenario": SCENARIO_CODES[_seeded(seed, "scenario", task_id) % len(SCENARIO_CODES)],
+        "criterion_roles": ["matches_rule", *distractors],
+    }
+
+
 def build_plan() -> dict[str, Any]:
     """Return the immutable, text-free 1,600-slot public-seed plan."""
     policy = validate_phase4e_policy()
@@ -196,6 +238,7 @@ def build_plan() -> dict[str, Any]:
                         "axes": axes,
                         "option_count": option_count,
                         "gold_position": within_cell % option_count,
+                        "semantic_target": _semantic_target(seed, task_id, option_count),
                     }
                 )
                 serial += 1
@@ -218,9 +261,13 @@ def build_plan() -> dict[str, Any]:
             en["domain"] = pt["domain"]
             en["axes"] = pt["axes"]
             en["gold_position"] = pt["gold_position"]
+            en["semantic_target"] = {
+                "scenario": pt["semantic_target"]["scenario"],
+                "criterion_roles": list(pt["semantic_target"]["criterion_roles"]),
+            }
             pair_index += 1
     return {
-        "schema_version": "phase4e-universal-plan.v1",
+        "schema_version": "phase4e-universal-plan.v2",
         "workflow_revision": "phase4e-saracura-universal-synthetic.v1",
         "seed": seed,
         "slots": slots,
@@ -248,6 +295,7 @@ def validate_plan(value: Mapping[str, Any]) -> None:
         pair = row.get("pair_id")
         if pair is not None:
             pairs[cast(str, pair)].append(row)
+        _planned_semantic_target(row)
     if any(len(splits) != 1 for splits in families.values()):
         raise CorpusError("family split isolation")
     if len(pairs) != 300 or any(len(rows) != 2 for rows in pairs.values()):
@@ -257,8 +305,9 @@ def validate_plan(value: Mapping[str, Any]) -> None:
             {row["locale"] for row in rows} != set(LOCALES)
             or len({row["split"] for row in rows}) != 1
             or {row["family_id"] for row in rows} != {pair_id}
+            or len({_canonical(row["semantic_target"]) for row in rows}) != 1
         ):
-            raise CorpusError("cross-locale split isolation")
+            raise CorpusError("cross-locale split or semantic isolation")
     for split in SPLITS:
         for locale in LOCALES:
             for count in OPTION_COUNTS:
@@ -308,6 +357,76 @@ CriterionRole = Literal[
     "overbroad_action",
     "duplicate_action",
 ]
+
+
+def _planned_semantic_target(planned: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact closed, selected-first semantic target for one slot."""
+
+    target = planned.get("semantic_target")
+    option_count = planned.get("option_count")
+    if (
+        not isinstance(target, Mapping)
+        or set(target) != {"scenario", "criterion_roles"}
+        or not isinstance(option_count, int)
+    ):
+        raise CorpusError("planned semantic target")
+    try:
+        parsed = SemanticEquivalenceAttestation.model_validate(
+            {**target, "selected_role": "matches_rule"}
+        )
+    except ValidationError as error:
+        raise CorpusError("planned semantic target") from error
+    if len(parsed.criterion_roles) != option_count or parsed.criterion_roles[0] != "matches_rule":
+        raise CorpusError("planned semantic target")
+    return {
+        "scenario": parsed.scenario,
+        "criterion_roles": list(parsed.criterion_roles),
+        "selected_role": parsed.selected_role,
+    }
+
+
+def _semantic_labels_absent(record: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
+    """Keep closed labels out of task text, where they would leak the answer."""
+
+    labels = [cast(str, target["scenario"]), *cast(list[str], target["criterion_roles"])]
+
+    def text_values(value: object) -> Iterable[str]:
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                yield from text_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from text_values(child)
+
+    texts = [record.get("instruction"), *text_values(record.get("state"))]
+    criteria = record.get("criteria")
+    if isinstance(criteria, list):
+        texts.extend(
+            criterion.get("description") for criterion in criteria if isinstance(criterion, Mapping)
+        )
+    return all(
+        isinstance(text, str) and all(label.casefold() not in text.casefold() for label in labels)
+        for text in texts
+    )
+
+
+def _reordered_target(planned: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the target after the local, planner-owned gold-position move."""
+
+    target = _planned_semantic_target(planned)
+    gold_position = planned.get("gold_position")
+    roles = list(cast(list[str], target["criterion_roles"]))
+    if not isinstance(gold_position, int) or not 0 <= gold_position < len(roles):
+        raise CorpusError("planned gold position")
+    selected_role = roles.pop(0)
+    roles.insert(gold_position, selected_role)
+    return {
+        "scenario": target["scenario"],
+        "criterion_roles": roles,
+        "selected_role": target["selected_role"],
+    }
 
 
 class AuthorRecord(_Closed):
@@ -571,6 +690,7 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
         "option_count",
         "gold_position",
         "pair_id",
+        "semantic_target",
     }
     if not required <= set(slot):
         raise CorpusError("author batch slot")
@@ -664,7 +784,7 @@ def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": "Return only one JSON object whose sole top-level key is records; never return or echo a slots wrapper. Create exactly one generated-content record for each planned slot, in the same order as the supplied slots. Each record contains only instruction, state, criteria, selected_index, and semantic_equivalence_attestation; every criterion contains only description. Independently emit the closed scenario code and the ordered closed criterion-role attestation. Criterion roles: matches_rule directly satisfies the decision rule; contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; premature_action acts before a prerequisite; overbroad_action exceeds the rule; duplicate_action repeats an already-required action. Infer roles from the rule, facts, and option meaning; do not write role labels into criterion descriptions. The selected role must be matches_rule and must be at selected_index. Make state.summary contain an objective decision rule plus all facts needed to apply it. Make criteria distinct actions or labels that are logically mutually exclusive: exactly one must be correct, every distractor must conflict with the rule, and no two options may both apply. Distractor overlap may be lexical but never logical. Set selected_index to the sole correct criterion's current zero-based index. Avoid subjective preferences, ties, conditional alternatives, compound options, and catch-all wording. The local pipeline binds planner metadata and criterion IDs, then moves the selected criterion and its authored role together to gold_position. Create synthetic tasks using only generic roles and generic entities; never use proper names. Keep instruction and every criterion description at most 120 characters and state.summary at most 180 characters. For a cross-locale pair, use equivalent meanings and exactly the same semantic attestation in both languages. Do not use personal data, credentials, real organizations, URLs, identifiers, the @ character, or digit sequences longer than four digits.",
+            "content": "Return only one JSON object whose sole top-level key is records; never return or echo a slots wrapper. Create exactly one generated-content record for each planned slot, in the same order as the supplied slots. Each record contains only instruction, state, criteria, selected_index, and semantic_equivalence_attestation; every criterion contains only description. Each slot has a closed semantic_target. Restate it exactly as semantic_equivalence_attestation, materialize its scenario and selected-first roles in the rule, facts, and options, and set selected_index=0. Criterion roles: matches_rule directly satisfies the decision rule; contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; premature_action acts before a prerequisite; overbroad_action exceeds the rule; duplicate_action repeats an already-required action. Infer roles from the rule, facts, and option meaning; do not write role labels into criterion descriptions. Do not write scenario or role labels into instruction or state.summary. Make state.summary contain an objective decision rule plus all facts needed to apply it. Make criteria distinct actions or labels that are logically mutually exclusive: exactly one must be correct, every distractor must conflict with the rule, and no two options may both apply. Distractor overlap may be lexical but never logical. Avoid subjective preferences, ties, conditional alternatives, compound options, and catch-all wording. The local pipeline binds planner metadata and criterion IDs, then moves the selected criterion and its authored role together to gold_position. Create synthetic tasks using only generic roles and generic entities; never use proper names. Keep instruction and every criterion description at most 120 characters and state.summary at most 180 characters. For a cross-locale pair, use equivalent meanings and exactly the same semantic attestation in both languages. Do not use personal data, credentials, real organizations, URLs, identifiers, the @ character, or digit sequences longer than four digits.",
         },
         {"role": "user", "content": _canonical({"slots": list(slots)}).decode("utf-8")},
     ]
@@ -780,6 +900,14 @@ def _materialize_author_record(
             raise CorpusError(f"author record schema ({details})") from error
         if any(getattr(parsed_full, field) != planned[field] for field in planner_fields):
             raise CorpusError("author changed planner-owned field")
+        if _canonical(
+            parsed_full.semantic_equivalence_attestation.model_dump(mode="json")
+        ) != _canonical(_reordered_target(planned)):
+            raise CorpusError("author semantic target mismatch")
+        if not _semantic_labels_absent(
+            parsed_full.model_dump(mode="json"), _planned_semantic_target(planned)
+        ):
+            raise CorpusError("author wrote semantic label into task text")
         return parsed_full.model_dump(mode="json")
     try:
         generated = AuthorGeneratedRecord.model_validate(record).model_dump(mode="json")
@@ -797,6 +925,7 @@ def _materialize_author_record(
     semantic_attestation = generated["semantic_equivalence_attestation"]
     option_count = planned["option_count"]
     gold_position = planned["gold_position"]
+    target = _planned_semantic_target(planned)
     if (
         not isinstance(criteria, list)
         or not isinstance(option_count, int)
@@ -811,8 +940,12 @@ def _materialize_author_record(
         != semantic_attestation["selected_role"]
         or not isinstance(gold_position, int)
         or not 0 <= gold_position < option_count
+        or selected_index != 0
+        or _canonical(semantic_attestation) != _canonical(target)
     ):
-        raise CorpusError("author option cardinality")
+        raise CorpusError("author semantic target mismatch")
+    if not _semantic_labels_absent(generated, target):
+        raise CorpusError("author wrote semantic label into task text")
     selected_criterion = criteria.pop(selected_index)
     criteria.insert(gold_position, selected_criterion)
     selected_role = semantic_attestation["criterion_roles"].pop(selected_index)
@@ -934,6 +1067,14 @@ def _author_task(record: Mapping[str, Any], planned: Mapping[str, Any]) -> Unive
         != semantic_attestation.criterion_roles[selected_position]
     ):
         raise CorpusError("author semantic attestation")
+    if _canonical(semantic_attestation.model_dump(mode="json")) != _canonical(
+        _reordered_target(planned)
+    ):
+        raise CorpusError("author semantic target mismatch")
+    if not _semantic_labels_absent(
+        parsed.model_dump(mode="json"), _planned_semantic_target(planned)
+    ):
+        raise CorpusError("author wrote semantic label into task text")
     attestation = parsed.cross_locale_attestation
     if planned["pair_id"] is None:
         if attestation is not None:
@@ -2269,8 +2410,6 @@ def wilson_lower_bound(successes: int, total: int) -> float:
 
 def stop_projection(resolved: Sequence[Mapping[str, Any]], plan: Mapping[str, Any]) -> str | None:
     """Project every required cell at ten-batch boundaries, without relaxing a floor."""
-    if len(resolved) < 200:
-        return None
     by_task = {cast(str, row["task_id"]): row for row in resolved}
     slots = cast(list[Mapping[str, Any]], plan["slots"])
 

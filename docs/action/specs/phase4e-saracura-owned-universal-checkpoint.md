@@ -193,10 +193,14 @@ reviewed structured-output contract.
 
 Before any provider request, an immutable public-seed plan assigns every task
 ID, scenario-family ID, split, locale, domain, difficulty axes, option count,
-and balanced gold-option position. It also assigns cross-locale pair IDs and
-keeps paired tasks, deterministic derivatives, and any planned criterion-order
-permutation inside one family and split. The provider can never mint or change
-an identity, split, axis, count, or option position.
+balanced gold-option position, and a closed semantic generation target. The
+target precommits one scenario code and one canonical selected-first sequence
+of distinct criterion roles. It is sent only to the author, which must
+materialize content matching it; it is never sent to the reviewer. The plan
+also assigns cross-locale pair IDs and keeps paired tasks, deterministic
+derivatives, and any planned criterion-order permutation inside one family and
+split. The provider can never mint or change an identity, split, axis, count,
+option position, or semantic target.
 
 The exact domains are `email_triage`, `customer_support`, `finance`,
 `accounting`, `commerce`, `operations`, `scheduling`, `document_routing`,
@@ -223,8 +227,11 @@ role is always `matches_rule`. Paired PT-BR/English outputs must emit the same
 attestation before local reordering. The local pipeline binds every
 planner-owned field, moves the authored selected criterion and its authored role
 together to the planned gold position, and derives the selected criterion ID;
-it never fabricates a semantic attestation. Legacy full records are accepted
-only when those fields match exactly. Provider-authored `state.summary` is
+it never fabricates a semantic attestation. The author response must exactly
+restate the precommitted semantic target and make that target independently
+inferable from the generated rule, facts, and options without writing role or
+scenario labels into task text. Legacy full records are accepted only when
+their planner-owned and semantic fields match exactly. Provider-authored `state.summary` is
 limited to 180 characters so the complete framed state remains within the
 200-code-point source contract. A generated row that still violates the source
 or tokenizer contract is durably resolved as rejected under its original task
@@ -238,6 +245,12 @@ contradiction, irrelevance, insufficient evidence, unsafe action, premature
 action, overbroad action, or duplicate action. Rejection evidence distinguishes
 scenario-code disagreement from criterion-role disagreement without retaining
 provider reasoning or raw rejected content.
+
+The Wilson stop is evaluated at each ten-author-batch boundary once at least 20
+planned tasks have resolved. Deterministic impossibility is always
+authoritative; a Wilson projection cannot stop a cohort with fewer than 20
+observations. This prevents both an eight-sample premature stop and needless
+spend after a statistically impossible global acceptance trajectory.
 
 The reviewer receives only `task_id`, `family_id`, locale, domain, instruction,
 state, and the ordered criterion IDs/descriptions. It does not receive split,
@@ -282,7 +295,7 @@ The packet records acceptance/rejection counts by split, locale, domain,
 difficulty, option count, and reason so the agreement filter's easy-task bias is
 visible.
 
-At each ten-batch boundary after at least 200 tasks are resolved, the runner
+At each ten-batch boundary after at least 20 tasks are resolved, the runner
 computes for the global corpus, every split, and every locale × option-count
 cell: current accepted count, unresolved planned slots, observed acceptance,
 and the one-sided 95% Wilson lower bound. The deterministic capacity check is
@@ -325,7 +338,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.6230499 for the author and USD 9.92714829 for the
+preflight is currently USD 4.7237182 for the author and USD 9.92714829 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the

@@ -496,7 +496,7 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     plan = corpus.build_plan()
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
-        "corpus_author": Decimal("4.6230499"),
+        "corpus_author": Decimal("4.7237182"),
         "corpus_reviewer": Decimal("9.92714829"),
     }
     assert totals["corpus_author"] < Decimal("5")
@@ -556,6 +556,21 @@ def test_wilson_boundary_persists_full_projection_in_ledger_directory(tmp_path: 
         payload["projections"]
     )
     assert len(payload["projections"]) == 46
+    assert payload["projections"]["global"]["observations"] == 200
+    assert payload["projections"]["global"]["wilson_eligible"] is True
+    assert payload["projections"]["global"]["wilson_projected_accepted"] is not None
+
+
+def test_wilson_ledger_marks_eight_observations_descriptive_only(tmp_path: Path) -> None:
+    plan = corpus.build_plan()
+    resolved = [{"task_id": slot["task_id"], "status": "accepted"} for slot in plan["slots"][:8]]
+    payload = json.loads(
+        pipeline._write_wilson_projection(tmp_path / "ledger", plan, resolved, None).read_bytes()
+    )
+    global_projection = payload["projections"]["global"]
+    assert global_projection["observations"] == 8
+    assert global_projection["wilson_eligible"] is False
+    assert global_projection["wilson_projected_accepted"] is None
 
 
 @pytest.mark.parametrize("failure", ("pre_holdout_binding", "training_verification"))
@@ -669,19 +684,11 @@ def _record(slot: dict[str, Any]) -> dict[str, Any]:
         {"id": f"route-{index}", "description": f"Fictional route {index}."}
         for index in range(slot["option_count"])
     ]
-    roles = [
-        "matches_rule",
-        "contradicts_rule",
-        "irrelevant_to_rule",
-        "insufficient_evidence",
-        "unsafe_action",
-        "premature_action",
-        "overbroad_action",
-        "duplicate_action",
-    ][: slot["option_count"]]
-    roles[0], roles[slot["gold_position"]] = roles[slot["gold_position"]], roles[0]
+    target = slot["semantic_target"]
+    roles = list(target["criterion_roles"])
+    roles.insert(slot["gold_position"], roles.pop(0))
     semantic_attestation = {
-        "scenario": "topic_routing",
+        "scenario": target["scenario"],
         "criterion_roles": roles,
         "selected_role": "matches_rule",
     }

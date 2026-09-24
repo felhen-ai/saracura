@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import math
 import os
 import ssl
 import sys
@@ -330,11 +331,20 @@ def _write_wilson_projection(
         done = [slot for slot in candidates if cast(str, slot["task_id"]) in statuses]
         accepted = sum(statuses[cast(str, slot["task_id"])] == "accepted" for slot in done)
         total = len(done)
+        eligible = total >= 20
+        lower_bound = corpus.wilson_lower_bound(accepted, total) if total else None
         return {
             "accepted": accepted,
+            "observations": total,
             "unresolved": len(candidates) - total,
             "observed_acceptance": accepted / total if total else None,
-            "wilson_lower_bound": corpus.wilson_lower_bound(accepted, total) if total else None,
+            "wilson_lower_bound": lower_bound,
+            "wilson_eligible": eligible,
+            "wilson_projected_accepted": (
+                accepted + math.floor((len(candidates) - total) * lower_bound)
+                if eligible and lower_bound is not None
+                else None
+            ),
             "minimum": minimum,
         }
 
@@ -501,7 +511,7 @@ def run_corpus(
             _store_resolution(work_dir, item, "rejected")
             rejected.append(item)
             completed.add(cast(str, item["task_id"]))
-        if index % 10 == 0 and len(completed) >= 200:
+        if index % 10 == 0 and len(completed) >= 20:
             accepted_ids = {cast(str, row["task_id"]) for row in accepted}
             resolution_statuses = [
                 {
