@@ -226,14 +226,13 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
 ```
 
 As requisições de corpus são fixadas em HTTPS do OpenRouter, sem redirects e
-proxies. Cada diretório de trabalho tem tetos próprios e não fungíveis: USD 5,00
-para o autor do corpus, USD 10,00 para o revisor, USD 0,75 para o autor da
-comparação e USD 1,25 para o revisor da comparação. Esses tetos não reiniciam a
-autorização cumulativa separada de USD 17,00 da Fase 4E. O piloto de protocolo
-de aceite é um comando distinto, com tetos de USD 0,50 e USD 1,00 e um limite
-de plano completo de USD 1,50 dentro dessa mesma autorização cumulativa. Uma
-reserva durável pré-envio que permaneça sem resolução bloqueia o resume; o
-comando não repete uma cobrança possivelmente efetuada.
+proxies. Os ledgers históricos de corpus e comparação preservam os tetos
+originais para reprodutibilidade. O piloto atual do protocolo de aceite usa
+telemetria de custo sem teto: valores financeiros não autorizam, bloqueiam nem
+interrompem a execução. O comando informa cada USD 10 de gasto real do provedor
+na execução e o total final. Uma reserva durável pré-envio que permaneça sem
+resolução continua bloqueando o resume; o comando não repete uma cobrança
+possivelmente efetuada.
 
 A política atual mantém as entradas legadas `corpus` e `train` fechadas. Elas
 só podem ser reativadas por uma revisão de política posterior ao piloto, depois
@@ -241,17 +240,17 @@ de um `PASS`; o próprio piloto nunca altera essas autorizações.
 
 ```bash
 uv run python -m benchmarks.phase4e_pipeline pilot-plan \
-  --output .artifacts/phase4e/pilot-plan-v1/plan.json
+  --output .artifacts/phase4e/pilot-plan-v6/plan.json
 
 uv run python -m benchmarks.phase4e_pipeline import-ledgers \
   --source .artifacts/phase4e \
   --artifact-root <raiz-duravel-dos-ledgers-phase4e>
 
 uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
-  --plan .artifacts/phase4e/pilot-plan-v1/plan.json \
+  --plan .artifacts/phase4e/pilot-plan-v6/plan.json \
   --snapshot <snapshot-minilm-verificado> \
-  --work-dir .artifacts/phase4e/pilot-work-v1 \
-  --report .artifacts/phase4e/pilot-report-v1 \
+  --work-dir .artifacts/phase4e/pilot-work-v6 \
+  --report .artifacts/phase4e/pilot-report-v6 \
   --artifact-root <raiz-duravel-dos-ledgers-phase4e> \
   --allow-network
 ```

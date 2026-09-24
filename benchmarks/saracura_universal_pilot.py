@@ -32,10 +32,11 @@ POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-policy.v1.json
 RECOVERY_POLICY_V2_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v2.json"
 RECOVERY_POLICY_V3_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v3.json"
 RECOVERY_POLICY_V4_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v4.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v5.json"
+RECOVERY_POLICY_V5_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v5.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v6.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v5"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v6"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
@@ -132,7 +133,8 @@ def _pilot_reviewer_system() -> str:
         "URL, account "
         "handle, credential, exact private address, official registration, known public-entity "
         "claim, private record, or claim tied to a real record. Set generic_or_invented=false "
-        "only when the evaluated content visibly contains one of those real-world anchors. "
+        "only when the evaluated content visibly contains one of those real-world anchors, and "
+        "then use reason code real_world_anchor. "
         "exclusive_options=true only if exactly one criterion is best. Check language, "
         "sufficiency, privacy, and sensitive patterns. You do not receive answer, author "
         "attestation, family, pair, gold position, sibling, or split metadata."
@@ -295,14 +297,14 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "review_protocol",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v5",
+        "schema_version": "phase4e-protocol-pilot-recovery.v6",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
         "cost_mode": "report_only",
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
-        "review_protocol": "genericity-wire-field.v1",
+        "review_protocol": "genericity-schema-metadata.v1",
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -535,7 +537,21 @@ def pilot_reviewer_schema(batch_size: int) -> dict[str, Any]:
     reviews = cast(dict[str, Any], cast(dict[str, Any], schema["properties"])["reviews"])
     item = cast(dict[str, Any], reviews["items"])
     properties = cast(dict[str, Any], item["properties"])
-    properties["generic_or_invented"] = properties.pop("fictional")
+    properties.pop("fictional")
+    properties["generic_or_invented"] = {
+        "title": "Generic Or Invented",
+        "description": (
+            "True when evaluated content uses generic or invented entities and contains no "
+            "observable real-world anchor; false only when a real-world anchor is visible."
+        ),
+        "type": "boolean",
+    }
+    reason_codes = cast(dict[str, Any], properties["reason_codes"])
+    reason_items = cast(dict[str, Any], reason_codes["items"])
+    reason_items["enum"] = [
+        "real_world_anchor" if code == "fictional" else code
+        for code in cast(list[str], reason_items["enum"])
+    ]
     required = cast(list[str], item["required"])
     item["required"] = [
         "generic_or_invented" if field == "fictional" else field for field in required
@@ -550,6 +566,12 @@ def bind_pilot_reviewer_record(record: Mapping[str, Any], task_id: str) -> dict[
         raise corpus.CorpusError("review record genericity schema")
     normalized = dict(record)
     normalized["fictional"] = normalized.pop("generic_or_invented")
+    reason_codes = normalized.get("reason_codes")
+    if not isinstance(reason_codes, list) or "fictional" in reason_codes:
+        raise corpus.CorpusError("review record genericity schema")
+    normalized["reason_codes"] = [
+        "fictional" if code == "real_world_anchor" else code for code in reason_codes
+    ]
     return corpus.bind_reviewer_record(normalized, task_id)
 
 
@@ -633,14 +655,16 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v5")
+    _require_component(output, "pilot-plan-v6", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
 
 
-def _require_component(path: Path, prefix: str) -> None:
-    if not any(part.startswith(prefix) for part in path.parts):
+def _require_component(path: Path, component: str, *, file_path: bool = False) -> None:
+    resolved = path.resolve()
+    directory = resolved.parent if file_path else resolved
+    if directory.name != component:
         raise corpus.CorpusError("pilot artifact path")
 
 
@@ -1113,7 +1137,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v5",
+        "schema_version": "phase4e-protocol-pilot-report.v6",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1269,9 +1293,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v5")
-    _require_component(work_dir, "pilot-work-v5")
-    _require_component(report_dir, "pilot-report-v5")
+    _require_component(plan_path, "pilot-plan-v6", file_path=True)
+    _require_component(work_dir, "pilot-work-v6")
+    _require_component(report_dir, "pilot-report-v6")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)

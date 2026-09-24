@@ -227,14 +227,12 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
 ```
 
 Corpus requests are pinned to OpenRouter HTTPS with redirects and proxies
-disabled. Each work directory has its own nonfungible hard caps: USD 5.00
-corpus author, USD 10.00 corpus reviewer, USD 0.75 comparison author, and USD
-1.25 comparison reviewer. Those caps do not reset the separate cumulative Phase
-4E authorization of USD 17.00. The acceptance-protocol pilot is a distinct
-command with USD 0.50 author and USD 1.00 reviewer caps and a USD 1.50
-complete-plan bound inside that same cumulative authorization. A durable
-pre-send reservation that cannot be resolved stops resume instead of repeating
-a possibly charged request.
+disabled. Historical corpus and comparison ledgers retain their original hard
+caps for reproducibility. The current acceptance-protocol pilot uses report-only
+cost telemetry: financial amounts never authorize, block, or stop execution.
+It reports every USD 10 of run-local provider spend and the final actual total.
+A durable pre-send reservation that cannot be resolved still stops resume
+instead of repeating a possibly charged request.
 
 The current policy keeps the legacy `corpus` and `train` entry points
 fail-closed. They can be re-enabled only by a reviewed post-pilot policy
@@ -243,17 +241,17 @@ authorizations.
 
 ```bash
 uv run python -m benchmarks.phase4e_pipeline pilot-plan \
-  --output .artifacts/phase4e/pilot-plan-v1/plan.json
+  --output .artifacts/phase4e/pilot-plan-v6/plan.json
 
 uv run python -m benchmarks.phase4e_pipeline import-ledgers \
   --source .artifacts/phase4e \
   --artifact-root <durable-phase4e-research-ledger-root>
 
 uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
-  --plan .artifacts/phase4e/pilot-plan-v1/plan.json \
+  --plan .artifacts/phase4e/pilot-plan-v6/plan.json \
   --snapshot <verified-minilm-snapshot> \
-  --work-dir .artifacts/phase4e/pilot-work-v1 \
-  --report .artifacts/phase4e/pilot-report-v1 \
+  --work-dir .artifacts/phase4e/pilot-work-v6 \
+  --report .artifacts/phase4e/pilot-report-v6 \
   --artifact-root <durable-phase4e-research-ledger-root> \
   --allow-network
 ```
