@@ -38,6 +38,11 @@ from benchmarks.saracura_universal_corpus import (
     validate_plan,
     write_ledger_snapshot,
 )
+from benchmarks.saracura_universal_policy import (
+    POST_PILOT_POLICY_PATH,
+    Phase4EPolicyError,
+    validate_post_pilot_phase4e_policy,
+)
 
 
 class _Counter:
@@ -171,6 +176,126 @@ def test_plan_is_preprovider_text_free_balanced_and_cross_locale_isolated() -> N
     mutated["slots"][0]["semantic_target"]["scenario"] = "content_safety"
     with pytest.raises(CorpusError, match="immutable plan mismatch"):
         validate_plan(mutated)
+
+
+def test_post_pilot_plan_and_observation_mode_are_additive() -> None:
+    """v3 selects the pilot-derived map without changing the historical plan."""
+
+    plan = corpus.build_post_pilot_plan()
+    corpus.validate_plan(plan)
+    assert plan["schema_version"] == "phase4e-universal-plan.v3"
+    assert len(plan["slots"]) == 1600
+    assert len(plan["author_batch_order"]) == 1300
+    slots_by_id = {slot["task_id"]: slot for slot in plan["slots"]}
+    first_cycle = plan["author_batch_order"][:42]
+    assert all(
+        {slots_by_id[task_id]["split"] for task_id in batch} <= {split}
+        for split, batch in zip(
+            [
+                split
+                for _option_count in range(7)
+                for _locale in range(2)
+                for split in sorted(
+                    SPLITS,
+                    key=lambda value: corpus._seeded(plan["seed"], "v3-split-order", value),
+                )
+            ],
+            first_cycle,
+            strict=True,
+        )
+    )
+    assert all(
+        {
+            slots_by_id[task_id]["split"]
+            for batch in first_cycle[index : index + 3]
+            for task_id in batch
+        }
+        == set(SPLITS)
+        for index in range(0, 42, 3)
+    )
+    assert plan["cost_estimate"]["mode"] == "report_only"
+    assert plan["cost_estimate"]["automatic_retries"] == 4
+    assert (
+        Decimal(plan["cost_estimate"]["maximum_attempt"]["total_usd"])
+        == Decimal(plan["cost_estimate"]["first_attempt"]["total_usd"]) * 5
+    )
+    policy = validate_post_pilot_phase4e_policy()
+    assert all(
+        slot["semantic_target"]["scenario"] in policy["domain_scenario_map"][slot["domain"]]
+        for slot in plan["slots"]
+    )
+    assert (
+        corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY).policy.enforce_budget
+        is False
+    )
+
+    slot = next(slot for slot in plan["slots"] if slot["pair_id"] is None)
+    row = validate_author_rows([_record(slot)], [slot], _Counter())[0]
+    review = _review(row)
+    review["semantic_equivalence_attestation"] = {
+        "scenario": "content_safety"
+        if row["semantic_equivalence_attestation"]["scenario"] != "content_safety"
+        else "action_required",
+        "criterion_roles": ["matches_rule"] * len(row["criteria"]),
+        "selected_role": "matches_rule",
+    }
+    accepted, rejected = resolve_reviews(
+        [row],
+        [review],
+        acceptance=corpus.post_pilot_acceptance_reason,
+        pair_resolution=corpus.post_pilot_pair_resolution,
+        review_model=corpus.PostPilotReviewerRecord,
+    )
+    assert len(accepted) == 1
+    assert rejected == []
+
+
+def test_post_pilot_policy_rejects_a_valid_but_unreviewed_domain_map(tmp_path: Path) -> None:
+    payload = json.loads(POST_PILOT_POLICY_PATH.read_text(encoding="utf-8"))
+    domain = next(iter(payload["domain_scenario_map"]))
+    scenarios = payload["domain_scenario_map"][domain]
+    scenarios[0] = "content_safety" if scenarios[0] != "content_safety" else "action_required"
+    candidate = tmp_path / "post-pilot-policy.json"
+    candidate.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(Phase4EPolicyError, match="domain map digest"):
+        validate_post_pilot_phase4e_policy(candidate)
+
+
+def test_packet_v3_rejects_author_target_drift_before_publication(tmp_path: Path) -> None:
+    plan = corpus.build_post_pilot_plan()
+    pair_id = next(slot["pair_id"] for slot in plan["slots"] if slot["pair_id"])
+    slots = [slot for slot in plan["slots"] if slot["pair_id"] == pair_id]
+    accepted = [_accepted_row(slot) for slot in slots]
+    original_scenario = accepted[0]["semantic_equivalence_attestation"]["scenario"]
+    replacement = "content_safety" if original_scenario != "content_safety" else "action_required"
+    tampered: list[dict[str, Any]] = []
+    for row in accepted:
+        semantic = {**row["semantic_equivalence_attestation"], "scenario": replacement}
+        tampered.append(
+            {
+                **row,
+                "semantic_equivalence_attestation": semantic,
+                "cross_locale_attestation": {
+                    **row["cross_locale_attestation"],
+                    "scenario": replacement,
+                },
+            }
+        )
+    rows, rejected = _complete_packet_resolution(plan, tampered)
+
+    with pytest.raises(CorpusError, match="packet author target mutation"):
+        corpus._validate_packet_resolution(rows, rejected, plan)
+    packet = tmp_path / "packet"
+    with pytest.raises(CorpusError, match="packet author target mutation"):
+        corpus.seal_packet(
+            packet,
+            plan,
+            rows,
+            rejected,
+            BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY).as_json(final=True),
+        )
+    assert not packet.exists()
 
 
 def test_author_must_restate_the_selected_first_target_before_local_reordering() -> None:

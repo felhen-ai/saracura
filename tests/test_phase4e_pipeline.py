@@ -42,6 +42,7 @@ def test_plan_is_no_clobber_and_constructs_no_socket(
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("socket attempted")),
     )
     output = tmp_path / "plan.json"
+    monkeypatch.setattr(pipeline, "_POST_PILOT_PLAN_PATH", output.resolve())
     assert pipeline.main(["plan", "--output", str(output)]) == 0
     corpus.validate_plan(json.loads(output.read_bytes()))
     assert pipeline.main(["plan", "--output", str(output)]) == 2

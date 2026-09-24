@@ -7,6 +7,7 @@ owns the pilot plan, the pilot acceptance parameter, and the durable spend root.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 from collections import Counter, defaultdict
@@ -1131,7 +1132,7 @@ def canonical_research_ledger_root() -> Path:
     """Return the platform state root. Tests and the CLI pass ``--artifact-root`` explicitly."""
 
     try:
-        from platformdirs import user_state_path  # type: ignore[import-not-found]
+        user_state_path = importlib.import_module("platformdirs").user_state_path
     except ImportError as error:
         raise corpus.CorpusError("durable research root requires platformdirs") from error
     return Path(user_state_path("saracura")) / "phase4e" / "research-ledgers"

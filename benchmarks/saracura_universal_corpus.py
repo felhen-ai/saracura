@@ -32,8 +32,11 @@ from benchmarks.io import atomic_create
 from benchmarks.saracura_universal_policy import AUTHOR_MODEL as AUTHOR_MODEL
 from benchmarks.saracura_universal_policy import (
     AUTHOR_PROVIDER,
+    POST_PILOT_AUTHOR_MODEL,
+    POST_PILOT_REVIEWER_MODEL,
     REVIEWER_PROVIDER,
     validate_phase4e_policy,
+    validate_post_pilot_phase4e_policy,
 )
 from benchmarks.saracura_universal_policy import REVIEWER_MODEL as REVIEWER_MODEL
 from benchmarks.saracura_universal_policy import STAGE_LIMITS as STAGE_LIMITS
@@ -271,6 +274,18 @@ PILOT_LEDGER_POLICY = LedgerPolicy(
     automatic_retries=4,
     enforce_budget=False,
 )
+POST_PILOT_CORPUS_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-cost-ledger.v3",
+    entry_stages={"corpus_author": Decimal("0"), "corpus_reviewer": Decimal("0")},
+    total_budget=Decimal("0"),
+    prices={
+        "corpus_author": (Decimal("2.00"), Decimal("8.00")),
+        "corpus_reviewer": (Decimal("0.40"), Decimal("1.60")),
+    },
+    journal_stages=frozenset({"corpus_author", "corpus_reviewer"}),
+    automatic_retries=4,
+    enforce_budget=False,
+)
 
 
 def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
@@ -286,6 +301,8 @@ def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
         return PILOT_LEDGER_POLICY_V4
     if schema == PILOT_LEDGER_POLICY.schema_version:
         return PILOT_LEDGER_POLICY
+    if schema == POST_PILOT_CORPUS_LEDGER_POLICY.schema_version:
+        return POST_PILOT_CORPUS_LEDGER_POLICY
     raise CorpusError("ledger identity")
 
 
@@ -453,14 +470,202 @@ def build_plan() -> dict[str, Any]:
     }
 
 
+def build_post_pilot_plan() -> dict[str, Any]:
+    """Build the new v3 plan while leaving v2 bytes and selection untouched."""
+
+    import hashlib
+
+    from benchmarks.data_policy_registry import bundled_registry_v3_path
+    from benchmarks.saracura_universal_policy import POST_PILOT_POLICY_PATH
+
+    policy = validate_post_pilot_phase4e_policy()
+    legacy = build_plan()
+    mapping = policy["domain_scenario_map"]
+    slots = [dict(slot) for slot in cast(list[dict[str, Any]], legacy["slots"])]
+    for slot in slots:
+        domain = cast(str, slot["domain"])
+        identity = cast(str, slot["pair_id"] or slot["task_id"])
+        choices = cast(list[str], mapping[domain])
+        target = dict(cast(Mapping[str, Any], slot["semantic_target"]))
+        target["scenario"] = choices[
+            _seeded(cast(str, policy["planning"]["seed"]), "pilot-scenario", identity)
+            % len(choices)
+        ]
+        slot["semantic_target"] = target
+    batches = _post_pilot_author_batches(slots, cast(str, policy["planning"]["seed"]))
+    provider_policy = cast(dict[str, Any], policy["provider"])["provider_policy"]
+    cost_estimate = _post_pilot_cost_estimate(slots, batches, policy)
+    return {
+        "schema_version": "phase4e-universal-plan.v3",
+        "workflow_revision": "phase4e-saracura-universal-synthetic.v2",
+        "seed": policy["planning"]["seed"],
+        "policy_sha256": hashlib.sha256(POST_PILOT_POLICY_PATH.read_bytes()).hexdigest(),
+        "source_policy_registry_sha256": hashlib.sha256(
+            bundled_registry_v3_path().read_bytes()
+        ).hexdigest(),
+        "author_system_sha256": policy["provider"]["author_system_sha256"],
+        "reviewer_system_sha256": policy["provider"]["reviewer_system_sha256"],
+        "provider_policy_sha256": _sha(_canonical(provider_policy)),
+        "domain_scenario_map_sha256": _sha(_canonical(mapping)),
+        "author_request": policy["provider"]["author_request"],
+        "reviewer_request": policy["provider"]["reviewer_request"],
+        "models": {
+            "corpus_author": POST_PILOT_AUTHOR_MODEL,
+            "corpus_reviewer": POST_PILOT_REVIEWER_MODEL,
+        },
+        "cost_estimate": cost_estimate,
+        "author_batch_order": batches,
+        "slots": slots,
+    }
+
+
+def _post_pilot_author_batches(slots: Sequence[Mapping[str, Any]], seed: str) -> list[list[str]]:
+    """Round-robin immutable author units across split/locale/cardinality cells."""
+
+    by_pair: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for slot in slots:
+        if isinstance(slot["pair_id"], str):
+            by_pair[slot["pair_id"]].append(slot)
+
+    batch_members: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    emitted_pairs: set[str] = set()
+    for slot in slots:
+        pair_id = slot["pair_id"]
+        if pair_id is None:
+            members = [slot]
+        else:
+            pair_key = cast(str, pair_id)
+            if pair_key in emitted_pairs:
+                continue
+            members = by_pair[pair_key]
+            emitted_pairs.add(pair_key)
+        key = tuple(sorted(cast(str, member["task_id"]) for member in members))
+        batch_members[key] = members
+
+    queues: dict[tuple[str, str, int], list[tuple[str, ...]]] = defaultdict(list)
+    for key, members in batch_members.items():
+        for member in members:
+            cell = (
+                cast(str, member["split"]),
+                cast(str, member["locale"]),
+                cast(int, member["option_count"]),
+            )
+            queues[cell].append(key)
+    for cell, queue in queues.items():
+        queue.sort(key=lambda key: _seeded(seed, "v3-author-cell", *cell, *key))
+
+    split_order = sorted(SPLITS, key=lambda value: _seeded(seed, "v3-split-order", value))
+    locale_order = sorted(LOCALES, key=lambda value: _seeded(seed, "v3-locale-order", value))
+    option_order = sorted(OPTION_COUNTS, key=lambda value: _seeded(seed, "v3-option-order", value))
+    cells = [
+        (split, locale, option_count)
+        for option_count in option_order
+        for locale in locale_order
+        for split in split_order
+    ]
+    emitted: set[tuple[str, ...]] = set()
+    batches: list[list[str]] = []
+    while len(emitted) < len(batch_members):
+        progressed = False
+        for cell in cells:
+            queue = queues[cell]
+            while queue and queue[0] in emitted:
+                queue.pop(0)
+            if not queue:
+                continue
+            key = queue.pop(0)
+            emitted.add(key)
+            batches.append(list(key))
+            progressed = True
+        if not progressed:
+            raise CorpusError("post-pilot author batch coverage")
+    return batches
+
+
+def _post_pilot_cost_estimate(
+    slots: Sequence[Mapping[str, Any]],
+    batches: Sequence[Sequence[str]],
+    policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind report-only first/max attempt telemetry into the immutable v3 plan."""
+
+    from benchmarks import saracura_universal_pilot as pilot
+
+    by_id = {cast(str, slot["task_id"]): slot for slot in slots}
+    provider = cast(Mapping[str, Any], policy["provider"])
+    author = Decimal()
+    reviewer = Decimal()
+    for ids in batches:
+        batch = [by_id[task_id] for task_id in ids]
+        author += request_worst_case(
+            "corpus_author",
+            provider_request_bytes(
+                stage="corpus_author",
+                model=POST_PILOT_AUTHOR_MODEL,
+                messages=author_messages(batch),
+                response_schema=author_schema(batch),
+                max_output_tokens=1024,
+                author_stage="corpus_author",
+                author_model=POST_PILOT_AUTHOR_MODEL,
+                provider_override=cast(Mapping[str, Any], provider["provider_policy"]),
+                author_reasoning_effort=None,
+            ),
+            1024,
+            prices=POST_PILOT_CORPUS_LEDGER_POLICY.prices,
+        )
+    for slot in slots:
+        reviewer += request_worst_case(
+            "corpus_reviewer",
+            provider_request_bytes(
+                stage="corpus_reviewer",
+                model=POST_PILOT_REVIEWER_MODEL,
+                messages=pilot.pilot_reviewer_messages(pilot._boundary_row(slot)),
+                response_schema=pilot.pilot_reviewer_schema(1),
+                max_output_tokens=512,
+                author_stage="corpus_author",
+                author_model=POST_PILOT_AUTHOR_MODEL,
+                provider_override=cast(Mapping[str, Any], provider["provider_policy"]),
+                author_reasoning_effort=None,
+                reviewer_temperature=0,
+            ),
+            512,
+            prices=POST_PILOT_CORPUS_LEDGER_POLICY.prices,
+        )
+    first_total = author + reviewer
+    multiplier = Decimal(POST_PILOT_CORPUS_LEDGER_POLICY.automatic_retries + 1)
+    return {
+        "mode": "report_only",
+        "automatic_retries": POST_PILOT_CORPUS_LEDGER_POLICY.automatic_retries,
+        "first_attempt": {
+            "corpus_author_usd": str(author),
+            "corpus_reviewer_usd": str(reviewer),
+            "total_usd": str(first_total),
+        },
+        "maximum_attempt": {
+            "corpus_author_usd": str(author * multiplier),
+            "corpus_reviewer_usd": str(reviewer * multiplier),
+            "total_usd": str(first_total * multiplier),
+        },
+    }
+
+
 def validate_plan(value: Mapping[str, Any]) -> None:
     """Fail closed on any mutation; no provider result can alter this plan."""
     from benchmarks.saracura_universal_pilot import PILOT_PLAN_SCHEMA, PILOT_SEED
 
+    if value.get("schema_version") == "phase4e-universal-plan.v3":
+        if _canonical(value) != _canonical(build_post_pilot_plan()):
+            raise CorpusError("immutable post-pilot plan mismatch")
+        _validate_plan_structure(value)
+        return
     if value.get("schema_version") == PILOT_PLAN_SCHEMA or value.get("seed") == PILOT_SEED:
         raise CorpusError("pilot plan cannot enter corpus")
     if _canonical(value) != _canonical(build_plan()):
         raise CorpusError("immutable plan mismatch")
+    _validate_plan_structure(value)
+
+
+def _validate_plan_structure(value: Mapping[str, Any]) -> None:
     slots = value.get("slots")
     if not isinstance(slots, list) or len(slots) != 1600:
         raise CorpusError("plan slot count")
@@ -689,6 +894,26 @@ class ReviewerRecord(_Closed):
     exclusive_options: bool
     private_or_sensitive: bool
     semantic_equivalence_attestation: SemanticEquivalenceAttestation
+
+
+class PostPilotSemanticObservation(_Closed):
+    """Reviewer metadata is diagnostic in packet v3; repeated roles are valid."""
+
+    scenario: ScenarioCode
+    criterion_roles: list[CriterionRole] = Field(min_length=2, max_length=8)
+    selected_role: Literal["matches_rule"]
+
+
+class PostPilotReviewerRecord(_Closed):
+    task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
+    status: Literal["accepted", "rejected"]
+    selected_criterion_id: str | None
+    reason_codes: list[ReviewerReasonCode] = Field(max_length=8)
+    natural_language: bool
+    fictional: bool
+    exclusive_options: bool
+    private_or_sensitive: bool
+    semantic_equivalence_attestation: PostPilotSemanticObservation
 
 
 class ValidatedAuthorRow(_Closed):
@@ -1750,6 +1975,56 @@ def acceptance_reason(
     return reason
 
 
+def post_pilot_acceptance_reason(row: Mapping[str, Any], review: ReviewerRecord) -> str | None:
+    """v3 keeps answer and quality gates, treating semantic observation as data."""
+
+    return acceptance_reason(row, review, reject_semantic_disagreement=False)
+
+
+def post_pilot_pair_resolution(
+    rows: Sequence[Mapping[str, Any]],
+    accepted: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Only conflicting author targets close both cross-locale members in v3."""
+
+    by_pair: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if isinstance(row.get("pair_id"), str):
+            by_pair[cast(str, row["pair_id"])].append(row)
+    accepted_by_task = {cast(str, row["task_id"]): row for row in accepted}
+    reject_ids: set[str] = set()
+    for members in by_pair.values():
+        if len(members) != 2:
+            continue
+        # A sibling that independently fails a reviewer/quality gate survives
+        # untouched.  Both accepted members must still carry the same author
+        # semantic target, which is the only cross-locale semantic hard gate.
+        present = [accepted_by_task.get(cast(str, row["task_id"])) for row in members]
+        if (
+            present[0] is not None
+            and present[1] is not None
+            and _canonical(present[0]["semantic_equivalence_attestation"])
+            != _canonical(present[1]["semantic_equivalence_attestation"])
+        ):
+            reject_ids.update(cast(str, row["task_id"]) for row in members)
+    if not reject_ids:
+        return accepted, rejected
+    new_accepted = [row for row in accepted if cast(str, row["task_id"]) not in reject_ids]
+    for row in accepted:
+        task_id = cast(str, row["task_id"])
+        if task_id in reject_ids:
+            rejected.append(
+                {
+                    "task_id": task_id,
+                    "split": row["split"],
+                    "reason": "paired_author_target_mismatch",
+                    **{key: row[key] for key in _REJECTED_LINEAGE_FIELDS if key in row},
+                }
+            )
+    return new_accepted, rejected
+
+
 def _corpus_v1_pair_resolution(
     rows: Sequence[Mapping[str, Any]],
     accepted: list[dict[str, Any]],
@@ -2090,33 +2365,34 @@ def _validate_rejected_row(
         raise CorpusError("packet rejected split mutation")
 
 
-def _validate_packet_resolution(
+def _validate_accepted_packet_rows(
     accepted: Sequence[Mapping[str, Any]],
-    rejected: Sequence[Mapping[str, Any]],
-    plan: Mapping[str, Any],
-) -> None:
-    slots = {
-        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
-    }
-    resolved = [*accepted, *rejected]
-    ids = [row.get("task_id") for row in resolved]
+    slots: Mapping[str, Mapping[str, Any]],
+    *,
+    v3: bool,
+) -> list[dict[str, Any]]:
+    """Validate supplied accepted content without assuming holdout access."""
+
     from benchmarks.saracura_universal_pilot import pilot_task_ids
 
-    if pilot_task_ids().intersection(task_id for task_id in ids if isinstance(task_id, str)):
-        raise CorpusError("pilot task cannot enter packet")
-    if len(ids) != len(set(ids)) or set(ids) != set(slots):
-        raise CorpusError("packet resolution coverage")
     fingerprints: set[str] = set()
     normalized_rows: list[str] = []
     paired_accepted: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    validated: list[dict[str, Any]] = []
     for raw_row in accepted:
         try:
-            row = AcceptedPacketRow.model_validate(raw_row).model_dump(mode="json")
+            row = (
+                _post_pilot_packet_row(raw_row)
+                if v3
+                else AcceptedPacketRow.model_validate(raw_row).model_dump(mode="json")
+            )
         except ValidationError as error:
             raise CorpusError("accepted packet row schema") from error
         task_id = row["task_id"]
         if not isinstance(task_id, str) or task_id not in slots:
             raise CorpusError("packet task identity")
+        if task_id in pilot_task_ids():
+            raise CorpusError("pilot task cannot enter packet")
         planned = slots[task_id]
         if any(
             row.get(key) != planned[key]
@@ -2133,6 +2409,15 @@ def _validate_packet_resolution(
             or criteria[position].get("id") != row["selected_criterion_id"]
         ):
             raise CorpusError("packet gold position")
+        if v3:
+            planned_target = _reordered_target(planned)
+            if _canonical(row["semantic_equivalence_attestation"]) != _canonical(planned_target):
+                raise CorpusError("packet author target mutation")
+            if planned["pair_id"] is None:
+                if row.get("cross_locale_attestation") is not None:
+                    raise CorpusError("packet cross-locale author target")
+            elif _canonical(_cross_locale_attestation(row)) != _canonical(planned_target):
+                raise CorpusError("packet cross-locale author target")
         if _privacy(row):
             raise CorpusError("packet privacy")
         fingerprint = semantic_fingerprint(row)
@@ -2145,13 +2430,70 @@ def _validate_packet_resolution(
             raise CorpusError("packet near duplicate")
         fingerprints.add(fingerprint)
         normalized_rows.append(normalized)
+        validated.append(row)
         if planned["pair_id"] is not None:
             paired_accepted[cast(str, planned["pair_id"])].append(row)
     for members in paired_accepted.values():
-        if len(members) == 2 and not _cross_locale_pair_is_attested(members):
+        if not v3 and len(members) == 2 and not _cross_locale_pair_is_attested(members):
             raise CorpusError("packet cross-locale semantic attestation")
+        if (
+            v3
+            and len(members) == 2
+            and _canonical(members[0]["semantic_equivalence_attestation"])
+            != _canonical(members[1]["semantic_equivalence_attestation"])
+        ):
+            raise CorpusError("packet cross-locale author target")
+    return validated
+
+
+def _validate_packet_resolution(
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    plan: Mapping[str, Any],
+) -> None:
+    slots = {
+        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    resolved = [*accepted, *rejected]
+    ids = [row.get("task_id") for row in resolved]
+    from benchmarks.saracura_universal_pilot import pilot_task_ids
+
+    if pilot_task_ids().intersection(task_id for task_id in ids if isinstance(task_id, str)):
+        raise CorpusError("pilot task cannot enter packet")
+    if len(ids) != len(set(ids)) or set(ids) != set(slots):
+        raise CorpusError("packet resolution coverage")
+    _validate_accepted_packet_rows(
+        accepted,
+        slots,
+        v3=plan.get("schema_version") == "phase4e-universal-plan.v3",
+    )
     for rejected_row in rejected:
         _validate_rejected_row(rejected_row, slots)
+
+
+def _post_pilot_packet_row(raw_row: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate v3 rows without elevating reviewer semantic observations."""
+
+    expected = set(AcceptedPacketRow.model_fields)
+    if set(raw_row) != expected or raw_row.get("synthetic_only") is not True:
+        raise CorpusError("accepted packet row schema")
+    author = ValidatedAuthorRow.model_validate(
+        {key: raw_row[key] for key in ValidatedAuthorRow.model_fields if key in raw_row}
+    )
+    review = PostPilotReviewerRecord.model_validate(raw_row.get("review"))
+    if (
+        review.status != "accepted"
+        or review.task_id != author.task_id
+        or review.selected_criterion_id != author.selected_criterion_id
+        or review.reason_codes
+        or not review.natural_language
+        or not review.fictional
+        or not review.exclusive_options
+        or review.private_or_sensitive
+        or raw_row.get("review_sha256") != _sha(_canonical(review.model_dump(mode="json")))
+    ):
+        raise CorpusError("accepted packet row schema")
+    return dict(raw_row)
 
 
 def _validate_provider_lineage(
@@ -2163,13 +2505,13 @@ def _validate_provider_lineage(
     """Bind every persisted provider-derived row to the sealed journal and ledger."""
 
     ledger.require_complete_provider_journal()
-    evidence: dict[tuple[str, str], Mapping[str, Any]] = {}
+    evidence: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
     for journal in ledger.provider_journal:
         for task_id in cast(list[str], journal["task_ids"]):
             key = (cast(str, journal["stage"]), task_id)
-            if key in evidence or task_id not in resolved_task_ids:
+            if task_id not in resolved_task_ids:
                 raise CorpusError("provider journal task resolution")
-            evidence[key] = journal
+            evidence[key].append(journal)
 
     def fields(journal: Mapping[str, Any], actor: Literal["author", "reviewer"]) -> dict[str, Any]:
         return {
@@ -2182,8 +2524,10 @@ def _validate_provider_lineage(
         accepted_task_id = row.get("task_id")
         if not isinstance(accepted_task_id, str):
             raise CorpusError("provider lineage task")
-        author = evidence.get(("corpus_author", accepted_task_id))
-        reviewer = evidence.get(("corpus_reviewer", accepted_task_id))
+        author_attempts = evidence.get(("corpus_author", accepted_task_id), [])
+        reviewer_attempts = evidence.get(("corpus_reviewer", accepted_task_id), [])
+        author = author_attempts[-1] if author_attempts else None
+        reviewer = reviewer_attempts[-1] if reviewer_attempts else None
         if (
             author is None
             or reviewer is None
@@ -2208,8 +2552,9 @@ def _validate_provider_lineage(
             ],
             (("corpus_author", "author"), ("corpus_reviewer", "reviewer")),
         ):
-            rejected_journal = evidence.get((stage, rejected_task_id))
-            expected = fields(rejected_journal, actor) if rejected_journal is not None else {}
+            attempts = evidence.get((stage, rejected_task_id), [])
+            terminal_journal = attempts[-1] if attempts else None
+            expected = fields(terminal_journal, actor) if terminal_journal is not None else {}
             present = {key: row[key] for key in fields_placeholder(actor) if key in row}
             if present != expected:
                 raise CorpusError("rejected provider lineage")
@@ -2246,7 +2591,8 @@ def _packet_manifest(packet: Path) -> dict[str, Any]:
     if (
         not isinstance(manifest, dict)
         or set(manifest) != {"schema_version", "files", "sealed"}
-        or manifest["schema_version"] != "phase4e-accepted-packet.v2"
+        or manifest["schema_version"]
+        not in {"phase4e-accepted-packet.v2", "phase4e-accepted-packet.v3"}
         or manifest["sealed"] is not True
         or not isinstance(manifest["files"], dict)
         or set(manifest["files"]) != expected - {"packet.json"}
@@ -2267,6 +2613,7 @@ def _validate_packet_pre_holdout(
     digest in ``packet.json`` is only precommitted metadata at this stage.
     """
     manifest = _packet_manifest(packet)
+    v3 = manifest["schema_version"] == "phase4e-accepted-packet.v3"
     files = cast(dict[str, str], manifest["files"])
     for name in _PACKET_NON_HOLDOUT_FILES:
         if _sha((packet / name).read_bytes()) != files[name]:
@@ -2286,12 +2633,9 @@ def _validate_packet_pre_holdout(
     slots = {
         cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
     }
+    validated_train_dev = _validate_accepted_packet_rows(train_dev, slots, v3=v3)
     accepted_identities: list[dict[str, Any]] = []
-    for raw_row in train_dev:
-        try:
-            row = AcceptedPacketRow.model_validate(raw_row).model_dump(mode="json")
-        except ValidationError as error:
-            raise CorpusError("accepted packet row schema") from error
+    for row in validated_train_dev:
         if row["split"] not in {"synthetic_train", "synthetic_dev"}:
             raise CorpusError("packet train/dev split")
         accepted_identities.append(_identity_projection(row))
@@ -2431,7 +2775,11 @@ def seal_packet(
             atomic_create(staged / name, body)
             os.chmod(staged / name, 0o600)
         manifest = {
-            "schema_version": "phase4e-accepted-packet.v2",
+            "schema_version": (
+                "phase4e-accepted-packet.v3"
+                if plan.get("schema_version") == "phase4e-universal-plan.v3"
+                else "phase4e-accepted-packet.v2"
+            ),
             "sealed": True,
             "files": {name: _sha(body) for name, body in files.items()},
         }

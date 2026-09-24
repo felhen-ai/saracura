@@ -404,7 +404,7 @@ def test_v5_ledger_reports_cost_and_historical_ledgers_remain_readable(tmp_path:
         author_stage=pilot.AUTHOR_STAGE,
         reviewer_stage=pilot.REVIEWER_STAGE,
     )
-    request = {
+    request: dict[str, Any] = {
         "stage": pilot.AUTHOR_STAGE,
         "model": corpus.AUTHOR_MODEL,
         "messages": [{"role": "user", "content": "test"}],
@@ -1353,7 +1353,7 @@ def test_uncertain_resolution_requires_zero_hash_and_exact_lineage() -> None:
     resolved = {task_id: {"status": "rejected", "row": row}}
     pilot._require_bound_uncertain_resolutions(ledger, resolved, 1)
 
-    missing_lineage = {task_id: {"status": "rejected", "row": {**row}}}
+    missing_lineage: dict[str, dict[str, Any]] = {task_id: {"status": "rejected", "row": {**row}}}
     del missing_lineage[task_id]["row"]["author_request_id"]
     with pytest.raises(corpus.CorpusError, match="unbound uncertain resolution"):
         pilot._require_bound_uncertain_resolutions(ledger, missing_lineage, 1)

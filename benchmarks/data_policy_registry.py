@@ -617,6 +617,71 @@ class RegistryV2(BaseModel):
         return self
 
 
+class Phase4EUniversalSyntheticExceptionV3(BaseModel):
+    """The post-pilot exception is deliberately not a mutation of v1/v2."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: Literal["phase4e_saracura_universal_synthetic"]
+    workflow_revision: Literal["phase4e-saracura-universal-synthetic.v2"]
+    source_policy_id: Literal["provider-model-generated"]
+    allowed_splits: list[Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]]
+    allowed_uses: list[Literal["synthetic_only"]]
+    author_model: Literal["openai/gpt-4.1"]
+    reviewer_model: Literal["openai/gpt-4.1-mini"]
+    task_slots: Literal[1600]
+    cost_mode: Literal["report_only"]
+    synthetic_generation_authorized: Literal[True]
+    synthetic_research_training_authorized: Literal[False]
+    real_checkpoint_present: Literal[False]
+    runtime_registration_authorized: Literal[False]
+    canonical_training_authorized: Literal[False]
+    calibration_authorized: Literal[False]
+    blind_test_authorized: Literal[False]
+    publication_authorized: Literal[False]
+    quality_claims_allowed: Literal[False]
+    automation_authorized: Literal[False]
+
+    @model_validator(mode="after")
+    def closed_exception(self) -> Phase4EUniversalSyntheticExceptionV3:
+        if self.allowed_splits != ["synthetic_train", "synthetic_dev", "synthetic_holdout"]:
+            raise ValueError("Phase 4E v3 synthetic split order is fixed")
+        if self.allowed_uses != ["synthetic_only"]:
+            raise ValueError("Phase 4E v3 synthetic use is fixed")
+        return self
+
+
+class RegistryV3(BaseModel):
+    """Create-only post-pilot registry; v2 remains a historical input."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal["training-data-source-policies.v3"]
+    # The immutable v2 source list is bound by digest instead of copied into a
+    # third file.  This keeps the post-pilot exception additive and proves that
+    # no source-policy row was silently widened.
+    sources_from_v2_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exceptions: list[SyntheticExperimentException | Phase4EUniversalSyntheticExceptionV3] = Field(
+        min_length=2, max_length=2
+    )
+
+    @model_validator(mode="after")
+    def exact_v2_base(self) -> RegistryV3:
+        if tuple(exception.id for exception in self.exceptions) != (
+            "synthetic_experiment",
+            "phase4e_saracura_universal_synthetic",
+        ):
+            raise ValueError("registry must contain exactly the two reviewed exceptions")
+        if self.exceptions[0].model_dump(mode="json") != _PHASE3B_EXCEPTION:
+            raise ValueError("Phase 3B exception content is immutable")
+        import hashlib
+
+        if (
+            self.sources_from_v2_sha256
+            != hashlib.sha256(bundled_registry_v2_path().read_bytes()).hexdigest()
+        ):
+            raise ValueError("v3 sources must bind v2")
+        return self
+
+
 _PHASE3B_EXCEPTION = {
     "id": "synthetic_experiment",
     "workflow_revision": "phase3b-synthetic-research-training.v2",
@@ -677,12 +742,24 @@ def load_registry_v2(raw: bytes | str) -> RegistryV2:
         raise ValueError("invalid phase 4e registry v2") from None
 
 
+def load_registry_v3(raw: bytes | str) -> RegistryV3:
+    try:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+        return RegistryV3.model_validate(payload)
+    except (ValueError, TypeError):
+        raise ValueError("invalid phase 4e registry v3") from None
+
+
 def bundled_registry_path() -> Path:
     return Path(__file__).parent / "manifests" / "training-data-source-policies.v1.json"
 
 
 def bundled_registry_v2_path() -> Path:
     return Path(__file__).parent / "manifests" / "training-data-source-policies.v2.json"
+
+
+def bundled_registry_v3_path() -> Path:
+    return Path(__file__).parent / "manifests" / "training-data-source-policies.v3.json"
 
 
 def load_bundled_registry() -> Registry:
@@ -693,18 +770,27 @@ def load_bundled_registry_v2() -> RegistryV2:
     return load_registry_v2(bundled_registry_v2_path().read_bytes())
 
 
+def load_bundled_registry_v3() -> RegistryV3:
+    return load_registry_v3(bundled_registry_v3_path().read_bytes())
+
+
 __all__ = [
     "Phase4EUniversalSyntheticException",
     "Phase4EUniversalSyntheticExceptionV2",
+    "Phase4EUniversalSyntheticExceptionV3",
     "Policy",
     "ProtocolPilot",
     "Registry",
     "RegistryV2",
+    "RegistryV3",
     "SyntheticExperimentException",
     "bundled_registry_path",
     "bundled_registry_v2_path",
+    "bundled_registry_v3_path",
     "load_bundled_registry",
     "load_bundled_registry_v2",
+    "load_bundled_registry_v3",
     "load_registry",
     "load_registry_v2",
+    "load_registry_v3",
 ]

@@ -9,6 +9,7 @@ ledger -- raw replies and credentials are never written to disk.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 import math
@@ -24,7 +25,13 @@ from benchmarks import saracura_universal_corpus as corpus
 from benchmarks import saracura_universal_pilot as pilot
 from benchmarks import saracura_universal_training as training
 from benchmarks.io import atomic_create
-from benchmarks.saracura_universal_policy import require_phase4e_authorization
+from benchmarks.saracura_universal_policy import (
+    POST_PILOT_AUTHOR_MODEL,
+    POST_PILOT_REVIEWER_MODEL,
+    require_phase4e_authorization,
+    require_post_pilot_phase4e_authorization,
+    validate_post_pilot_phase4e_policy,
+)
 from saracura.contracts.models import ChoiceCriterion
 
 _AUTHOR_SINGLE_MAX_OUTPUT_TOKENS = 640
@@ -59,6 +66,25 @@ _REVIEWER_LINEAGE_FIELDS = frozenset(
 )
 _BOUNDARY_TEXT = "\U0001f9ea"
 _BOUNDARY_STATE_SUMMARY_CODEPOINTS = 180
+_POST_PILOT_DIAGNOSTIC_KEYS = (
+    "reviewed",
+    "scenario_disagreement",
+    "criterion_role_disagreement",
+    "local_privacy",
+    "reviewer_privacy_flags",
+    "author_response_failures",
+    "reviewer_response_failures",
+    "retry_recoveries",
+    "transport_uncertain_calls",
+)
+_POST_PILOT_MAXIMUM_ATTEMPTS = 5
+_REPO_ROOT = Path(__file__).parents[1].resolve()
+_POST_PILOT_PLAN_PATH = _REPO_ROOT / ".artifacts/phase4e/corpus-plan-v3/plan.json"
+_POST_PILOT_WORK_DIR = _REPO_ROOT / ".artifacts/phase4e/corpus-work-v47"
+_POST_PILOT_REPORT_DIR = _REPO_ROOT / ".artifacts/phase4e/corpus-report-v3"
+_POST_PILOT_MODEL_ARTIFACT_ROOT = (
+    Path.home() / "Library/Application Support/saracura/phase4e/model-artifacts"
+).resolve()
 
 Transport = Callable[[str, str, Mapping[str, str], bytes], tuple[int, Mapping[str, str], bytes]]
 
@@ -84,9 +110,45 @@ def _read_plan(path: Path) -> dict[str, Any]:
 
 
 def write_plan(output: Path) -> Path:
-    """Create one immutable public-seed plan without a network path."""
+    """Create the historical v2 plan for legacy fixture callers."""
     atomic_create(output, _canonical(corpus.build_plan()) + b"\n")
     return output
+
+
+def write_post_pilot_plan(output: Path) -> Path:
+    """Create the only new corpus plan exposed by the phase command."""
+    if output.resolve() != _POST_PILOT_PLAN_PATH:
+        raise corpus.CorpusError("post-pilot plan path")
+    atomic_create(output, _canonical(corpus.build_post_pilot_plan()) + b"\n")
+    return output
+
+
+def _require_post_pilot_artifact_paths(
+    plan_path: Path,
+    work_dir: Path,
+    packet: Path,
+    report_dir: Path,
+    artifact_root: Path,
+) -> None:
+    """Keep private v3 evidence in its reviewed checkout/state boundaries."""
+
+    if (
+        plan_path.resolve() != _POST_PILOT_PLAN_PATH
+        or work_dir.resolve() != _POST_PILOT_WORK_DIR
+        or report_dir.resolve() != _POST_PILOT_REPORT_DIR
+        or artifact_root.resolve() != pilot.canonical_research_ledger_root().resolve()
+    ):
+        raise corpus.CorpusError("post-pilot artifact path")
+    packet_path = packet.resolve()
+    if (
+        packet_path in (_POST_PILOT_MODEL_ARTIFACT_ROOT, _REPO_ROOT)
+        or _POST_PILOT_MODEL_ARTIFACT_ROOT not in packet_path.parents
+        or _REPO_ROOT in packet_path.parents
+    ):
+        raise corpus.CorpusError("post-pilot packet path")
+    pilot._outside(work_dir, artifact_root)
+    pilot._outside(report_dir, artifact_root)
+    pilot._outside(packet, artifact_root)
 
 
 def _provider_body(
@@ -98,6 +160,9 @@ def _provider_body(
     max_output_tokens: int,
     author_stage: str = "corpus_author",
     author_model: str = corpus.AUTHOR_MODEL,
+    provider_override: Mapping[str, Any] | None = None,
+    author_reasoning_effort: str | None = "none",
+    reviewer_temperature: int | float | None = 0,
 ) -> bytes:
     return corpus.provider_request_bytes(
         stage=stage,
@@ -107,6 +172,9 @@ def _provider_body(
         max_output_tokens=max_output_tokens,
         author_stage=author_stage,
         author_model=author_model,
+        provider_override=provider_override,
+        author_reasoning_effort=author_reasoning_effort,
+        reviewer_temperature=reviewer_temperature,
     )
 
 
@@ -124,6 +192,26 @@ def _preflight_request(
 
 def _author_batches(plan: Mapping[str, Any]) -> list[list[Mapping[str, Any]]]:
     slots = cast(list[Mapping[str, Any]], plan["slots"])
+    if plan.get("schema_version") == "phase4e-universal-plan.v3":
+        order = plan.get("author_batch_order")
+        by_id = {cast(str, slot["task_id"]): slot for slot in slots}
+        if not isinstance(order, list):
+            raise corpus.CorpusError("post-pilot author batch order")
+        ordered_batches: list[list[Mapping[str, Any]]] = []
+        for ids in order:
+            if not isinstance(ids, list) or not ids or len(ids) > 2:
+                raise corpus.CorpusError("post-pilot author batch order")
+            batch = [
+                by_id[task_id] for task_id in ids if isinstance(task_id, str) and task_id in by_id
+            ]
+            if len(batch) != len(ids):
+                raise corpus.CorpusError("post-pilot author batch order")
+            ordered_batches.append(batch)
+        if {cast(str, slot["task_id"]) for batch in ordered_batches for slot in batch} != set(
+            by_id
+        ):
+            raise corpus.CorpusError("post-pilot author batch coverage")
+        return ordered_batches
     pairs: dict[str, list[Mapping[str, Any]]] = {}
     for slot in slots:
         pair_id = slot["pair_id"]
@@ -143,6 +231,25 @@ def _author_batches(plan: Mapping[str, Any]) -> list[list[Mapping[str, Any]]]:
 
 def _author_max_output_tokens(slots: Sequence[Mapping[str, Any]]) -> int:
     return _AUTHOR_PAIR_MAX_OUTPUT_TOKENS if len(slots) == 2 else _AUTHOR_SINGLE_MAX_OUTPUT_TOKENS
+
+
+def _post_pilot_config(plan: Mapping[str, Any]) -> dict[str, Any] | None:
+    if plan.get("schema_version") != "phase4e-universal-plan.v3":
+        return None
+    policy = validate_post_pilot_phase4e_policy()
+    provider = cast(dict[str, Any], policy["provider"])
+    expected = {
+        "provider_policy_sha256": corpus._sha(corpus._canonical(provider["provider_policy"])),
+        "author_request": provider["author_request"],
+        "reviewer_request": provider["reviewer_request"],
+        "models": {
+            "corpus_author": POST_PILOT_AUTHOR_MODEL,
+            "corpus_reviewer": POST_PILOT_REVIEWER_MODEL,
+        },
+    }
+    if any(plan.get(key) != value for key, value in expected.items()):
+        raise corpus.CorpusError("post-pilot plan request binding")
+    return provider
 
 
 def _boundary_reviewer_row(slot: Mapping[str, Any]) -> corpus.ValidatedAuthorRow:
@@ -188,6 +295,8 @@ def _aggregate_preflight(
     its nonfungible stage limits, including durable spend from a resumed run.
     """
     completed = set(resolved)
+    config = _post_pilot_config(plan)
+    policy = corpus.POST_PILOT_CORPUS_LEDGER_POLICY if config is not None else None
     author_total = Decimal()
     reviewer_total = Decimal()
     for slots in _author_batches(plan):
@@ -196,17 +305,21 @@ def _aggregate_preflight(
             continue
         if task_ids & completed:
             raise corpus.CorpusError("partial author family resume")
-        max_output_tokens = _author_max_output_tokens(slots)
+        max_output_tokens = 1024 if config is not None else _author_max_output_tokens(slots)
         author_total += corpus.request_worst_case(
             "corpus_author",
             _provider_body(
                 stage="corpus_author",
-                model=corpus.AUTHOR_MODEL,
+                model=POST_PILOT_AUTHOR_MODEL if config is not None else corpus.AUTHOR_MODEL,
                 messages=corpus.author_messages(slots),
                 response_schema=corpus.author_schema(slots),
                 max_output_tokens=max_output_tokens,
+                author_model=POST_PILOT_AUTHOR_MODEL if config is not None else corpus.AUTHOR_MODEL,
+                provider_override=config["provider_policy"] if config is not None else None,
+                author_reasoning_effort=None if config is not None else "none",
             ),
             max_output_tokens,
+            prices=policy.prices if policy is not None else None,
         )
         for slot in slots:
             row = _boundary_reviewer_row(slot)
@@ -214,17 +327,33 @@ def _aggregate_preflight(
                 "corpus_reviewer",
                 _provider_body(
                     stage="corpus_reviewer",
-                    model=corpus.REVIEWER_MODEL,
-                    messages=corpus.reviewer_messages([row]),
-                    response_schema=corpus.reviewer_schema(1),
-                    max_output_tokens=_REVIEWER_MAX_OUTPUT_TOKENS,
+                    model=POST_PILOT_REVIEWER_MODEL
+                    if config is not None
+                    else corpus.REVIEWER_MODEL,
+                    messages=(
+                        pilot.pilot_reviewer_messages(row.model_dump(mode="json"))
+                        if config is not None
+                        else corpus.reviewer_messages([row])
+                    ),
+                    response_schema=(
+                        pilot.pilot_reviewer_schema(1)
+                        if config is not None
+                        else corpus.reviewer_schema(1)
+                    ),
+                    max_output_tokens=512 if config is not None else _REVIEWER_MAX_OUTPUT_TOKENS,
+                    author_model=POST_PILOT_AUTHOR_MODEL
+                    if config is not None
+                    else corpus.AUTHOR_MODEL,
+                    provider_override=config["provider_policy"] if config is not None else None,
+                    author_reasoning_effort=None if config is not None else "none",
                 ),
-                _REVIEWER_MAX_OUTPUT_TOKENS,
+                512 if config is not None else _REVIEWER_MAX_OUTPUT_TOKENS,
+                prices=policy.prices if policy is not None else None,
             )
     totals = {"corpus_author": author_total, "corpus_reviewer": reviewer_total}
     for stage, total in totals.items():
         ledger.reserve(stage, total)
-    if (
+    if policy is None and (
         sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
         + sum(totals.values(), Decimal())
         > corpus.TOTAL_BUDGET
@@ -661,30 +790,613 @@ def _review_one(
     client: corpus.OpenRouterCorpusClient,
     row: Mapping[str, Any],
     api_key: str,
+    *,
+    post_pilot: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     typed = corpus.ValidatedAuthorRow.model_validate(row)
-    messages = corpus.reviewer_messages([typed])
+    messages = (
+        pilot.pilot_reviewer_messages(typed.model_dump(mode="json"))
+        if post_pilot
+        else corpus.reviewer_messages([typed])
+    )
     _preflight_request(
         "corpus_reviewer",
         _provider_body(
             stage="corpus_reviewer",
-            model=corpus.REVIEWER_MODEL,
+            model=POST_PILOT_REVIEWER_MODEL if post_pilot else corpus.REVIEWER_MODEL,
             messages=messages,
-            response_schema=corpus.reviewer_schema(1),
-            max_output_tokens=_REVIEWER_MAX_OUTPUT_TOKENS,
+            response_schema=pilot.pilot_reviewer_schema(1)
+            if post_pilot
+            else corpus.reviewer_schema(1),
+            max_output_tokens=512 if post_pilot else _REVIEWER_MAX_OUTPUT_TOKENS,
         ),
         _REVIEWER_MAX_OUTPUT_TOKENS,
     )
     payload = _response_content(
-        client.reviewer(row=typed, max_output_tokens=_REVIEWER_MAX_OUTPUT_TOKENS, api_key=api_key)
+        client.reviewer(
+            row=typed,
+            max_output_tokens=512 if post_pilot else _REVIEWER_MAX_OUTPUT_TOKENS,
+            api_key=api_key,
+        )
     )
     reviews = payload.get("reviews")
     if not isinstance(reviews, list) or len(reviews) != 1 or not isinstance(reviews[0], dict):
         raise corpus.CorpusError("review response")
     return (
-        corpus.materialize_reviewer_record(cast(dict[str, Any], reviews[0]), typed),
+        (
+            pilot.bind_pilot_reviewer_record(cast(dict[str, Any], reviews[0]), typed.task_id)
+            if post_pilot
+            else corpus.materialize_reviewer_record(cast(dict[str, Any], reviews[0]), typed)
+        ),
         client.last_journal("corpus_reviewer"),
     )
+
+
+def _post_pilot_blank_diagnostics() -> dict[str, int]:
+    return {key: 0 for key in _POST_PILOT_DIAGNOSTIC_KEYS}
+
+
+def _post_pilot_diagnostics_path(work_dir: Path, slots: Sequence[Mapping[str, Any]]) -> Path:
+    task_ids = sorted(cast(str, slot["task_id"]) for slot in slots)
+    return work_dir / "diagnostics" / f"call-{corpus._sha(_canonical(task_ids))}.json"
+
+
+def _store_post_pilot_diagnostics(
+    work_dir: Path, slots: Sequence[Mapping[str, Any]], counts: Mapping[str, int]
+) -> None:
+    if set(counts) != set(_POST_PILOT_DIAGNOSTIC_KEYS) or any(
+        type(counts[key]) is not int or counts[key] < 0 for key in _POST_PILOT_DIAGNOSTIC_KEYS
+    ):
+        raise corpus.CorpusError("post-pilot diagnostics")
+    task_ids = sorted(cast(str, slot["task_id"]) for slot in slots)
+    atomic_create(
+        _post_pilot_diagnostics_path(work_dir, slots),
+        _canonical(
+            {
+                "schema_version": "phase4e-corpus-diagnostics.v3",
+                "task_ids": task_ids,
+                "counts": dict(counts),
+            }
+        )
+        + b"\n",
+    )
+
+
+def _load_post_pilot_diagnostics(
+    work_dir: Path, plan: Mapping[str, Any], completed: set[str]
+) -> tuple[dict[str, int], bool]:
+    totals = _post_pilot_blank_diagnostics()
+    expected: set[Path] = set()
+    complete = True
+    for slots in _author_batches(plan):
+        task_ids = {cast(str, slot["task_id"]) for slot in slots}
+        if not task_ids <= completed:
+            continue
+        path = _post_pilot_diagnostics_path(work_dir, slots)
+        expected.add(path)
+        try:
+            value = _read_json(path)
+        except corpus.CorpusError:
+            complete = False
+            continue
+        counts = value.get("counts")
+        if (
+            set(value) != {"schema_version", "task_ids", "counts"}
+            or value.get("schema_version") != "phase4e-corpus-diagnostics.v3"
+            or value.get("task_ids") != sorted(task_ids)
+            or not isinstance(counts, dict)
+            or set(counts) != set(_POST_PILOT_DIAGNOSTIC_KEYS)
+            or any(
+                type(counts[key]) is not int or counts[key] < 0
+                for key in _POST_PILOT_DIAGNOSTIC_KEYS
+            )
+        ):
+            complete = False
+            continue
+        for key in _POST_PILOT_DIAGNOSTIC_KEYS:
+            totals[key] += counts[key]
+    actual = (
+        set((work_dir / "diagnostics").glob("call-*.json"))
+        if (work_dir / "diagnostics").exists()
+        else set()
+    )
+    return totals, complete and actual == expected
+
+
+def _uncertain_lineage(
+    ledger: corpus.BudgetLedger, actor: Literal["author", "reviewer"], stage: str
+) -> dict[str, str]:
+    if not ledger.entries:
+        raise corpus.CorpusError("uncertain lineage")
+    entry = ledger.entries[-1]
+    if (
+        entry["status"] != "uncertain"
+        or entry["stage"] != stage
+        or entry["response_sha256"] != "0" * 64
+        or entry["request_id"] != entry["reservation_id"]
+    ):
+        raise corpus.CorpusError("uncertain lineage")
+    return {
+        f"{actor}_response_sha256": entry["response_sha256"],
+        f"{actor}_reservation_id": entry["reservation_id"],
+        f"{actor}_request_id": entry["request_id"],
+    }
+
+
+def _require_post_pilot_uncertain_resolutions(
+    ledger: corpus.BudgetLedger, resolved: Mapping[str, Mapping[str, Any]], diagnostics: int
+) -> None:
+    uncertain = [entry for entry in ledger.entries if entry["status"] == "uncertain"]
+    if diagnostics != len(uncertain):
+        raise corpus.CorpusError("unbound uncertain resolution")
+    journals = {
+        (entry["stage"], entry["reservation_id"]): entry for entry in ledger.provider_journal
+    }
+    if len(journals) != len(ledger.provider_journal):
+        raise corpus.CorpusError("unbound uncertain resolution")
+    for entry in uncertain:
+        stage = entry["stage"]
+        actor = (
+            "author"
+            if stage == "corpus_author"
+            else "reviewer"
+            if stage == "corpus_reviewer"
+            else None
+        )
+        journal = journals.get((stage, entry["reservation_id"]))
+        if actor is None or journal is None or journal["task_ids"] != sorted(journal["task_ids"]):
+            raise corpus.CorpusError("unbound uncertain resolution")
+        expected = _uncertain_lineage_for_entry(entry, cast(Literal["author", "reviewer"], actor))
+        expected_reason = f"{actor}_transport_uncertain"
+        for task_id in journal["task_ids"]:
+            item = resolved.get(task_id)
+            row = item.get("row") if item is not None else None
+            if (
+                item is None
+                or item.get("status") != "rejected"
+                or not isinstance(row, dict)
+                or row.get("reason") != expected_reason
+                or any(row.get(key) != value for key, value in expected.items())
+            ):
+                raise corpus.CorpusError("unbound uncertain resolution")
+
+
+def _uncertain_lineage_for_entry(
+    entry: Mapping[str, str], actor: Literal["author", "reviewer"]
+) -> dict[str, str]:
+    if entry.get("response_sha256") != "0" * 64 or entry.get("request_id") != entry.get(
+        "reservation_id"
+    ):
+        raise corpus.CorpusError("uncertain lineage")
+    return {
+        f"{actor}_response_sha256": entry["response_sha256"],
+        f"{actor}_reservation_id": entry["reservation_id"],
+        f"{actor}_request_id": entry["request_id"],
+    }
+
+
+def _post_pilot_semantic_diagnostics(
+    row: Mapping[str, Any], review: Mapping[str, Any]
+) -> tuple[int, int]:
+    author = row.get("semantic_equivalence_attestation")
+    observed = review.get("semantic_equivalence_attestation")
+    if not isinstance(author, dict) or not isinstance(observed, dict):
+        raise corpus.CorpusError("review diagnostic")
+    scenario = int(author.get("scenario") != observed.get("scenario"))
+    roles = int(author.get("criterion_roles") != observed.get("criterion_roles"))
+    return scenario, roles
+
+
+def _post_pilot_report(
+    *,
+    plan: Mapping[str, Any],
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    ledger: corpus.BudgetLedger,
+    diagnostics: Mapping[str, int],
+    inventory_sha256: str,
+    packet: Path,
+    work_dir: Path,
+    historical: pilot.SpendScan,
+) -> dict[str, Any]:
+    slots = cast(list[Mapping[str, Any]], plan["slots"])
+    counts: dict[str, dict[str, dict[str, int]]] = {
+        key: {"accepted": {}, "rejected": {}}
+        for key in ("split", "locale", "domain", "option_count")
+    }
+    for status, rows in (("accepted", accepted), ("rejected", rejected)):
+        for row in rows:
+            task_id = row.get("task_id")
+            slot = next((item for item in slots if item["task_id"] == task_id), None)
+            if slot is None:
+                raise corpus.CorpusError("report task identity")
+            for key, value in (
+                ("split", slot["split"]),
+                ("locale", slot["locale"]),
+                ("domain", slot["domain"]),
+                ("option_count", str(slot["option_count"])),
+            ):
+                bucket = counts[key][status]
+                bucket[str(value)] = bucket.get(str(value), 0) + 1
+    rejected_counts: dict[str, int] = {}
+    for row in rejected:
+        reason = row.get("reason")
+        if isinstance(reason, str):
+            rejected_counts[reason] = rejected_counts.get(reason, 0) + 1
+    provider_cost = sum(
+        (Decimal(entry["provider_cost_usd"]) for entry in ledger.entries), Decimal()
+    )
+    debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
+    projection = corpus.stop_projection(
+        [{"task_id": row["task_id"], "status": "accepted"} for row in accepted]
+        + [{"task_id": row["task_id"], "status": "rejected"} for row in rejected],
+        plan,
+    )
+    snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not snapshots:
+        raise corpus.CorpusError("post-pilot ledger missing")
+    return {
+        "schema_version": "phase4e-corpus-report.v3",
+        "accepted_count": len(accepted),
+        "rejected_count": len(rejected),
+        "counts": {**counts, "reason": dict(sorted(rejected_counts.items()))},
+        "semantic_diagnostics": {
+            key: diagnostics[key]
+            for key in ("reviewed", "scenario_disagreement", "criterion_role_disagreement")
+        },
+        "transport_validation_diagnostics": {
+            key: diagnostics[key]
+            for key in (
+                "local_privacy",
+                "reviewer_privacy_flags",
+                "author_response_failures",
+                "reviewer_response_failures",
+                "retry_recoveries",
+                "transport_uncertain_calls",
+            )
+        },
+        "wilson_stop_projection": projection,
+        "provider_reported_cost_usd": str(provider_cost),
+        "conservative_debit_usd": str(debit),
+        "cumulative_provider_reported_cost_usd": str(historical.provider_reported_cost_usd),
+        "cumulative_conservative_debit_usd": str(historical.conservative_debit_usd),
+        "plan_sha256": corpus._sha(_canonical(plan)),
+        "ledger_sha256": hashlib.sha256(snapshots[-1].read_bytes()).hexdigest(),
+        "packet_manifest_sha256": hashlib.sha256((packet / "packet.json").read_bytes()).hexdigest(),
+        "research_inventory_sha256": inventory_sha256,
+    }
+
+
+def _run_post_pilot_batch(
+    client: corpus.OpenRouterCorpusClient,
+    slots: Sequence[Mapping[str, Any]],
+    snapshot: Path,
+    api_key: str,
+    accepted: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    diagnostics: dict[str, int],
+    work_dir: Path,
+) -> None:
+    """Resolve one precommitted author call without replaying uncertain transport."""
+
+    before = {key: diagnostics[key] for key in _POST_PILOT_DIAGNOSTIC_KEYS}
+    task_ids = [cast(str, slot["task_id"]) for slot in slots]
+    author_lineage: dict[str, str] | None = None
+    usable: list[dict[str, Any]] | None = None
+    author_rejected: list[dict[str, Any]] | None = None
+    for attempt in range(_POST_PILOT_MAXIMUM_ATTEMPTS):
+        try:
+            response = client._request(
+                stage="corpus_author",
+                model=POST_PILOT_AUTHOR_MODEL,
+                messages=corpus.author_messages(slots),
+                response_schema=corpus.author_schema(slots),
+                max_output_tokens=1024,
+                api_key=api_key,
+                task_ids=task_ids,
+            )
+        except corpus.CorpusError:
+            diagnostics["author_response_failures"] += 1
+            if client.ledger.entries and client.ledger.entries[-1]["status"] == "uncertain":
+                diagnostics["transport_uncertain_calls"] += 1
+                lineage = _uncertain_lineage(client.ledger, "author", "corpus_author")
+                rows = [
+                    {
+                        "task_id": slot["task_id"],
+                        "split": slot["split"],
+                        "reason": "author_transport_uncertain",
+                        **lineage,
+                    }
+                    for slot in slots
+                ]
+                _store_call_resolution(work_dir, slots, [(row, "rejected") for row in rows])
+                _store_post_pilot_diagnostics(
+                    work_dir,
+                    slots,
+                    {key: diagnostics[key] - before[key] for key in _POST_PILOT_DIAGNOSTIC_KEYS},
+                )
+                rejected.extend(rows)
+                return
+            author_lineage = corpus.lineage_from_journal(
+                client.last_journal("corpus_author"), "author"
+            )
+            if attempt + 1 < _POST_PILOT_MAXIMUM_ATTEMPTS:
+                continue
+            break
+        author_lineage = corpus.lineage_from_journal(client.last_journal("corpus_author"), "author")
+        try:
+            decoded = corpus.decode_author_response(_response_content(response), slots)
+            candidate_usable, candidate_rejected = corpus.validate_author_rows_with_verified_minilm(
+                decoded, slots, snapshot
+            )
+        except corpus.CorpusError:
+            diagnostics["author_response_failures"] += 1
+            if attempt + 1 < _POST_PILOT_MAXIMUM_ATTEMPTS:
+                continue
+            break
+        usable = candidate_usable
+        author_rejected = candidate_rejected
+        if attempt:
+            diagnostics["retry_recoveries"] += 1
+        break
+    if usable is None or author_rejected is None or author_lineage is None:
+        if author_lineage is None:
+            raise corpus.CorpusError("author recovery invariant")
+        rows = _store_settled_fallback_required(
+            work_dir,
+            slots,
+            reason="author_response_failure",
+            author_lineage=author_lineage,
+            reviewer_lineages={},
+        )
+        _store_post_pilot_diagnostics(
+            work_dir,
+            slots,
+            {key: diagnostics[key] - before[key] for key in _POST_PILOT_DIAGNOSTIC_KEYS},
+        )
+        rejected.extend(rows)
+        return
+    usable = [{**row, **author_lineage} for row in usable]
+    author_rejected = [{**row, **author_lineage} for row in author_rejected]
+    diagnostics["local_privacy"] += sum(
+        corpus._privacy(row) for row in [*usable, *author_rejected] if "instruction" in row
+    )
+    usable, author_rejected = pilot.apply_pair_author_target_rule(slots, usable, author_rejected)
+    reviewed_rows: list[dict[str, Any]] = []
+    reviews: list[dict[str, Any]] = []
+    reviewer_failures: list[dict[str, Any]] = []
+    reviewer_lineages: dict[str, dict[str, str]] = {}
+    for row in usable:
+        task_id = cast(str, row["task_id"])
+        review: dict[str, Any] | None = None
+        for attempt in range(_POST_PILOT_MAXIMUM_ATTEMPTS):
+            try:
+                response = client._request(
+                    stage="corpus_reviewer",
+                    model=POST_PILOT_REVIEWER_MODEL,
+                    messages=pilot.pilot_reviewer_messages(row),
+                    response_schema=pilot.pilot_reviewer_schema(1),
+                    max_output_tokens=512,
+                    api_key=api_key,
+                    task_ids=[task_id],
+                )
+            except corpus.CorpusError:
+                diagnostics["reviewer_response_failures"] += 1
+                if client.ledger.entries and client.ledger.entries[-1]["status"] == "uncertain":
+                    diagnostics["transport_uncertain_calls"] += 1
+                    reviewer_lineages[task_id] = _uncertain_lineage(
+                        client.ledger, "reviewer", "corpus_reviewer"
+                    )
+                    reviewer_failures.append(
+                        {
+                            "task_id": task_id,
+                            "split": row["split"],
+                            "reason": "reviewer_transport_uncertain",
+                            **author_lineage,
+                            **reviewer_lineages[task_id],
+                        }
+                    )
+                    break
+                reviewer_lineages[task_id] = corpus.lineage_from_journal(
+                    client.last_journal("corpus_reviewer"), "reviewer"
+                )
+                if attempt + 1 < _POST_PILOT_MAXIMUM_ATTEMPTS:
+                    continue
+                break
+            reviewer_lineages[task_id] = corpus.lineage_from_journal(
+                client.last_journal("corpus_reviewer"), "reviewer"
+            )
+            try:
+                payload = _response_content(response)
+                raw = payload.get("reviews")
+                if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], dict):
+                    raise corpus.CorpusError("review response")
+                review = pilot.bind_pilot_reviewer_record(cast(dict[str, Any], raw[0]), task_id)
+            except corpus.CorpusError:
+                diagnostics["reviewer_response_failures"] += 1
+                if attempt + 1 < _POST_PILOT_MAXIMUM_ATTEMPTS:
+                    continue
+                break
+            if attempt:
+                diagnostics["retry_recoveries"] += 1
+            break
+        if review is None:
+            if not any(item["task_id"] == task_id for item in reviewer_failures):
+                reviewer_failures.append(
+                    {
+                        "task_id": task_id,
+                        "split": row["split"],
+                        "reason": "reviewer_response_failure",
+                        **author_lineage,
+                        **reviewer_lineages[task_id],
+                    }
+                )
+            continue
+        diagnostics["reviewed"] += 1
+        diagnostics["reviewer_privacy_flags"] += int(review["private_or_sensitive"])
+        scenario, roles = _post_pilot_semantic_diagnostics(row, review)
+        diagnostics["scenario_disagreement"] += scenario
+        diagnostics["criterion_role_disagreement"] += roles
+        reviewed_rows.append(row)
+        reviews.append(review)
+    newly_accepted, newly_rejected = corpus.resolve_reviews(
+        reviewed_rows,
+        reviews,
+        prior_rows=accepted,
+        reviewer_lineages=reviewer_lineages,
+        acceptance=corpus.post_pilot_acceptance_reason,
+        pair_resolution=corpus.post_pilot_pair_resolution,
+        review_model=corpus.PostPilotReviewerRecord,
+    )
+    outcomes = [
+        *[(row, "rejected") for row in author_rejected],
+        *[(row, "rejected") for row in reviewer_failures],
+        *[(row, "accepted") for row in newly_accepted],
+        *[(row, "rejected") for row in newly_rejected],
+    ]
+    _store_call_resolution(work_dir, slots, outcomes)
+    _store_post_pilot_diagnostics(
+        work_dir,
+        slots,
+        {key: diagnostics[key] - before[key] for key in _POST_PILOT_DIAGNOSTIC_KEYS},
+    )
+    accepted.extend(newly_accepted)
+    rejected.extend([*author_rejected, *reviewer_failures, *newly_rejected])
+
+
+def _run_post_pilot_corpus(
+    plan: Mapping[str, Any],
+    snapshot: Path,
+    work_dir: Path,
+    packet: Path,
+    report_dir: Path,
+    artifact_root: Path,
+    *,
+    transport: Transport | None,
+) -> Path:
+    """Continue or seal the v3 corpus; a completed work tree never opens transport."""
+
+    require_post_pilot_phase4e_authorization("synthetic_generation")
+    _post_pilot_config(plan)
+    resolved = _load_resolved(work_dir, plan)
+    ledger = _load_ledger_or_fail_closed(work_dir)
+    if not ledger.entries:
+        ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    elif ledger.policy.schema_version != corpus.POST_PILOT_CORPUS_LEDGER_POLICY.schema_version:
+        raise corpus.CorpusError("ledger resume mismatch")
+    _require_settled_task_resolution(ledger, resolved)
+    diagnostics, complete_diagnostics = _load_post_pilot_diagnostics(work_dir, plan, set(resolved))
+    if not complete_diagnostics:
+        raise corpus.CorpusError("post-pilot diagnostics incomplete")
+    _require_post_pilot_uncertain_resolutions(
+        ledger, resolved, diagnostics["transport_uncertain_calls"]
+    )
+    all_task_ids = {
+        cast(str, slot["task_id"]) for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    if set(resolved) != all_task_ids:
+        _aggregate_preflight(plan, resolved, ledger)
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise corpus.CorpusError("missing provider credential")
+        config = cast(dict[str, Any], _post_pilot_config(plan))
+        work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        client = corpus.OpenRouterCorpusClient(
+            transport=cast(corpus.Transport, transport or _openrouter_transport(120)),
+            allow_network=True,
+            ledger=ledger,
+            ledger_directory=work_dir / "ledger",
+            policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY,
+            author_model=POST_PILOT_AUTHOR_MODEL,
+            reviewer_model=POST_PILOT_REVIEWER_MODEL,
+            provider_preferences_by_stage={
+                "corpus_author": config["provider_policy"],
+                "corpus_reviewer": config["provider_policy"],
+            },
+            author_reasoning_effort=None,
+            reviewer_temperature=0,
+        )
+        accepted = [
+            cast(dict[str, Any], item["row"])
+            for item in resolved.values()
+            if item["status"] == "accepted"
+        ]
+        rejected = [
+            cast(dict[str, Any], item["row"])
+            for item in resolved.values()
+            if item["status"] == "rejected"
+        ]
+        completed = set(resolved)
+        next_cost = Decimal("10.00")
+        for slots in _author_batches(plan):
+            ids = {cast(str, slot["task_id"]) for slot in slots}
+            if ids <= completed:
+                continue
+            if ids & completed:
+                raise corpus.CorpusError("partial author family resume")
+            _run_post_pilot_batch(
+                client, slots, snapshot, api_key, accepted, rejected, diagnostics, work_dir
+            )
+            completed.update(ids)
+            spend = sum(
+                (Decimal(entry["provider_cost_usd"]) for entry in client.ledger.entries),
+                Decimal(),
+            )
+            while spend >= next_cost:
+                print(f"phase4e corpus provider spend crossed USD {next_cost}", flush=True)
+                next_cost += Decimal("10.00")
+        ledger = client.ledger
+        resolved = _load_resolved(work_dir, plan)
+    if set(resolved) != all_task_ids:
+        raise corpus.CorpusError("incomplete corpus resolution")
+    diagnostics, complete_diagnostics = _load_post_pilot_diagnostics(work_dir, plan, set(resolved))
+    if not complete_diagnostics:
+        raise corpus.CorpusError("post-pilot diagnostics incomplete")
+    _require_post_pilot_uncertain_resolutions(
+        ledger, resolved, diagnostics["transport_uncertain_calls"]
+    )
+    _require_settled_task_resolution(ledger, resolved)
+    accepted = [
+        cast(dict[str, Any], item["row"])
+        for item in resolved.values()
+        if item["status"] == "accepted"
+    ]
+    rejected = [
+        cast(dict[str, Any], item["row"])
+        for item in resolved.values()
+        if item["status"] == "rejected"
+    ]
+    snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not snapshots or _read_json(snapshots[-1]).get("stop_reason") != "complete":
+        corpus.write_ledger_snapshot(work_dir / "ledger", ledger, stop_reason="complete")
+    if not packet.exists():
+        corpus.seal_packet(packet, plan, accepted, rejected, ledger.as_json(final=True))
+    else:
+        corpus.validate_accepted_packet_pre_holdout(packet)
+    pilot._copy_work_tree(work_dir, artifact_root / work_dir.name)
+    inventory_sha, historical = pilot.record_research_catalog(artifact_root)
+    report_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    report_path = report_dir / "report.json"
+    report = _post_pilot_report(
+        plan=plan,
+        accepted=accepted,
+        rejected=rejected,
+        ledger=ledger,
+        diagnostics=diagnostics,
+        inventory_sha256=inventory_sha,
+        packet=packet,
+        work_dir=work_dir,
+        historical=historical,
+    )
+    if not report_path.exists():
+        atomic_create(report_path, _canonical(report) + b"\n")
+    elif report_path.read_bytes() != _canonical(report) + b"\n":
+        raise FileExistsError(f"benchmark artifact already exists: {report_path.name}")
+    print(
+        f"phase4e corpus final provider spend USD {report['provider_reported_cost_usd']}",
+        flush=True,
+    )
+    return packet / "packet.json"
 
 
 def run_corpus(
@@ -695,17 +1407,47 @@ def run_corpus(
     *,
     allow_network: bool,
     transport: Transport | None = None,
+    report_dir: Path | None = None,
+    artifact_root: Path | None = None,
 ) -> Path:
     """Execute the deliberate provider lane with no-clobber task resolution."""
     if not allow_network:
         raise corpus.CorpusError("corpus requires literal --allow-network")
-    require_phase4e_authorization("synthetic_generation")
+    # v2 is frozen behind its historical gate; v3 carries the reviewed
+    # synthetic-generation exception but not training/runtime authorization.
+    if not plan_path.exists():
+        # Preserve the historical no-IO authorization boundary for a missing
+        # legacy plan; a v3 plan is selected only after its bytes are read.
+        require_phase4e_authorization("synthetic_generation")
+    plan = _read_plan(plan_path)
+    post_pilot = plan.get("schema_version") == "phase4e-universal-plan.v3"
+    if post_pilot:
+        if report_dir is None or artifact_root is None:
+            raise corpus.CorpusError("post-pilot corpus requires report and durable research root")
+        _require_post_pilot_artifact_paths(
+            plan_path,
+            work_dir,
+            packet,
+            report_dir,
+            artifact_root,
+        )
+        return _run_post_pilot_corpus(
+            plan,
+            snapshot,
+            work_dir,
+            packet,
+            report_dir,
+            artifact_root,
+            transport=transport,
+        )
+    else:
+        require_phase4e_authorization("synthetic_generation")
     # This is the only environment read in this module.  It is never accepted
     # by argparse, persisted, included in an exception, or printed.
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise corpus.CorpusError("missing provider credential")
-    plan = _read_plan(plan_path)
+    config = _post_pilot_config(plan)
     work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     if packet.exists():
         raise FileExistsError(f"benchmark artifact already exists: {packet.name}")
@@ -718,6 +1460,19 @@ def run_corpus(
         allow_network=True,
         ledger=ledger,
         ledger_directory=work_dir / "ledger",
+        policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY if post_pilot else None,
+        author_model=POST_PILOT_AUTHOR_MODEL if post_pilot else corpus.AUTHOR_MODEL,
+        reviewer_model=POST_PILOT_REVIEWER_MODEL if post_pilot else corpus.REVIEWER_MODEL,
+        provider_preferences_by_stage=(
+            {
+                "corpus_author": config["provider_policy"],
+                "corpus_reviewer": config["provider_policy"],
+            }
+            if config is not None
+            else None
+        ),
+        author_reasoning_effort=None if post_pilot else "none",
+        reviewer_temperature=0,
     )
     accepted: list[dict[str, Any]] = [
         cast(dict[str, Any], value["row"])
@@ -737,15 +1492,18 @@ def run_corpus(
         if any(cast(str, slot["task_id"]) in completed for slot in slots):
             raise corpus.CorpusError("partial author family resume")
         messages = corpus.author_messages(slots)
-        author_max_output_tokens = _author_max_output_tokens(slots)
+        author_max_output_tokens = 1024 if post_pilot else _author_max_output_tokens(slots)
         _preflight_request(
             "corpus_author",
             _provider_body(
                 stage="corpus_author",
-                model=corpus.AUTHOR_MODEL,
+                model=POST_PILOT_AUTHOR_MODEL if post_pilot else corpus.AUTHOR_MODEL,
                 messages=messages,
                 response_schema=corpus.author_schema(slots),
                 max_output_tokens=author_max_output_tokens,
+                author_model=POST_PILOT_AUTHOR_MODEL if post_pilot else corpus.AUTHOR_MODEL,
+                provider_override=config["provider_policy"] if config is not None else None,
+                author_reasoning_effort=None if post_pilot else "none",
             ),
             author_max_output_tokens,
         )
@@ -795,7 +1553,7 @@ def run_corpus(
         reviewer_lineages: dict[str, dict[str, str]] = {}
         for row in usable:
             try:
-                review, journal = _review_one(client, row, api_key)
+                review, journal = _review_one(client, row, api_key, post_pilot=post_pilot)
             except Exception:
                 settled_reviewer_lineage = _lineage_or_none(
                     client, "reviewer", [cast(str, row["task_id"])]
@@ -817,7 +1575,15 @@ def run_corpus(
         reviews = [review for review, _ in review_results]
         try:
             newly_accepted, newly_rejected = corpus.resolve_reviews(
-                usable, reviews, prior_rows=accepted, reviewer_lineages=reviewer_lineages
+                usable,
+                reviews,
+                prior_rows=accepted,
+                reviewer_lineages=reviewer_lineages,
+                acceptance=corpus.post_pilot_acceptance_reason if post_pilot else None,
+                pair_resolution=corpus.post_pilot_pair_resolution if post_pilot else None,
+                review_model=corpus.PostPilotReviewerRecord
+                if post_pilot
+                else corpus.ReviewerRecord,
             )
         except Exception:
             _store_settled_fallback_required(
@@ -910,6 +1676,10 @@ def _parser() -> argparse.ArgumentParser:
     corpus_parser.add_argument("--snapshot", type=Path, required=True)
     corpus_parser.add_argument("--work-dir", type=Path, required=True)
     corpus_parser.add_argument("--packet", type=Path, required=True)
+    # They are mandatory for the v3 plan at runtime; keeping parsing permissive
+    # preserves the historical missing-plan/no-network failure order.
+    corpus_parser.add_argument("--report", type=Path)
+    corpus_parser.add_argument("--artifact-root", type=Path)
     corpus_parser.add_argument("--allow-network", action="store_true")
     extract = commands.add_parser("extract")
     extract.add_argument("--packet", type=Path, required=True)
@@ -946,7 +1716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "plan":
-            write_plan(args.output)
+            write_post_pilot_plan(args.output)
         elif args.command == "corpus":
             run_corpus(
                 args.plan,
@@ -954,6 +1724,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.work_dir,
                 args.packet,
                 allow_network=args.allow_network,
+                report_dir=args.report,
+                artifact_root=args.artifact_root,
             )
         elif args.command == "extract":
             run_extract(args.packet, args.snapshot, args.device, args.output)
