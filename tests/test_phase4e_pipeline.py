@@ -63,6 +63,27 @@ def test_corpus_requires_literal_network_opt_in_before_environment_or_io(
     assert not (tmp_path / "work").exists()
 
 
+def test_response_content_rejects_reasoning_without_retaining_it() -> None:
+    marker = "private reasoning marker"
+    response = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": "{}", "reasoning": marker},
+            }
+        ]
+    }
+    with pytest.raises(corpus.CorpusError, match=r"^provider response reasoning$") as caught:
+        pipeline._response_content(response)
+    assert marker not in str(caught.value)
+    assert (
+        pipeline._response_content(
+            {"choices": [{"message": {"content": "{}", "reasoning_details": []}}]}
+        )
+        == {}
+    )
+
+
 def test_fake_transport_has_pinned_shape_and_does_not_store_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
@@ -206,6 +227,50 @@ def test_settled_invalid_author_response_is_atomically_resolved_without_retry(
             **corpus.lineage_from_journal(ledger.provider_journal[0], "author"),
         }
     ]
+
+
+def test_settled_pair_fallback_uses_canonical_journal_order_without_losing_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
+) -> None:
+    plan_path = tmp_path / "plan.json"
+    pipeline.write_plan(plan_path)
+    plan = corpus.build_plan()
+    pair = next(
+        batch
+        for batch in pipeline._author_batches(plan)
+        if len(batch) == 2
+        and [slot["task_id"] for slot in batch] != sorted(slot["task_id"] for slot in batch)
+    )
+    monkeypatch.setattr(pipeline, "_author_batches", lambda _plan: [pair])
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def invalid_pair(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body
+        return (
+            200,
+            {},
+            b'{"id":"pair-invalid","usage":{"cost":0},"choices":[{"message":{"content":"{}"}}]}',
+        )
+
+    with pytest.raises(corpus.CorpusError, match="author record count"):
+        pipeline.run_corpus(
+            plan_path,
+            tmp_path / "snapshot",
+            tmp_path / "work",
+            tmp_path / "packet",
+            allow_network=True,
+            transport=invalid_pair,
+        )
+    ledger = corpus.resume_ledger(tmp_path / "work" / "ledger")
+    assert ledger.provider_journal[0]["task_ids"] == sorted(slot["task_id"] for slot in pair)
+    records = list((tmp_path / "work" / "resolved").glob("call-*.json"))
+    assert len(records) == 1
+    fallback = json.loads(records[0].read_bytes())
+    assert fallback["kind"] == "settled_fallback"
+    assert {row["task_id"] for row in fallback["resolutions"]} == {slot["task_id"] for slot in pair}
+    assert {row["reason"] for row in fallback["resolutions"]} == {"author_validation_failure"}
 
 
 def test_settled_author_overspend_is_atomically_resolved_without_retry(
@@ -702,6 +767,29 @@ def test_lineage_lookup_never_reuses_a_previous_settled_call() -> None:
     )
 
 
+def test_lineage_lookup_accepts_only_the_same_call_independent_of_canonical_order() -> None:
+    task_a = "task-" + "a" * 64
+    task_c = "task-" + "c" * 64
+    journal = {
+        "stage": "corpus_author",
+        "reservation_id": "reservation-" + "a" * 64,
+        "request_id": "same-call",
+        "task_ids": [task_a, task_c],
+        "response_sha256": "b" * 64,
+    }
+
+    class _Client:
+        def last_journal(self, stage: str) -> dict[str, Any]:
+            assert stage == "corpus_author"
+            return journal
+
+    assert pipeline._lineage_or_none(
+        _Client(),  # type: ignore[arg-type]
+        "author",
+        [task_c, task_a],
+    ) == corpus.lineage_from_journal(journal, "author")
+
+
 def test_conservative_preflight_refuses_stage_overage() -> None:
     with pytest.raises(corpus.CorpusError, match="stage budget exhausted"):
         pipeline._preflight_request("corpus_author", b"x", 10_000_000)
@@ -713,7 +801,7 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     plan = corpus.build_plan()
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
-        "corpus_author": Decimal("4.4026231"),
+        "corpus_author": Decimal("4.4112031"),
         "corpus_reviewer": Decimal("9.99871629"),
     }
     assert totals["corpus_author"] < Decimal("5")

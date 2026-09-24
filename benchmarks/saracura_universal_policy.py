@@ -14,9 +14,9 @@ from benchmarks.data_policy_registry import (
 
 ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json"
-AUTHOR_MODEL = "google/gemini-2.5-flash"
+AUTHOR_MODEL = "qwen/qwen3-30b-a3b"
 REVIEWER_MODEL = "meta-llama/llama-3.3-70b-instruct"
-AUTHOR_PROVIDER = "Google"
+AUTHOR_PROVIDER = "DeepInfra"
 REVIEWER_PROVIDER = "CoreWeave"
 STAGE_LIMITS = {
     "corpus_author": Decimal("5.00"),
@@ -101,6 +101,13 @@ def validate_phase4e_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
         "host": "openrouter.ai",
         "author_model": AUTHOR_MODEL,
         "author_provider": AUTHOR_PROVIDER,
+        "author_endpoint_id": "qwen/qwen3-30b-a3b-04-28",
+        "author_provider_tag": "deepinfra/fp8",
+        "author_quantization": "fp8",
+        "author_context_length": 40960,
+        "author_input_price_usd_per_million": 0.12,
+        "author_output_price_usd_per_million": 0.5,
+        "author_endpoint_checked_at": "2026-09-24",
         "reviewer_model": REVIEWER_MODEL,
         "reviewer_provider": REVIEWER_PROVIDER,
         "allow_fallbacks": False,

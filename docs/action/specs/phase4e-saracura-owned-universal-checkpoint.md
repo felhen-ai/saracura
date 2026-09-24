@@ -13,7 +13,9 @@ lastReviewedAt: 2026-09-23
 sourceRefs:
   - https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   - https://github.com/huggingface/sentence-transformers
-  - https://openrouter.ai/google/gemini-2.5-flash
+  - https://openrouter.ai/qwen/qwen3-30b-a3b
+  - https://openrouter.ai/api/v1/models/qwen/qwen3-30b-a3b/endpoints
+  - https://openrouter.ai/api/v1/endpoints/zdr
   - https://openrouter.ai/meta-llama/llama-3.3-70b-instruct
   - https://openrouter.ai/api/v1/models/meta-llama/llama-3.3-70b-instruct/endpoints
   - https://openrouter.ai/terms
@@ -183,13 +185,26 @@ This guards against runaway spend; it is not a product budget or a reason to
 abandon useful work. It may be increased by explicit operator agreement when
 execution evidence shows that more is needed:
 
-- author: `google/gemini-2.5-flash`;
+- author: `qwen/qwen3-30b-a3b`;
 - reviewer: `meta-llama/llama-3.3-70b-instruct`.
 
-Provider routing is pinned to `Google` for the author and `CoreWeave` for
-the reviewer, with `allow_fallbacks=false` and `require_parameters=true`.
+Provider routing is pinned to DeepInfra `deepinfra/fp8` for the author and
+CoreWeave for the reviewer, with `allow_fallbacks=false`, an author FP8
+quantization filter, and `require_parameters=true`.
 OpenRouter must not silently route a request to an endpoint that ignores the
 reviewed structured-output contract.
+
+The original Google/Gemini author route was retired after four real diagnostic
+generations accepted the request contract but returned only empty structured
+envelopes: nested schemas produced `records` containing empty objects and the
+flat schema produced `{}` despite required fields. Only response hashes, cost
+receipts, and bounded validation reasons were retained. On 2026-09-24 the
+OpenRouter model-endpoint and ZDR registries identified the replacement author
+as endpoint `qwen/qwen3-30b-a3b-04-28`, provider tag `deepinfra/fp8`, 40,960
+context tokens, FP8 quantization, structured-output support, and listed prices
+of USD 0.12/M input and USD 0.50/M output. This replacement is a policy change,
+not a fallback: a different model, endpoint, quantization, or provider must
+fail closed.
 
 Before any provider request, an immutable public-seed plan assigns every task
 ID, scenario-family ID, split, locale, domain, difficulty axes, option count,
@@ -268,7 +283,7 @@ schedule conflict, or content safety. The author response schema binds
 with inline single-value JSON Schema enums before transport; it avoids schema
 composition keywords and schema references that are not portable across the
 pinned provider route. State and criterion constraints are also materialized
-inline. Because the pinned Gemini route demonstrably reduces object schemas
+inline. Because the retired Gemini route demonstrably reduced object schemas
 nested inside array items to empty objects, the wire schema exposes one flat,
 numbered set of scalar fields per logical record. Local code rehydrates that
 closed wire representation before the same Pydantic models perform the
@@ -360,9 +375,12 @@ fixed acceptance minimum remains 120 complete pairs.
 The provider lane keeps explicit network authorization, ZDR/data-collection
 controls, no secrets in argv/logs/artifacts, atomic no-clobber writes, resumable
 cost ledger, bounded retries, and record-level author/reviewer response hashes.
-The Gemini author request disables optional model reasoning with
+The Qwen author request disables optional model reasoning with
 `reasoning_effort=none`; constrained generation must not spend the bounded
-response budget on hidden reasoning. The pinned CoreWeave Llama reviewer route
+response budget on hidden reasoning. The response parser also fails closed
+when `reasoning` or `reasoning_details` is non-empty, and the settled call is
+atomically resolved with a content-free failure rather than storing or parsing
+the trace. The pinned CoreWeave Llama reviewer route
 is a non-reasoning endpoint and does not advertise `reasoning_effort`, so its
 request omits that unsupported parameter while `require_parameters=true`
 prevents silent rerouting. Neither response may contain or persist a reasoning
@@ -376,7 +394,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.4026231 for the author and USD 9.99871629 for the
+preflight is currently USD 4.4112031 for the author and USD 9.99871629 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the

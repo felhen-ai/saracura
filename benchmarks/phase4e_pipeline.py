@@ -16,7 +16,6 @@ import os
 import ssl
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -242,10 +241,18 @@ def _aggregate_preflight(
 def _response_content(response: Mapping[str, Any]) -> dict[str, Any]:
     try:
         choice = response["choices"][0]
-        content = choice["message"]["content"]
+        message = choice["message"]
+        content = message["content"]
         finish_reason = choice.get("finish_reason", "unknown")
     except (KeyError, IndexError, TypeError) as error:
         raise corpus.CorpusError("provider response content (missing)") from error
+    if not isinstance(message, Mapping):
+        raise corpus.CorpusError("provider response content (message)")
+    if message.get("reasoning") not in (None, "", []) or message.get("reasoning_details") not in (
+        None,
+        [],
+    ):
+        raise corpus.CorpusError("provider response reasoning")
     if not isinstance(content, str):
         raise corpus.CorpusError(
             f"provider response content ({type(content).__name__}, {finish_reason})"
@@ -476,7 +483,12 @@ def _lineage_or_none(
             "corpus_author" if actor == "author" else "corpus_reviewer"
         )
         journal = client.last_journal(stage)
-        if journal.get("task_ids") != list(expected_task_ids):
+        journal_task_ids = journal.get("task_ids")
+        if (
+            not isinstance(journal_task_ids, list)
+            or len(journal_task_ids) != len(expected_task_ids)
+            or set(journal_task_ids) != set(expected_task_ids)
+        ):
             return None
         return corpus.lineage_from_journal(journal, actor)
     except corpus.CorpusError:
@@ -522,6 +534,28 @@ def _store_settled_fallback(
         + b"\n",
     )
     return rows
+
+
+def _store_settled_fallback_required(
+    work_dir: Path,
+    slots: Sequence[Mapping[str, Any]],
+    *,
+    reason: str,
+    author_lineage: Mapping[str, str] | None,
+    reviewer_lineages: Mapping[str, Mapping[str, str]],
+) -> list[dict[str, Any]]:
+    """Persist terminal call resolution or surface the persistence failure."""
+
+    try:
+        return _store_settled_fallback(
+            work_dir,
+            slots,
+            reason=reason,
+            author_lineage=author_lineage,
+            reviewer_lineages=reviewer_lineages,
+        )
+    except Exception as error:
+        raise corpus.CorpusError("settled fallback persistence failure") from error
 
 
 def _load_ledger_or_fail_closed(work_dir: Path) -> corpus.BudgetLedger:
@@ -718,14 +752,13 @@ def run_corpus(
                 client, "author", [cast(str, slot["task_id"]) for slot in slots]
             )
             if settled_author_lineage is not None:
-                with suppress(Exception):
-                    _store_settled_fallback(
-                        work_dir,
-                        slots,
-                        reason="author_response_failure",
-                        author_lineage=settled_author_lineage,
-                        reviewer_lineages={},
-                    )
+                _store_settled_fallback_required(
+                    work_dir,
+                    slots,
+                    reason="author_response_failure",
+                    author_lineage=settled_author_lineage,
+                    reviewer_lineages={},
+                )
             raise
         try:
             author_lineage = corpus.lineage_from_journal(
@@ -740,14 +773,13 @@ def run_corpus(
                 client, "author", [cast(str, slot["task_id"]) for slot in slots]
             )
             if settled_author_lineage is not None:
-                with suppress(Exception):
-                    _store_settled_fallback(
-                        work_dir,
-                        slots,
-                        reason="author_validation_failure",
-                        author_lineage=settled_author_lineage,
-                        reviewer_lineages={},
-                    )
+                _store_settled_fallback_required(
+                    work_dir,
+                    slots,
+                    reason="author_validation_failure",
+                    author_lineage=settled_author_lineage,
+                    reviewer_lineages={},
+                )
             raise
         usable = [{**row, **author_lineage} for row in usable]
         capacity_rejected = [{**row, **author_lineage} for row in capacity_rejected]
@@ -762,14 +794,13 @@ def run_corpus(
                 )
                 if settled_reviewer_lineage is not None:
                     reviewer_lineages[cast(str, row["task_id"])] = settled_reviewer_lineage
-                with suppress(Exception):
-                    _store_settled_fallback(
-                        work_dir,
-                        slots,
-                        reason="reviewer_response_failure",
-                        author_lineage=author_lineage,
-                        reviewer_lineages=reviewer_lineages,
-                    )
+                _store_settled_fallback_required(
+                    work_dir,
+                    slots,
+                    reason="reviewer_response_failure",
+                    author_lineage=author_lineage,
+                    reviewer_lineages=reviewer_lineages,
+                )
                 raise
             review_results.append((review, journal))
             reviewer_lineages[cast(str, row["task_id"])] = corpus.lineage_from_journal(
@@ -781,14 +812,13 @@ def run_corpus(
                 usable, reviews, prior_rows=accepted, reviewer_lineages=reviewer_lineages
             )
         except Exception:
-            with suppress(Exception):
-                _store_settled_fallback(
-                    work_dir,
-                    slots,
-                    reason="review_resolution_failure",
-                    author_lineage=author_lineage,
-                    reviewer_lineages=reviewer_lineages,
-                )
+            _store_settled_fallback_required(
+                work_dir,
+                slots,
+                reason="review_resolution_failure",
+                author_lineage=author_lineage,
+                reviewer_lineages=reviewer_lineages,
+            )
             raise
         normal_resolutions = [
             *[(item, "rejected") for item in capacity_rejected],
@@ -798,14 +828,13 @@ def run_corpus(
         try:
             _store_call_resolution(work_dir, slots, normal_resolutions)
         except Exception:
-            with suppress(Exception):
-                _store_settled_fallback(
-                    work_dir,
-                    slots,
-                    reason="result_persistence_failure",
-                    author_lineage=author_lineage,
-                    reviewer_lineages=reviewer_lineages,
-                )
+            _store_settled_fallback_required(
+                work_dir,
+                slots,
+                reason="result_persistence_failure",
+                author_lineage=author_lineage,
+                reviewer_lineages=reviewer_lineages,
+            )
             raise
         accepted.extend(newly_accepted)
         rejected.extend([*capacity_rejected, *newly_rejected])

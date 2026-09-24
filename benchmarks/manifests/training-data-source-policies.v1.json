@@ -224,7 +224,7 @@
       "source_policy_id": "provider-model-generated",
       "allowed_splits": ["synthetic_train", "synthetic_dev", "synthetic_holdout"],
       "allowed_uses": ["synthetic_only"],
-      "author_model": "google/gemini-2.5-flash",
+      "author_model": "qwen/qwen3-30b-a3b",
       "reviewer_model": "meta-llama/llama-3.3-70b-instruct",
       "task_slots": 1600,
       "spend_ceiling_usd": 17.0,

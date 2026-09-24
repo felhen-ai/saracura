@@ -525,7 +525,7 @@ class Phase4EUniversalSyntheticException(BaseModel):
     source_policy_id: Literal["provider-model-generated"]
     allowed_splits: list[Literal["synthetic_train", "synthetic_dev", "synthetic_holdout"]]
     allowed_uses: list[Literal["synthetic_only"]]
-    author_model: Literal["google/gemini-2.5-flash"]
+    author_model: Literal["qwen/qwen3-30b-a3b"]
     reviewer_model: Literal["meta-llama/llama-3.3-70b-instruct"]
     task_slots: Literal[1600]
     spend_ceiling_usd: float

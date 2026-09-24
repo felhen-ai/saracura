@@ -127,13 +127,16 @@ def provider_preferences(
     """Pin a provider proven to honor the stage's exact request contract."""
 
     provider = AUTHOR_PROVIDER if stage == "corpus_author" else REVIEWER_PROVIDER
-    return {
+    preferences: dict[str, Any] = {
         "order": [provider],
         "allow_fallbacks": False,
         "require_parameters": True,
         "data_collection": "deny",
         "zdr": True,
     }
+    if stage == "corpus_author":
+        preferences["quantizations"] = ["fp8"]
+    return preferences
 
 
 class CorpusError(ValueError):
@@ -698,7 +701,7 @@ class AcceptedPacketRow(_Closed):
 
 
 def _author_wire_properties(slot: Mapping[str, Any], index: int) -> dict[str, dict[str, Any]]:
-    """Return a flat Gemini-compatible schema for one logical author record.
+    """Return a flat provider-compatible schema for one logical author record.
 
     The pinned route has demonstrated that object schemas nested inside array
     items can be reduced to empty objects in transit. Flat scalar properties
@@ -779,8 +782,8 @@ def _validate_author_batch(slots: Sequence[Mapping[str, Any]]) -> None:
 def author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Return an exact response schema for this planned author request.
 
-    The transport schema is deliberately flat because the pinned Gemini route
-    has returned empty objects for schemas nested inside array items. The
+    The transport schema is deliberately flat because the retired Gemini route
+    returned empty objects for schemas nested inside array items. The
     logical response remains one or two records and is reconstructed locally.
     """
 
