@@ -182,3 +182,23 @@ The create-only evidence bindings are:
 | sealed ledger file | `e26680d87e9bbe7a3dd24d9fc0f05a76283d73d65607deb88d67746ac0d16602` |
 
 The next create-only run removes `temperature` only from the Gemini reviewer request, binds its exact reasoning/output policy into the immutable plan and preserves the author request, quality gates and privacy policy.
+
+## V9 Gemini operational outcome
+
+V9 removed the unsupported reviewer `temperature`, requested minimal reasoning and raised reviewer output capacity to 512 tokens. This fixed the provider-parameter rejection and resolved four pairs before another Gemini reviewer call exceeded the 120-second transport timeout. The run stopped `INCONCLUSIVE` with 3 accepted, 5 rejected and 132 unresolved rows; only one pair was fully accepted.
+
+The partial rejection distribution was four reviewer answer disagreements and one local near-duplicate. Nine reviews completed, with four scenario disagreements recorded only as diagnostics. There were no local privacy violations or reviewer privacy flags. Two malformed reviewer responses recovered through the bounded response retry; the final reviewer call remained transport-uncertain and must never be replayed.
+
+The v9 run reported USD 0.02210190 in provider cost and USD 0.10156685 in conservative debit; no USD 10 reporting milestone was crossed. Research-ledger cumulative totals became USD 1.04133304 provider-reported and USD 7.12177568 conservative.
+
+The create-only evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan | `c12b7d09619b9131b856d797ce3d411542cce7a2436750f4cc30da73ac3de742` |
+| post-copy research inventory | `3a63900e11fbe1d4463784bfcc850e0f0d64f5b6dceb46a6bd051a3c204248b4` |
+| report-declared ledger | `ea9101a3cfc97b14b22d923e24a9f599b6275ee83b781935a9cbc519fbbdb279` |
+| sealed report file | `b56c4726c30a6ace335a1d6438206f08f21c924520da03d1dd9e2fce837518b4` |
+| sealed ledger file | `3c12ab1b618d0cdf6921e2c67c70606e1667f747ea90dad4dc717be7b7006580` |
+
+Provider-compatibility probes outside the research ledger reported an additional USD 0.00965475. Combined with v9, the diagnostic cycle consumed USD 0.03175665 and did not cross a USD 10 milestone. Three consecutive exact-schema probes of GPT-4.1 as reviewer then completed through Azure with valid structured output in 1.7-2.2 seconds. The next create-only run therefore keeps GPT-4.1 Mini as author and replaces only the reviewer with GPT-4.1; all prompts, privacy settings and quality gates remain unchanged.
