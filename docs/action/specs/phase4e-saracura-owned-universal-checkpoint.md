@@ -298,6 +298,14 @@ rejected content. Schema and task-contract codes may append a bounded,
 sanitized Pydantic field-path/error-type signature; input values and exception
 payloads remain prohibited. Field paths come only from a static local allowlist;
 provider-controlled or otherwise unknown locations collapse to `unknown`.
+Author instructions must make the planned scenario the single unambiguous
+workflow category, avoid blending other scenario categories, and express role
+semantics without ever copying codebook tokens into task text. A reviewer
+rejection is classified first by the four typed quality flags into the existing
+closed quality/privacy reasons; opaque `review_rejected` remains only when none
+of those flags explains the rejection. Reviewer reason codes are restricted by
+schema to a closed local enum, and an accepted review must return an empty code
+list. Reviewer-authored free-form reason text is never accepted or retained.
 The reviewer schema likewise inlines its semantic attestation and binds
 `selected_role=matches_rule`, without `$defs` or `$ref`. If local reviewer
 validation still fails, the surfaced diagnostic contains only a static
@@ -380,6 +388,15 @@ fixed acceptance minimum remains 120 complete pairs.
 The provider lane keeps explicit network authorization, ZDR/data-collection
 controls, no secrets in argv/logs/artifacts, atomic no-clobber writes, resumable
 cost ledger, bounded retries, and record-level author/reviewer response hashes.
+Provider error messages, codes, and `metadata.raw` are untrusted content and
+must never be interpolated into exceptions, stderr, or artifacts; failures use
+only static local categories plus the transport HTTP status when available.
+The same prohibition covers provider-controlled completion metadata such as
+`finish_reason`.
+Provider response IDs are likewise untrusted and ignored. Durable correlation
+uses a local request ID derived from the reservation ID and raw-response digest;
+the provider cannot inject text into the cost ledger, call journal, accepted
+packet, or rejection lineage through its response ID.
 The Qwen author request disables optional model reasoning with
 `reasoning_effort=none`; constrained generation must not spend the bounded
 response budget on hidden reasoning. The response parser also fails closed
@@ -399,7 +416,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.4112031 for the author and USD 9.71017229 for the
+preflight is currently USD 4.5293731 for the author and USD 9.98281229 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the

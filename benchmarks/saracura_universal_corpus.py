@@ -94,6 +94,26 @@ CRITERION_ROLES = (
     "overbroad_action",
     "duplicate_action",
 )
+REVIEWER_REASON_CODES = (
+    "no_choice",
+    "ambiguous",
+    "language",
+    "fictional",
+    "options",
+    "privacy",
+    "context",
+    "semantics",
+)
+ReviewerReasonCode = Literal[
+    "no_choice",
+    "ambiguous",
+    "language",
+    "fictional",
+    "options",
+    "privacy",
+    "context",
+    "semantics",
+]
 SCENARIO_CODEBOOK = (
     "Scenarios: action_required=required next action; "
     "informational_only=information only; suspected_abuse=suspected abuse; "
@@ -189,6 +209,19 @@ def _canonical(value: Any) -> bytes:
 
 def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _local_response_request_id(reservation_id: str, response_sha256: str) -> str:
+    """Create durable correlation without trusting provider-authored metadata."""
+
+    return "response-" + _sha(
+        _canonical(
+            {
+                "reservation_id": reservation_id,
+                "response_sha256": response_sha256,
+            }
+        )
+    )
 
 
 def _seeded(seed: str, *parts: object) -> int:
@@ -508,7 +541,7 @@ class AuthorGeneratedRecord(_Closed):
 class ReviewerGeneratedRecord(_Closed):
     status: Literal["accepted", "rejected"]
     selected_criterion_id: str | None
-    reason_codes: list[str] = Field(max_length=8)
+    reason_codes: list[ReviewerReasonCode] = Field(max_length=8)
     natural_language: bool
     fictional: bool
     exclusive_options: bool
@@ -520,7 +553,7 @@ class ReviewerRecord(_Closed):
     task_id: str = Field(pattern=r"^task-[0-9a-f]{64}$")
     status: Literal["accepted", "rejected"]
     selected_criterion_id: str | None
-    reason_codes: list[str] = Field(max_length=8)
+    reason_codes: list[ReviewerReasonCode] = Field(max_length=8)
     natural_language: bool
     fictional: bool
     exclusive_options: bool
@@ -893,11 +926,11 @@ def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": "Return the flat JSON object defined by the response schema, one numbered field group per supplied slot in order. Each group contains instruction, state summary, criterion descriptions, selected index, scenario, criterion roles, and selected role. Restate each closed semantic_target exactly, materialize it in rule, facts, and options, and set every selected_index=0. "
+            "content": "Return the flat JSON object defined by the response schema, one numbered field group per supplied slot in order. Each group contains instruction, state summary, criterion descriptions, selected index, scenario, criterion roles, and selected role. Restate each closed semantic_target exactly, materialize it in rule, facts, and options, and set every selected_index=0. Make the planned scenario the single obvious workflow category and do not blend facts from other scenario categories. "
             + SCENARIO_CODEBOOK
             + " "
             + CRITERION_ROLE_CODEBOOK
-            + " Infer roles from rule, facts, and options; do not write scenario or role labels in task text. State has the rule and needed facts; options are distinct, mutually exclusive, and have exactly one match. No ties, conditions, compounds, or catch-alls. Use generic fictional entities only: no personal data, credentials, real organizations, URLs, identifiers, @, or digit sequences over four. Instruction and criteria are at most 120 characters; state.summary at most 180 characters. Paired locales have equivalent meaning and identical attestations. Local code binds metadata, IDs, and gold position.",
+            + " Infer roles from rule, facts, and options. Never copy a scenario code or criterion-role token literally into instruction, state summary, or criterion descriptions; express only its natural-language meaning. State has the rule and needed facts; options are distinct, mutually exclusive, and have exactly one match. Each distractor expresses only its assigned role, not a blend of roles. No ties, conditions, compounds, or catch-alls. Use generic fictional entities only: no personal data, credentials, real organizations, URLs, identifiers, @, or digit sequences over four. Instruction and criteria are at most 120 characters; state.summary at most 180 characters. Paired locales have equivalent meaning and identical attestations. Local code binds metadata, IDs, and gold position.",
         },
         {"role": "user", "content": _canonical({"slots": list(slots)}).decode("utf-8")},
     ]
@@ -918,11 +951,11 @@ def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]
     return [
         {
             "role": "system",
-            "content": "Return a JSON object whose sole top-level key is reviews, one review with status, chosen criterion ID, reason codes, four quality flags, and independent semantic_equivalence_attestation. "
+            "content": "Return a JSON object whose sole top-level key is reviews, one review with status, chosen criterion ID, reason codes, four quality flags, and independent semantic_equivalence_attestation. Accepted reviews require reason_codes=[]. "
             + SCENARIO_CODEBOOK
             + " "
             + CRITERION_ROLE_CODEBOOK
-            + " Infer roles from rule, facts, and options; do not write role labels into criteria. Attest one scenario, distinct ordered roles, and selected_role=matches_rule at the chosen position. Select one criterion or reject. Independently judge fictionality from supplied content; do not treat provenance or stated synthetic intent as proof. fictional=true only for fictional content without an identifiable real person, organization, account, URL, credential, or private record. exclusive_options=true only if exactly one criterion is best. Check language, sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
+            + " Infer roles from rule, facts, and options; do not write role labels into criteria. Choose the single scenario that directly explains the decision, ignoring merely incidental wording. Attest one scenario, distinct ordered roles, and selected_role=matches_rule at the chosen position. Select one criterion or reject. Independently judge fictionality from supplied content; do not treat provenance or stated synthetic intent as proof. fictional=true only for fictional content without an identifiable real person, organization, account, URL, credential, or private record. exclusive_options=true only if exactly one criterion is best. Check language, sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
         },
         {"role": "user", "content": payload},
     ]
@@ -1588,6 +1621,17 @@ def resolve_reviews(
             raise CorpusError("reviewer provider lineage")
         reason: str | None = None
         if review.status != "accepted":
+            if review.private_or_sensitive:
+                reason = "privacy"
+            elif not review.fictional:
+                reason = "review_quality_fictional"
+            elif not review.natural_language:
+                reason = "review_quality_natural_language"
+            elif not review.exclusive_options:
+                reason = "review_quality_exclusive_options"
+            else:
+                reason = "review_rejected"
+        elif review.reason_codes:
             reason = "review_rejected"
         elif review.selected_criterion_id != row["selected_criterion_id"]:
             reason = "review_disagreement"
@@ -2784,29 +2828,18 @@ class OpenRouterCorpusClient:
             response = cast(dict[str, Any], json.loads(raw))
             response_error = response.get("error")
             if isinstance(response_error, dict):
-                error_message = " ".join(str(response_error.get("message", "")).split())[:240]
-                metadata = response_error.get("metadata")
-                if error_message == "Provider returned error" and isinstance(metadata, dict):
-                    error_message = " ".join(str(metadata.get("raw", "")).split())[:240]
-                raise CorpusError(
-                    f"provider response error ({response_error.get('code', 'unknown')}): "
-                    f"{error_message or 'no message'}"
-                )
+                raise CorpusError("provider response error")
             cost = Decimal(str(response["usage"]["cost"]))
-            request_id = cast(str, response["id"])
+            response_sha256 = _sha(raw)
+            request_id = _local_response_request_id(reservation_id, response_sha256)
         except CorpusError:
             raise
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             if "status" in locals() and status != 200:
-                try:
-                    error_payload = json.loads(raw)
-                    error_code = error_payload.get("error", {}).get("code", "unknown")
-                except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
-                    error_code = "invalid"
-                raise CorpusError(f"provider HTTP {status} ({error_code})") from error
+                raise CorpusError(f"provider HTTP {status}") from error
             raise CorpusError("provider response cost") from error
         try:
-            self.ledger.settle_request(reservation_id, request_id, cost, _sha(raw))
+            self.ledger.settle_request(reservation_id, request_id, cost, response_sha256)
         except CorpusError:
             write_ledger_snapshot(
                 self._ledger_directory, self.ledger, stop_reason="reported_provider_overspend"
@@ -2826,11 +2859,5 @@ class OpenRouterCorpusClient:
         write_ledger_snapshot(self._ledger_directory, self.ledger)
         self._last_journal = dict(self.ledger.provider_journal[-1])
         if status != 200:
-            response_error = response.get("error")
-            error_code = (
-                response_error.get("code", "unknown")
-                if isinstance(response_error, dict)
-                else "unknown"
-            )
-            raise CorpusError(f"provider HTTP {status} ({error_code})")
+            raise CorpusError(f"provider HTTP {status}")
         return response

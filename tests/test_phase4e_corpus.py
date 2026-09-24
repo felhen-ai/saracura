@@ -248,7 +248,7 @@ def test_author_prompts_share_closed_role_definitions_and_forbid_role_labels() -
     assert corpus.SCENARIO_CODEBOOK in reviewer_prompt
     assert author_prompt.count(corpus.SCENARIO_CODEBOOK) == 1
     assert reviewer_prompt.count(corpus.SCENARIO_CODEBOOK) == 1
-    assert "do not write scenario or role labels" in author_prompt
+    assert "Never copy a scenario code or criterion-role token literally" in author_prompt
     assert "do not write role labels" in reviewer_prompt
     assert "state.summary at most 180 characters" in author_prompt
 
@@ -500,6 +500,9 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
         "type": "string",
         "enum": ["matches_rule"],
     }
+    assert review["properties"]["reviews"]["items"]["properties"]["reason_codes"]["items"][
+        "enum"
+    ] == list(corpus.REVIEWER_REASON_CODES)
 
 
 def test_generated_author_choice_is_reordered_to_planned_gold_position() -> None:
@@ -569,6 +572,20 @@ def test_semantic_attestations_are_provider_emitted_not_position_derived() -> No
         )
     assert marker not in str(caught.value)
     assert "never persist" not in str(caught.value)
+
+    private_reason_marker = "private reviewer explanation must not persist"
+    with pytest.raises(
+        CorpusError, match=r"review record schema \(reason_codes:literal_error\)"
+    ) as caught:
+        corpus.materialize_reviewer_record(
+            {
+                **generated_review,
+                "reason_codes": [private_reason_marker],
+                "semantic_equivalence_attestation": attestation,
+            },
+            typed,
+        )
+    assert private_reason_marker not in str(caught.value)
 
 
 def test_same_gold_position_with_different_closed_author_semantics_rejects_pair() -> None:
@@ -685,6 +702,55 @@ def test_review_rejects_disagreement_privacy_and_normalized_duplicates() -> None
         "reviewer_reservation_id",
         "reviewer_request_id",
     }
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    (
+        ({"status": "rejected", "private_or_sensitive": True}, "privacy"),
+        ({"status": "rejected", "fictional": False}, "review_quality_fictional"),
+        (
+            {"status": "rejected", "natural_language": False},
+            "review_quality_natural_language",
+        ),
+        (
+            {"status": "rejected", "exclusive_options": False},
+            "review_quality_exclusive_options",
+        ),
+        ({"status": "rejected"}, "review_rejected"),
+    ),
+)
+def test_reviewer_rejection_keeps_only_closed_quality_diagnostics(
+    overrides: dict[str, Any], reason: str
+) -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    row = validate_author_rows([_record(slot)], [slot], _Counter())[0]
+    accepted, rejected = resolve_reviews([row], [_review(row, **overrides)])
+    assert accepted == []
+    assert rejected[0]["reason"] == reason
+    assert set(rejected[0]) == {
+        "task_id",
+        "split",
+        "reason",
+        "author_response_sha256",
+        "author_reservation_id",
+        "author_request_id",
+        "reviewer_response_sha256",
+        "reviewer_reservation_id",
+        "reviewer_request_id",
+    }
+
+
+def test_accepted_review_requires_empty_closed_reason_codes() -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    row = validate_author_rows([_record(slot)], [slot], _Counter())[0]
+    accepted, rejected = resolve_reviews([row], [_review(row, reason_codes=["semantics"])])
+    assert accepted == []
+    assert rejected[0]["reason"] == "review_rejected"
+
+    accepted, rejected = resolve_reviews([row], [_review(row)])
+    assert rejected == []
+    assert accepted[0]["review"]["reason_codes"] == []
 
 
 def test_semantic_fingerprint_rejects_criterion_permutation_and_renaming_globally() -> None:
@@ -876,6 +942,39 @@ def test_budget_uses_larger_debit_and_never_borrows_stage_budget() -> None:
         ledger.reserve("corpus_author", corpus.STAGE_LIMITS["corpus_author"] - Decimal("0.01"))
     with pytest.raises(CorpusError, match="network"):
         OpenRouterCorpusClient()
+
+
+def test_provider_error_payload_is_never_interpolated_or_persisted(tmp_path: Path) -> None:
+    marker = "private provider trace marker"
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+
+    def transport(
+        method: str, url: str, headers: Mapping[str, str], body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body
+        return (
+            400,
+            {},
+            json.dumps(
+                {
+                    "error": {
+                        "code": marker,
+                        "message": "Provider returned error",
+                        "metadata": {"raw": marker},
+                    }
+                }
+            ).encode(),
+        )
+
+    client = OpenRouterCorpusClient(
+        transport=transport,
+        allow_network=True,
+        ledger_directory=tmp_path / "ledger",
+    )
+    with pytest.raises(CorpusError, match=r"^provider response error$") as caught:
+        client.author(slots=[slot], max_output_tokens=640, api_key="test-key")
+    assert marker not in str(caught.value)
+    assert marker not in "".join(path.read_text() for path in (tmp_path / "ledger").glob("*.json"))
 
 
 def test_packet_lineage_binds_accepted_and_rejected_rows_to_settled_journal() -> None:
@@ -1241,7 +1340,11 @@ def test_fake_transport_is_pinned_resumable_and_never_needs_socket(
         method: str, url: str, headers: Mapping[str, str], body: bytes
     ) -> tuple[int, dict[str, str], bytes]:
         captured.update(method=method, url=url, headers=dict(headers), body=json.loads(body))
-        return 200, {}, b'{"id":"fake-request","usage":{"cost":0.000001}}'
+        return (
+            200,
+            {},
+            b'{"id":"private provider id must not persist","usage":{"cost":0.000001}}',
+        )
 
     client = OpenRouterCorpusClient(
         transport=fake, allow_network=True, ledger_directory=tmp_path / "ledger"
@@ -1255,7 +1358,11 @@ def test_fake_transport_is_pinned_resumable_and_never_needs_socket(
     assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured["body"]["provider"] == corpus.provider_preferences("corpus_author")
     assert "test-only" not in json.dumps(captured["body"])
-    assert client.ledger.entries[0]["request_id"] == "fake-request"
+    entry = client.ledger.entries[0]
+    assert entry["request_id"] == corpus._local_response_request_id(
+        entry["reservation_id"], entry["response_sha256"]
+    )
+    assert "private provider id must not persist" not in json.dumps(client.ledger.as_json())
     assert client.ledger.entries[0]["status"] == "settled"
 
 

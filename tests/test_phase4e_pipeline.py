@@ -83,6 +83,20 @@ def test_response_content_rejects_reasoning_without_retaining_it() -> None:
         == {}
     )
 
+    finish_marker = "private finish marker"
+    with pytest.raises(corpus.CorpusError, match=r"^provider response JSON$") as malformed:
+        pipeline._response_content(
+            {
+                "choices": [
+                    {
+                        "finish_reason": finish_marker,
+                        "message": {"content": "not-json"},
+                    }
+                ]
+            }
+        )
+    assert finish_marker not in str(malformed.value)
+
 
 def test_fake_transport_has_pinned_shape_and_does_not_store_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
@@ -187,15 +201,19 @@ def test_settled_invalid_author_response_is_atomically_resolved_without_retry(
             transport=invalid_author,
         )
     ledger = corpus.resume_ledger(tmp_path / "work" / "ledger")
+    entry = ledger.entries[0]
     assert ledger.provider_journal == [
         {
             "stage": "corpus_author",
-            "reservation_id": ledger.entries[0]["reservation_id"],
-            "request_id": "author-invalid",
+            "reservation_id": entry["reservation_id"],
+            "request_id": corpus._local_response_request_id(
+                entry["reservation_id"], entry["response_sha256"]
+            ),
             "task_ids": [slot["task_id"]],
-            "response_sha256": ledger.entries[0]["response_sha256"],
+            "response_sha256": entry["response_sha256"],
         }
     ]
+    assert "author-invalid" not in json.dumps(ledger.as_json())
 
     called = False
 
@@ -654,7 +672,14 @@ def test_source_contract_resolution_is_durable_and_has_settled_author_lineage(
     )
     assert all(row["author_response_sha256"] for row in resolved)
     assert all(row["author_reservation_id"] for row in resolved)
-    assert all(row["author_request_id"] == "source-contract-1" for row in resolved)
+    assert all(
+        row["author_request_id"]
+        == corpus._local_response_request_id(
+            row["author_reservation_id"], row["author_response_sha256"]
+        )
+        for row in resolved
+    )
+    assert "source-contract-1" not in json.dumps(resolved)
 
 
 def test_loader_expands_legacy_task_and_strict_call_records(tmp_path: Path) -> None:
@@ -801,8 +826,8 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     plan = corpus.build_plan()
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
-        "corpus_author": Decimal("4.4112031"),
-        "corpus_reviewer": Decimal("9.71017229"),
+        "corpus_author": Decimal("4.5293731"),
+        "corpus_reviewer": Decimal("9.98281229"),
     }
     assert totals["corpus_author"] < Decimal("5")
     assert totals["corpus_reviewer"] < Decimal("10")

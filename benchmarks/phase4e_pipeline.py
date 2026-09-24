@@ -243,7 +243,6 @@ def _response_content(response: Mapping[str, Any]) -> dict[str, Any]:
         choice = response["choices"][0]
         message = choice["message"]
         content = message["content"]
-        finish_reason = choice.get("finish_reason", "unknown")
     except (KeyError, IndexError, TypeError) as error:
         raise corpus.CorpusError("provider response content (missing)") from error
     if not isinstance(message, Mapping):
@@ -254,13 +253,11 @@ def _response_content(response: Mapping[str, Any]) -> dict[str, Any]:
     ):
         raise corpus.CorpusError("provider response reasoning")
     if not isinstance(content, str):
-        raise corpus.CorpusError(
-            f"provider response content ({type(content).__name__}, {finish_reason})"
-        )
+        raise corpus.CorpusError("provider response content type")
     try:
         value = json.loads(content)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
-        raise corpus.CorpusError(f"provider response JSON ({finish_reason})") from error
+        raise corpus.CorpusError("provider response JSON") from error
     if not isinstance(value, dict):
         raise corpus.CorpusError("provider response content")
     return cast(dict[str, Any], value)
