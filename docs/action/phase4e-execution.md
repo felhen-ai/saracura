@@ -27,7 +27,7 @@ sensitivity: public
 
 ## Decision
 
-Phase 4E.2 remains `NO-GO` for corpus generation and training. V11 eliminated every reviewer-schema failure and showed that the remaining gap is author quality, especially duplicated English tasks, plus rare Azure tail latency. A sampled GPT-4.1 author produced 20/20 locally valid rows with zero exact duplicate, while GPT-4.1 Mini independently accepted 20/20 previously clean rows as reviewer. The next create-only protocol therefore swaps those two checkpoints and treats a transport-uncertain call as a conservative rejection of only its precommitted tasks instead of invalidating the remaining benchmark.
+Phase 4E.2 is complete with a `PASS`. V12 resolved all 140 precommitted tasks, accepted 134, met every global, locale and option-count gate, and recorded no operational or privacy failure. This result authorizes the Phase 4E.3 training/checkpoint increment; it does not by itself register the planned runtime backend or authorize automation.
 
 ## Cumulative spend through 2026-09-24
 
@@ -244,3 +244,33 @@ The create-only evidence bindings are:
 | sealed ledger file | `1ad79bd3f1ee6446164169255269c926014a369937e58d22706c7d63a0bdfa5a` |
 
 Two bounded quality probes selected the next model pair. GPT-4.1 authored 20/20 locally valid sampled tasks with zero exact duplicate and one near-duplicate, costing USD 0.06416. GPT-4.1 Mini then independently reviewed 20 previously accepted rows with 20/20 acceptance, no transport or schema failure, median latency 1.984 seconds and USD 0.0115272 cost. V12 will use GPT-4.1 as author and GPT-4.1 Mini as reviewer, preserve Azure/ZDR/no-fallback routing and every quality threshold, and conservatively reject only the tasks attached to any transport-uncertain call while continuing the rest of the precommitted plan.
+
+## V12 completion outcome
+
+V12 promoted GPT-4.1 to author, used GPT-4.1 Mini as the independent answer-blind reviewer and applied the reviewed conservative transport policy. The complete 140-task plan finished without any uncertain call, retry recovery, schema failure, orphaned settlement or operational failure.
+
+The final result was `PASS`:
+
+- 134 accepted, 6 rejected and 0 unresolved tasks;
+- 64 accepted English rows and all 70 PT-BR rows accepted;
+- 64 complete accepted PT-BR/English pairs out of 70;
+- accepted option-count cells ranged from 18 to 20 across cardinalities 2 through 8;
+- global Wilson lower bound `0.9192728634` and complete-pair Wilson lower bound `0.8427095599`;
+- 0 local privacy violations and 0 reviewer privacy flags.
+
+The reviewer recorded 94 scenario disagreements and 41 criterion-role disagreements as non-blocking semantic diagnostics. Those values describe disagreement over the protocol's abstract metadata labels, not answer disagreement or an acceptance bypass: all six rejected rows remained in the 140-task denominator and every answer/content gate remained unchanged.
+
+V12 reported USD 0.5680124 in provider cost and USD 2.0644700 in conservative debit. Research-ledger cumulative totals became USD 2.72490864 provider-reported and USD 16.83009888 conservative. No run-local USD 10 reporting milestone was crossed. The durable spend index contains 3,340 ledger entries across 58 research directories: 3,313 settled, 6 uncertain and 21 historical open reservations, with zero overspent entry.
+
+The create-only evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pilot plan file | `e7069aad474ce32379499bcaf331f9d25383db42b32c97cdf2e3e13dfcd11d78` |
+| report-declared plan | `3356ec071525fae6585e7e68303b321944d3d9cc68dd2a726858a7b90a3a8618` |
+| post-copy research inventory | `f30907ec0170059d41db50bc9c7ec5b7817518f15ff4b7af589eb9ab5a993271` |
+| report-declared ledger | `5573cb185a0bb67a068df2960cc5b8049dba76c70e6c20468c8cbd6eea4eeffe` |
+| sealed report file | `a5414b88d38ccd502402843932c97a641433ef434d5d93c5120ccaf936d9d2a9` |
+| sealed ledger file | `db210edc536a3bfdbb891d09747f2bad48ad51ef169cc2e3f75f4905e0b671d9` |
+
+The durable work evidence is sealed create-only at `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v12`. Phase 4E.3 may now build the owned training packet and checkpoint under a separately reviewed spec. Runtime registration remains fail-closed until that checkpoint passes its holdout, calibration, latency and artifact-integrity gates.
