@@ -1182,13 +1182,42 @@ def validate_author_rows(
 
 def _author_rejection_reason(
     error: CorpusError,
-) -> Literal["semantic_target_mismatch", "semantic_label_leakage", "source_contract"]:
+) -> Literal[
+    "semantic_target_mismatch",
+    "semantic_label_leakage",
+    "author_record_schema",
+    "author_state_schema",
+    "author_option_cardinality",
+    "author_gold_position_mismatch",
+    "author_semantic_attestation",
+    "author_criterion_identity",
+    "author_cross_locale_attestation",
+    "author_task_contract",
+    "source_contract",
+]:
     """Classify a local author failure without retaining rejected content."""
 
     if str(error) == "author semantic target mismatch":
         return "semantic_target_mismatch"
     if str(error) == "author wrote semantic label into task text":
         return "semantic_label_leakage"
+    message = str(error)
+    if message.startswith("author record schema"):
+        return "author_record_schema"
+    if message == "author state schema":
+        return "author_state_schema"
+    if message == "author option cardinality":
+        return "author_option_cardinality"
+    if message == "author gold position mismatch":
+        return "author_gold_position_mismatch"
+    if message == "author semantic attestation":
+        return "author_semantic_attestation"
+    if message == "author criterion identity":
+        return "author_criterion_identity"
+    if message in {"unpaired cross-locale attestation", "cross-locale semantic attestation"}:
+        return "author_cross_locale_attestation"
+    if message.startswith("author task contract"):
+        return "author_task_contract"
     return "source_contract"
 
 

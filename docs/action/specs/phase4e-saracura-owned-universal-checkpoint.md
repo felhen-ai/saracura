@@ -270,7 +270,9 @@ composition keywords that are not portable across the pinned provider route.
 The reviewer receives the codebook
 but never the planned target. Author-side rejection evidence distinguishes a
 target mismatch, prohibited semantic-label leakage into task text, and other
-source-contract failure without retaining rejected content.
+closed schema, state, option-cardinality, gold-position, attestation, criterion
+identity, cross-locale, or typed task-contract failures without retaining
+rejected content.
 
 The Wilson stop is evaluated at each ten-author-batch boundary once at least 20
 planned tasks have resolved. Deterministic impossibility is always

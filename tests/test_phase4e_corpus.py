@@ -344,7 +344,7 @@ def test_source_contract_failure_resolves_planned_slot_but_tampering_is_fatal() 
     usable, rejected = classify_author_rows([generated], [slot], _Counter())
     assert usable == []
     assert rejected == [
-        {"task_id": slot["task_id"], "split": slot["split"], "reason": "source_contract"}
+        {"task_id": slot["task_id"], "split": slot["split"], "reason": "author_record_schema"}
     ]
 
     tampered = {**_record(slot), "domain": "tampered_domain"}
@@ -383,7 +383,7 @@ def test_author_rejection_reasons_are_durable_and_content_free() -> None:
     for record, reason in (
         (target_mismatch, "semantic_target_mismatch"),
         (label_leakage, "semantic_label_leakage"),
-        (source_failure, "source_contract"),
+        (source_failure, "author_record_schema"),
     ):
         usable, rejected = classify_author_rows([record], [slot], _Counter())
         assert usable == []
