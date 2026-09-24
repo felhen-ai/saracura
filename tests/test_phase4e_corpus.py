@@ -1322,8 +1322,18 @@ def test_presend_reservation_is_atomic_and_charged_after_transport_errors(
         )
     resumed = resume_ledger(ledger_directory)
     assert resumed.entries == client.ledger.entries
-    assert resumed.entries[0]["status"] == "reserved"
+    assert resumed.entries[0]["status"] == "uncertain"
     assert resumed.spent("corpus_author") > 0
+    assert resumed.provider_journal[0]["task_ids"] == [slot["task_id"]]
+    assert resumed.provider_journal[0]["reservation_id"] == resumed.entries[0]["reservation_id"]
+    if kind == "timeout":
+        assert resumed.entries[0]["response_sha256"] == "0" * 64
+        assert resumed.entries[0]["request_id"] == resumed.entries[0]["reservation_id"]
+    else:
+        assert resumed.entries[0]["response_sha256"] != "0" * 64
+        assert resumed.entries[0]["request_id"] == corpus._local_response_request_id(
+            resumed.entries[0]["reservation_id"], resumed.entries[0]["response_sha256"]
+        )
 
 
 def test_fake_transport_is_pinned_resumable_and_never_needs_socket(

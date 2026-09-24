@@ -250,8 +250,8 @@ their planner-owned and semantic fields match exactly. Provider-authored `state.
 limited to 180 characters so the complete framed state remains within the
 200-code-point source contract. A generated row that still violates the source
 or tokenizer contract is durably resolved as rejected under its original task
-identity; a settled request must never be left unresolved or blindly retried.
-Every settled provider call is therefore closed by one immutable, atomic
+identity; a terminal request must never be left unresolved or blindly retried.
+Every settled or outcome-unknown provider call is therefore closed by one immutable, atomic
 call-level resolution record covering all task identities in that call. If
 response parsing, local validation, review resolution, or post-response
 persistence cannot produce the normal accepted/rejected outcomes, that single
@@ -780,8 +780,12 @@ uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
 host with redirects and proxies disabled, persists the reservation ledger
 before each request, and records response digests rather than credentials. Its
 append-only work directory supports deterministic resume of completed task
-identities; an unresolved pre-send reservation fails conservatively instead of
-silently repeating a possibly charged request. Once a request is settled, its
+identities. A transport exception or unparseable response closes the charged
+reservation as terminal `uncertain`, preserving the full conservative debit and
+binding a content-free journal to the preplanned task identities; no provider
+message, exception payload, or invented cost is retained. A legacy unresolved
+pre-send reservation still fails conservatively instead of silently repeating a
+possibly charged request. Once a request is settled or marked uncertain, its
 entire task set is resolved by one atomic call-level record even when parsing,
 validation, review resolution, or ordinary result persistence fails; restart
 must skip those identities without another provider call. Author batching never

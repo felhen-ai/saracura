@@ -2377,6 +2377,21 @@ class BudgetLedger:
             entry["status"] = "overspent"
             raise CorpusError("reported total budget exhausted")
 
+    def mark_uncertain(self, reservation_id: str, response_sha256: str | None = None) -> None:
+        """Close an outcome-unknown transport attempt without releasing its debit."""
+
+        entry = next(
+            (item for item in self.entries if item["reservation_id"] == reservation_id), None
+        )
+        if entry is None or entry["status"] != "reserved":
+            raise CorpusError("budget reservation")
+        if response_sha256 is not None:
+            if not re.fullmatch(r"[0-9a-f]{64}", response_sha256):
+                raise CorpusError("budget reservation")
+            entry["response_sha256"] = response_sha256
+            entry["request_id"] = _local_response_request_id(reservation_id, response_sha256)
+        entry["status"] = "uncertain"
+
     def record(
         self,
         stage: str,
@@ -2432,7 +2447,7 @@ class BudgetLedger:
         if (
             entry is None
             or entry["stage"] != stage
-            or entry["status"] not in {"settled", "overspent"}
+            or entry["status"] not in {"settled", "overspent", "uncertain"}
             or not task_ids
             or len(task_ids) != len(set(task_ids))
             or not all(re.fullmatch(r"task-[0-9a-f]{64}", task_id) for task_id in task_ids)
@@ -2456,7 +2471,7 @@ class BudgetLedger:
         settled_ids = {
             entry["reservation_id"]
             for entry in self.entries
-            if entry["status"] in {"settled", "overspent"}
+            if entry["status"] in {"settled", "overspent", "uncertain"}
         }
         if journal_ids != settled_ids:
             raise CorpusError("settled provider call lacks durable journal")
@@ -2508,7 +2523,7 @@ class BudgetLedger:
                 or local_worst_case < 0
                 or provider_cost < 0
                 or debit != max(local_worst_case, provider_cost)
-                or entry["status"] not in {"reserved", "settled", "overspent"}
+                or entry["status"] not in {"reserved", "settled", "overspent", "uncertain"}
                 or not re.fullmatch(r"[0-9a-f]{64}", entry["response_sha256"])
             ):
                 raise CorpusError("ledger entry")
@@ -2519,6 +2534,18 @@ class BudgetLedger:
                     or entry["response_sha256"] != "0" * 64
                     or not re.fullmatch(r"reservation-[0-9a-f]{64}", entry["reservation_id"])
                 ):
+                    raise CorpusError("ledger reservation")
+            elif entry["status"] == "uncertain":
+                zero_digest = entry["response_sha256"] == "0" * 64
+                expected_request_id = (
+                    entry["reservation_id"]
+                    if zero_digest
+                    else _local_response_request_id(
+                        cast(str, entry["reservation_id"]),
+                        cast(str, entry["response_sha256"]),
+                    )
+                )
+                if provider_cost != 0 or entry["request_id"] != expected_request_id:
                     raise CorpusError("ledger reservation")
             elif not entry["request_id"]:
                 raise CorpusError("ledger entry")
@@ -2566,7 +2593,7 @@ class BudgetLedger:
                 )
                 or matching is None
                 or matching["stage"] != stage
-                or matching["status"] not in {"settled", "overspent"}
+                or matching["status"] not in {"settled", "overspent", "uncertain"}
                 or matching["request_id"] != request_id
                 or matching["response_sha256"] != response_sha256
                 or any(item["reservation_id"] == reservation_id for item in ledger.provider_journal)
@@ -2603,7 +2630,7 @@ def write_ledger_snapshot(
             }
             if (
                 earlier["status"] != "reserved"
-                or current["status"] not in {"settled", "overspent"}
+                or current["status"] not in {"settled", "overspent", "uncertain"}
                 or any(earlier[key] != current[key] for key in set(earlier) - mutable)
                 or Decimal(current["debit_usd"]) < Decimal(earlier["debit_usd"])
             ):
@@ -2782,6 +2809,24 @@ class OpenRouterCorpusClient:
             raise CorpusError("provider journal unavailable")
         return dict(self._last_journal)
 
+    def _close_uncertain(
+        self,
+        *,
+        stage: Literal["corpus_author", "corpus_reviewer"],
+        reservation_id: str,
+        task_ids: Sequence[str],
+        response_sha256: str | None = None,
+    ) -> None:
+        """Terminally bind an outcome-unknown attempt to its planned tasks."""
+
+        self.ledger.mark_uncertain(reservation_id, response_sha256)
+        write_ledger_snapshot(self._ledger_directory, self.ledger)
+        self.ledger.record_provider_journal(
+            stage=stage, reservation_id=reservation_id, task_ids=task_ids
+        )
+        write_ledger_snapshot(self._ledger_directory, self.ledger)
+        self._last_journal = dict(self.ledger.provider_journal[-1])
+
     def _request(
         self,
         *,
@@ -2817,12 +2862,20 @@ class OpenRouterCorpusClient:
         reservation_id = "reservation-" + _sha(_canonical({"stage": stage, "body": body.hex()}))
         self.ledger.reserve_request(stage, reservation_id, worst)
         write_ledger_snapshot(self._ledger_directory, self.ledger)
-        result = self._transport(
-            "POST",
-            "https://openrouter.ai/api/v1/chat/completions",
-            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            body,
-        )
+        try:
+            result = self._transport(
+                "POST",
+                "https://openrouter.ai/api/v1/chat/completions",
+                {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                body,
+            )
+        except Exception as error:
+            self._close_uncertain(
+                stage=stage,
+                reservation_id=reservation_id,
+                task_ids=task_ids,
+            )
+            raise CorpusError("provider transport failure") from error
         try:
             status, _, raw = cast(tuple[int, Mapping[str, str], bytes], result)
             response = cast(dict[str, Any], json.loads(raw))
@@ -2833,8 +2886,27 @@ class OpenRouterCorpusClient:
             response_sha256 = _sha(raw)
             request_id = _local_response_request_id(reservation_id, response_sha256)
         except CorpusError:
+            self._close_uncertain(
+                stage=stage,
+                reservation_id=reservation_id,
+                task_ids=task_ids,
+                response_sha256=_sha(raw) if "raw" in locals() and isinstance(raw, bytes) else None,
+            )
             raise
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            ArithmeticError,
+            AttributeError,
+            json.JSONDecodeError,
+        ) as error:
+            self._close_uncertain(
+                stage=stage,
+                reservation_id=reservation_id,
+                task_ids=task_ids,
+                response_sha256=_sha(raw) if "raw" in locals() and isinstance(raw, bytes) else None,
+            )
             if "status" in locals() and status != 200:
                 raise CorpusError(f"provider HTTP {status}") from error
             raise CorpusError("provider response cost") from error
