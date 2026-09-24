@@ -29,15 +29,15 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, m
 from benchmarks.encoder_loader import VerifiedSnapshot, load_encoder
 from benchmarks.encoder_registry import get_candidate
 from benchmarks.io import atomic_create
+from benchmarks.saracura_universal_policy import AUTHOR_MODEL as AUTHOR_MODEL
 from benchmarks.saracura_universal_policy import (
-    AUTHOR_MODEL,
     AUTHOR_PROVIDER,
-    REVIEWER_MODEL,
     REVIEWER_PROVIDER,
-    STAGE_LIMITS,
-    TOTAL_BUDGET,
     validate_phase4e_policy,
 )
+from benchmarks.saracura_universal_policy import REVIEWER_MODEL as REVIEWER_MODEL
+from benchmarks.saracura_universal_policy import STAGE_LIMITS as STAGE_LIMITS
+from benchmarks.saracura_universal_policy import TOTAL_BUDGET as TOTAL_BUDGET
 from saracura.contracts.models import ChoiceCriterion
 from saracura.serialization import canonical_json_bytes
 from saracura.universal.rendering import CapacityError, render_task, validate_rendered_capacity
@@ -722,16 +722,21 @@ def _author_slot_schema(slot: Mapping[str, Any]) -> dict[str, Any]:
         "minItems": option_count,
         "maxItems": option_count,
     }
-    properties["selected_index"] = {"const": 0}
+    properties["selected_index"] = {"type": "integer", "enum": [0]}
     properties["semantic_equivalence_attestation"] = {
-        "allOf": [properties["semantic_equivalence_attestation"]],
         "type": "object",
         "additionalProperties": False,
         "required": ["scenario", "criterion_roles", "selected_role"],
         "properties": {
-            "scenario": {"const": target["scenario"]},
-            "criterion_roles": {"const": target["criterion_roles"]},
-            "selected_role": {"const": target["selected_role"]},
+            "scenario": {"type": "string", "enum": [target["scenario"]]},
+            "criterion_roles": {
+                "type": "array",
+                "enum": [target["criterion_roles"]],
+                "items": {"type": "string"},
+                "minItems": option_count,
+                "maxItems": option_count,
+            },
+            "selected_role": {"type": "string", "enum": [target["selected_role"]]},
         },
     }
     return schema
@@ -2662,6 +2667,7 @@ class OpenRouterCorpusClient:
             self.ledger.record_provider_journal(
                 stage=stage, reservation_id=reservation_id, task_ids=task_ids
             )
+            self._last_journal = dict(self.ledger.provider_journal[-1])
             write_ledger_snapshot(
                 self._ledger_directory, self.ledger, stop_reason="reported_provider_overspend"
             )

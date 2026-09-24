@@ -13,6 +13,7 @@ import pytest
 
 from benchmarks import phase4e_pipeline as pipeline
 from benchmarks import saracura_universal_corpus as corpus
+from benchmarks import saracura_universal_training as training
 
 
 @pytest.fixture
@@ -131,7 +132,7 @@ def test_resume_refuses_unresolved_pre_send_reservation(
     assert not called
 
 
-def test_resume_refuses_settled_author_response_after_author_validation_failure(
+def test_settled_invalid_author_response_is_atomically_resolved_without_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
@@ -183,9 +184,7 @@ def test_resume_refuses_settled_author_response_after_author_validation_failure(
         called = True
         return 500, {}, b"{}"
 
-    with pytest.raises(
-        corpus.CorpusError, match="settled provider call lacks complete task resolution"
-    ):
+    with pytest.raises(corpus.CorpusError, match="incomplete corpus resolution"):
         pipeline.run_corpus(
             plan,
             tmp_path / "snapshot",
@@ -195,10 +194,87 @@ def test_resume_refuses_settled_author_response_after_author_validation_failure(
             transport=must_not_retry,
         )
     assert not called
+    records = list((tmp_path / "work" / "resolved").glob("call-*.json"))
+    assert len(records) == 1
+    fallback = json.loads(records[0].read_bytes())
+    assert fallback["kind"] == "settled_fallback"
+    assert fallback["resolutions"] == [
+        {
+            "task_id": slot["task_id"],
+            "split": slot["split"],
+            "reason": "author_validation_failure",
+            **corpus.lineage_from_journal(ledger.provider_journal[0], "author"),
+        }
+    ]
 
 
-def test_resume_refuses_settled_reviewer_response_after_validation_or_persistence_failure(
+def test_settled_author_overspend_is_atomically_resolved_without_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
+) -> None:
+    plan = tmp_path / "plan.json"
+    pipeline.write_plan(plan)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    slot = next(slot for slot in corpus.build_plan()["slots"] if slot["pair_id"] is None)
+    monkeypatch.setattr(pipeline, "_author_batches", lambda _plan: [[slot]])
+
+    def overspent_author(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers, body
+        charged = corpus.STAGE_LIMITS["corpus_author"] + Decimal("0.01")
+        return (
+            200,
+            {},
+            json.dumps(
+                {"id": "author-overspent", "usage": {"cost": str(charged)}, "choices": []}
+            ).encode(),
+        )
+
+    with pytest.raises(corpus.CorpusError, match="reported stage budget exhausted"):
+        pipeline.run_corpus(
+            plan,
+            tmp_path / "snapshot",
+            tmp_path / "work",
+            tmp_path / "packet",
+            allow_network=True,
+            transport=overspent_author,
+        )
+
+    ledger = corpus.resume_ledger(tmp_path / "work" / "ledger")
+    assert ledger.entries[0]["status"] == "overspent"
+    fallback = json.loads(next((tmp_path / "work" / "resolved").glob("call-*.json")).read_bytes())
+    assert fallback["kind"] == "settled_fallback"
+    assert fallback["resolutions"][0] == {
+        "task_id": slot["task_id"],
+        "split": slot["split"],
+        "reason": "author_response_failure",
+        **corpus.lineage_from_journal(ledger.provider_journal[0], "author"),
+    }
+
+    with pytest.raises(corpus.CorpusError, match="incomplete corpus resolution"):
+        pipeline.run_corpus(
+            plan,
+            tmp_path / "snapshot",
+            tmp_path / "work",
+            tmp_path / "packet",
+            allow_network=True,
+            transport=lambda *args: (_ for _ in ()).throw(AssertionError("provider retry")),
+        )
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    (
+        ("review_resolution", "review_resolution_failure"),
+        ("normal_persistence", "result_persistence_failure"),
+    ),
+)
+def test_post_reviewer_failure_atomically_resolves_all_settled_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bypass_aggregate_preflight: None,
+    failure: str,
+    reason: str,
 ) -> None:
     plan = tmp_path / "plan.json"
     pipeline.write_plan(plan)
@@ -263,14 +339,23 @@ def test_resume_refuses_settled_reviewer_response_after_validation_or_persistenc
             ).encode(),
         )
 
-    monkeypatch.setattr(
-        corpus,
-        "resolve_reviews",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            corpus.CorpusError("injected persistence failure")
-        ),
-    )
-    with pytest.raises(corpus.CorpusError, match="injected persistence failure"):
+    if failure == "review_resolution":
+        monkeypatch.setattr(
+            corpus,
+            "resolve_reviews",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                corpus.CorpusError("injected resolution failure")
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            pipeline,
+            "_store_call_resolution",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                corpus.CorpusError("injected persistence failure")
+            ),
+        )
+    with pytest.raises(corpus.CorpusError, match=r"injected .* failure"):
         pipeline.run_corpus(
             plan,
             tmp_path / "snapshot",
@@ -285,9 +370,7 @@ def test_resume_refuses_settled_reviewer_response_after_validation_or_persistenc
         "corpus_reviewer",
     ]
 
-    with pytest.raises(
-        corpus.CorpusError, match="settled provider call lacks complete task resolution"
-    ):
+    with pytest.raises(corpus.CorpusError, match="incomplete corpus resolution"):
         pipeline.run_corpus(
             plan,
             tmp_path / "snapshot",
@@ -296,9 +379,23 @@ def test_resume_refuses_settled_reviewer_response_after_validation_or_persistenc
             allow_network=True,
             transport=lambda *args: (_ for _ in ()).throw(AssertionError("provider retry")),
         )
+    fallback = json.loads(next((tmp_path / "work" / "resolved").glob("call-*.json")).read_bytes())
+    assert fallback["kind"] == "settled_fallback"
+    assert fallback["resolutions"][0]["reason"] == reason
+    assert set(fallback["resolutions"][0]) == {
+        "task_id",
+        "split",
+        "reason",
+        "author_response_sha256",
+        "author_reservation_id",
+        "author_request_id",
+        "reviewer_response_sha256",
+        "reviewer_reservation_id",
+        "reviewer_request_id",
+    }
 
 
-def test_resume_refuses_settled_reviewer_response_after_reviewer_validation_failure(
+def test_settled_invalid_reviewer_response_is_atomically_resolved_without_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
@@ -356,9 +453,7 @@ def test_resume_refuses_settled_reviewer_response_after_reviewer_validation_fail
         entry["stage"]
         for entry in corpus.resume_ledger(tmp_path / "work" / "ledger").provider_journal
     ] == ["corpus_author", "corpus_reviewer"]
-    with pytest.raises(
-        corpus.CorpusError, match="settled provider call lacks complete task resolution"
-    ):
+    with pytest.raises(corpus.CorpusError, match="incomplete corpus resolution"):
         pipeline.run_corpus(
             plan,
             tmp_path / "snapshot",
@@ -367,9 +462,17 @@ def test_resume_refuses_settled_reviewer_response_after_reviewer_validation_fail
             allow_network=True,
             transport=lambda *args: (_ for _ in ()).throw(AssertionError("provider retry")),
         )
+    fallback = json.loads(next((tmp_path / "work" / "resolved").glob("call-*.json")).read_bytes())
+    assert fallback["kind"] == "settled_fallback"
+    assert fallback["resolutions"][0]["reason"] == "reviewer_response_failure"
+    assert {key for key in fallback["resolutions"][0] if key.startswith("reviewer_")} == {
+        "reviewer_response_sha256",
+        "reviewer_reservation_id",
+        "reviewer_request_id",
+    }
 
 
-def test_capacity_resolution_uses_task_identity_paths(
+def test_capacity_resolution_uses_atomic_call_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
 ) -> None:
     plan = tmp_path / "plan.json"
@@ -412,7 +515,7 @@ def test_capacity_resolution_uses_task_identity_paths(
             allow_network=True,
             transport=fake,
         )
-    assert len(list((tmp_path / "work" / "resolved").glob("task-*.json"))) == 2
+    assert len(list((tmp_path / "work" / "resolved").glob("call-*.json"))) == 2
 
 
 def test_source_contract_resolution_is_durable_and_has_settled_author_lineage(
@@ -475,14 +578,126 @@ def test_source_contract_resolution_is_durable_and_has_settled_author_lineage(
             transport=fake,
         )
     resolved = [
-        json.loads(path.read_bytes())["row"]
-        for path in (tmp_path / "work" / "resolved").glob("task-*.json")
+        entry["row"]
+        for path in (tmp_path / "work" / "resolved").glob("call-*.json")
+        for entry in json.loads(path.read_bytes())["resolutions"]
+        if "row" in entry
     ]
     assert len(resolved) == 2
     assert all(row["reason"] == "source_contract" for row in resolved)
     assert all(row["author_response_sha256"] for row in resolved)
     assert all(row["author_reservation_id"] for row in resolved)
     assert all(row["author_request_id"] == "source-contract-1" for row in resolved)
+
+
+def test_loader_expands_legacy_task_and_strict_call_records(tmp_path: Path) -> None:
+    plan = corpus.build_plan()
+    pair = next(batch for batch in pipeline._author_batches(plan) if len(batch) == 2)
+    single = next(batch[0] for batch in pipeline._author_batches(plan) if len(batch) == 1)
+    legacy_row = {
+        "task_id": single["task_id"],
+        "split": single["split"],
+        "reason": "source_contract",
+    }
+    pipeline._store_resolution(tmp_path, legacy_row, "rejected")
+    lineage = {
+        "author_response_sha256": "a" * 64,
+        "author_reservation_id": "reservation-" + "a" * 64,
+        "author_request_id": "author-request",
+    }
+    fallback = {
+        "schema_version": "phase4e-corpus-call-resolution.v1",
+        "kind": "settled_fallback",
+        "resolutions": [
+            {
+                "task_id": slot["task_id"],
+                "split": slot["split"],
+                "reason": "author_validation_failure",
+                **lineage,
+            }
+            for slot in pair
+        ],
+    }
+    call_path = pipeline._call_work_path(tmp_path, [slot["task_id"] for slot in pair])
+    call_path.parent.mkdir(parents=True, exist_ok=True)
+    call_path.write_bytes(pipeline._canonical(fallback) + b"\n")
+
+    loaded = pipeline._load_resolved(tmp_path, plan)
+    assert set(loaded) == {single["task_id"], *(slot["task_id"] for slot in pair)}
+    assert all(loaded[slot["task_id"]]["status"] == "rejected" for slot in pair)
+
+
+@pytest.mark.parametrize(
+    "failure", ("duplicate", "unknown", "partial", "malformed", "content", "filename")
+)
+def test_loader_rejects_invalid_or_partial_call_resolution(tmp_path: Path, failure: str) -> None:
+    plan = corpus.build_plan()
+    pair = next(batch for batch in pipeline._author_batches(plan) if len(batch) == 2)
+    lineage = {
+        "author_response_sha256": "a" * 64,
+        "author_reservation_id": "reservation-" + "a" * 64,
+        "author_request_id": "author-request",
+    }
+    entries = [
+        {
+            "task_id": slot["task_id"],
+            "split": slot["split"],
+            "reason": "author_validation_failure",
+            **lineage,
+        }
+        for slot in pair
+    ]
+    if failure == "unknown":
+        entries[1]["task_id"] = "task-" + "0" * 64
+    elif failure == "partial":
+        entries.pop()
+    elif failure == "content":
+        entries[0]["raw_content"] = "must never persist"
+    payload: dict[str, Any] = {
+        "schema_version": "phase4e-corpus-call-resolution.v1",
+        "kind": "settled_fallback",
+        "resolutions": entries,
+    }
+    if failure == "malformed":
+        payload["unexpected"] = True
+    call_path = pipeline._call_work_path(tmp_path, [slot["task_id"] for slot in pair])
+    if failure == "filename":
+        call_path = call_path.with_name("call-" + "f" * 64 + ".json")
+    call_path.parent.mkdir(parents=True, exist_ok=True)
+    call_path.write_bytes(pipeline._canonical(payload) + b"\n")
+    if failure == "duplicate":
+        pipeline._store_resolution(
+            tmp_path,
+            {"task_id": pair[0]["task_id"], "split": pair[0]["split"], "reason": "legacy"},
+            "rejected",
+        )
+
+    with pytest.raises(corpus.CorpusError, match="work record"):
+        pipeline._load_resolved(tmp_path, plan)
+
+
+def test_lineage_lookup_never_reuses_a_previous_settled_call() -> None:
+    previous = {
+        "stage": "corpus_author",
+        "reservation_id": "reservation-" + "a" * 64,
+        "request_id": "previous-request",
+        "task_ids": ["task-" + "a" * 64],
+        "response_sha256": "b" * 64,
+    }
+
+    class _Client:
+        def last_journal(self, stage: str) -> dict[str, Any]:
+            assert stage == "corpus_author"
+            return previous
+
+    assert (
+        pipeline._lineage_or_none(
+            _Client(),  # type: ignore[arg-type]
+            "author",
+            ["task-" + "c" * 64],
+        )
+        is None
+    )
 
 
 def test_conservative_preflight_refuses_stage_overage() -> None:
@@ -496,7 +711,7 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     plan = corpus.build_plan()
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
-        "corpus_author": Decimal("4.6794424"),
+        "corpus_author": Decimal("4.7028424"),
         "corpus_reviewer": Decimal("9.99871629"),
     }
     assert totals["corpus_author"] < Decimal("5")
@@ -585,7 +800,7 @@ def test_verify_never_opens_holdout_before_a_claim_or_after_training_failure(
     monkeypatch.setattr(corpus, "validate_accepted_packet", full_validator)
     if failure == "pre_holdout_binding":
         monkeypatch.setattr(
-            pipeline.training,
+            training,
             "validate_accepted_packet_binding",
             lambda _packet: (_ for _ in ()).throw(RuntimeError("no training claim")),
         )
@@ -594,22 +809,28 @@ def test_verify_never_opens_holdout_before_a_claim_or_after_training_failure(
         return
 
     binding = object()
+
+    def bind_packet(_packet: Path) -> object:
+        calls.append("binding")
+        return binding
+
+    def validate_embeddings(_embeddings: Path, received: object) -> None:
+        if received is not binding:
+            raise AssertionError("binding changed")
+        calls.append("embeddings")
+
     monkeypatch.setattr(
-        pipeline.training,
+        training,
         "validate_accepted_packet_binding",
-        lambda _packet: calls.append("binding") or binding,
+        bind_packet,
     )
     monkeypatch.setattr(
-        pipeline.training,
+        training,
         "validate_embedding_capsule",
-        lambda _embeddings, received: (
-            calls.append("embeddings")
-            if received is binding
-            else (_ for _ in ()).throw(AssertionError("binding changed"))
-        ),
+        validate_embeddings,
     )
     monkeypatch.setattr(
-        pipeline.training,
+        training,
         "verify_training_capsule",
         lambda _training: (_ for _ in ()).throw(RuntimeError("training verification failed")),
     )
@@ -632,17 +853,17 @@ def test_verify_rejects_cross_mixed_embedding_and_training_lineage(
         "embedding_descriptor_sha256": "b" * 64,
     }
     manifest[field] = "c" * 64
-    monkeypatch.setattr(pipeline.training, "validate_accepted_packet_binding", lambda _: binding)
+    monkeypatch.setattr(training, "validate_accepted_packet_binding", lambda _: binding)
     monkeypatch.setattr(
-        pipeline.training,
+        training,
         "validate_embedding_capsule",
         lambda _, received: (
             capsule if received is binding else pytest.fail("packet binding changed")
         ),
     )
-    monkeypatch.setattr(pipeline.training, "verify_training_capsule", lambda _: manifest)
+    monkeypatch.setattr(training, "verify_training_capsule", lambda _: manifest)
 
-    with pytest.raises(pipeline.training.TrainingError, match="lineage binding"):
+    with pytest.raises(training.TrainingError, match="lineage binding"):
         pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
 
 
@@ -657,15 +878,15 @@ def test_verify_accepts_matching_embedding_and_training_lineage(
         "packet_receipt_sha256": "a" * 64,
         "embedding_descriptor_sha256": "b" * 64,
     }
-    monkeypatch.setattr(pipeline.training, "validate_accepted_packet_binding", lambda _: binding)
+    monkeypatch.setattr(training, "validate_accepted_packet_binding", lambda _: binding)
     monkeypatch.setattr(
-        pipeline.training,
+        training,
         "validate_embedding_capsule",
         lambda _, received: (
             capsule if received is binding else pytest.fail("packet binding changed")
         ),
     )
-    monkeypatch.setattr(pipeline.training, "verify_training_capsule", lambda _: manifest)
+    monkeypatch.setattr(training, "verify_training_capsule", lambda _: manifest)
 
     pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
 

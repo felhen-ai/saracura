@@ -236,6 +236,19 @@ limited to 180 characters so the complete framed state remains within the
 200-code-point source contract. A generated row that still violates the source
 or tokenizer contract is durably resolved as rejected under its original task
 identity; a settled request must never be left unresolved or blindly retried.
+Every settled provider call is therefore closed by one immutable, atomic
+call-level resolution record covering all task identities in that call. If
+response parsing, local validation, review resolution, or post-response
+persistence cannot produce the normal accepted/rejected outcomes, that single
+record resolves every still-unresolved identity as a content-free rejection,
+retains only its planned split plus the settled author/reviewer lineage already
+available, and uses a bounded reason code. Resume expands and validates both
+legacy per-task records and call-level records, rejects duplicate or partial
+coverage, and never resends an identity already bound to a settled call. Raw
+provider content and reasoning are never written to this fallback record.
+This includes a response whose reported cost settles the reservation into the
+terminal overspend state: its journal and task lineage are exposed to the same
+fallback path before the budget error is re-raised.
 
 Author and reviewer receive the same concise, closed definitions for criterion
 roles. They must derive each role from the rule, facts, and option meaning, and
@@ -252,7 +265,9 @@ duplicate record, topic routing, rule eligibility, urgency priority, approval
 threshold, reconciliation mismatch, fulfillment exception, access risk,
 schedule conflict, or content safety. The author response schema binds
 `selected_index=0` and the exact planned scenario and selected-first role list
-with JSON Schema constants before transport. The reviewer receives the codebook
+with inline single-value JSON Schema enums before transport; it avoids schema
+composition keywords that are not portable across the pinned provider route.
+The reviewer receives the codebook
 but never the planned target. Author-side rejection evidence distinguishes a
 target mismatch, prohibited semantic-label leakage into task text, and other
 source-contract failure without retaining rejected content.
@@ -349,7 +364,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.6794424 for the author and USD 9.99871629 for the
+preflight is currently USD 4.7028424 for the author and USD 9.99871629 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the
@@ -714,12 +729,15 @@ host with redirects and proxies disabled, persists the reservation ledger
 before each request, and records response digests rather than credentials. Its
 append-only work directory supports deterministic resume of completed task
 identities; an unresolved pre-send reservation fails conservatively instead of
-silently repeating a possibly charged request. Author batching never separates
-a planned cross-locale family, and every reviewer request contains exactly one
-validated row. At each required ten-batch boundary the command persists and
-applies the Wilson stop projection. It seals the packet only after all 1,600
-slots are resolved and every corpus minimum passes. `plan`, `extract`, `train`,
-and `verify` construct no socket.
+silently repeating a possibly charged request. Once a request is settled, its
+entire task set is resolved by one atomic call-level record even when parsing,
+validation, review resolution, or ordinary result persistence fails; restart
+must skip those identities without another provider call. Author batching never
+separates a planned cross-locale family, and every reviewer request contains
+exactly one validated row. At each required ten-batch boundary the command
+persists and applies the Wilson stop projection. It seals the packet only after
+all 1,600 slots are resolved and every corpus minimum passes. `plan`, `extract`,
+`train`, and `verify` construct no socket.
 
 Revision v0 extraction and training are CPU-only so descriptor-bound
 re-derivation is byte-exact across processes. MPS is reserved for later runtime

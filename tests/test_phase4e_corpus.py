@@ -179,7 +179,7 @@ def test_author_must_restate_the_selected_first_target_before_local_reordering()
         if slot["pair_id"] is None and slot["option_count"] == 2 and slot["gold_position"] == 1
     )
     target = cast(dict[str, Any], slot["semantic_target"])
-    generated = {
+    generated: dict[str, Any] = {
         "instruction": "Choose the fictional route supported by the stated rule.",
         "state": {"summary": "The rule requires the sole route supported by the fictional facts."},
         "criteria": [
@@ -327,7 +327,7 @@ def test_source_contract_failure_resolves_planned_slot_but_tampering_is_fatal() 
         for slot in build_plan()["slots"]
         if slot["pair_id"] is None and slot["option_count"] == 2
     )
-    generated = {
+    generated: dict[str, Any] = {
         "instruction": "Choose the route supported by the fictional state.",
         "state": {"summary": "x" * 181},
         "criteria": [
@@ -407,12 +407,18 @@ def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_
     }
     target = pair[0]["semantic_target"]
     properties = records["items"]["properties"]
-    assert properties["selected_index"] == {"const": 0}
+    assert properties["selected_index"] == {"type": "integer", "enum": [0]}
     attestation = properties["semantic_equivalence_attestation"]
     assert attestation["properties"] == {
-        "scenario": {"const": target["scenario"]},
-        "criterion_roles": {"const": target["criterion_roles"]},
-        "selected_role": {"const": "matches_rule"},
+        "scenario": {"type": "string", "enum": [target["scenario"]]},
+        "criterion_roles": {
+            "type": "array",
+            "enum": [target["criterion_roles"]],
+            "items": {"type": "string"},
+            "minItems": pair[0]["option_count"],
+            "maxItems": pair[0]["option_count"],
+        },
+        "selected_role": {"type": "string", "enum": ["matches_rule"]},
     }
     with pytest.raises(CorpusError, match="cross-locale author batch"):
         author_schema(pair[:1])
@@ -548,7 +554,7 @@ def test_generated_author_text_is_preserved_and_invalid_content_rejects() -> Non
         for slot in build_plan()["slots"]
         if slot["pair_id"] is None and slot["option_count"] == 2
     )
-    generated = {
+    generated: dict[str, Any] = {
         "instruction": "Choose  the supported fictional route. ",
         "state": {"summary": " A fictional request with  two spaces. "},
         "criteria": [

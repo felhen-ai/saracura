@@ -16,6 +16,7 @@ import os
 import ssl
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -31,6 +32,30 @@ _REVIEWER_MAX_OUTPUT_TOKENS = 192
 _OPENROUTER_HOST = "openrouter.ai"
 _OPENROUTER_PATH = "/api/v1/chat/completions"
 _WORK_SCHEMA = "phase4e-corpus-work.v1"
+_CALL_WORK_SCHEMA = "phase4e-corpus-call-resolution.v1"
+_FALLBACK_REASONS = frozenset(
+    {
+        "author_response_failure",
+        "author_validation_failure",
+        "reviewer_response_failure",
+        "review_resolution_failure",
+        "result_persistence_failure",
+    }
+)
+_AUTHOR_LINEAGE_FIELDS = frozenset(
+    {
+        "author_response_sha256",
+        "author_reservation_id",
+        "author_request_id",
+    }
+)
+_REVIEWER_LINEAGE_FIELDS = frozenset(
+    {
+        "reviewer_response_sha256",
+        "reviewer_reservation_id",
+        "reviewer_request_id",
+    }
+)
 _BOUNDARY_TEXT = "\U0001f9ea"
 _BOUNDARY_STATE_SUMMARY_CODEPOINTS = 180
 
@@ -262,25 +287,139 @@ def _work_path(work_dir: Path, task_id: str) -> Path:
     return work_dir / "resolved" / f"{task_id}.json"
 
 
+def _call_work_path(work_dir: Path, task_ids: Sequence[str]) -> Path:
+    if not task_ids or any(not task_id.startswith("task-") for task_id in task_ids):
+        raise corpus.CorpusError("work record")
+    digest = corpus._sha(_canonical(sorted(task_ids)))
+    return work_dir / "resolved" / f"call-{digest}.json"
+
+
+def _plan_slots_by_id(plan: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    slots = cast(list[Mapping[str, Any]], plan["slots"])
+    by_id = {cast(str, slot["task_id"]): slot for slot in slots}
+    if len(by_id) != len(slots):
+        raise corpus.CorpusError("work record")
+    return by_id
+
+
+def _call_task_sets(plan: Mapping[str, Any]) -> set[frozenset[str]]:
+    return {
+        frozenset(cast(str, slot["task_id"]) for slot in batch) for batch in _author_batches(plan)
+    }
+
+
+def _validate_legacy_resolution(
+    value: Mapping[str, Any], slots: Mapping[str, Mapping[str, Any]]
+) -> tuple[str, dict[str, Any]]:
+    if (
+        set(value) != {"schema_version", "task_id", "status", "row"}
+        or value["schema_version"] != _WORK_SCHEMA
+    ):
+        raise corpus.CorpusError("work record")
+    task_id = value["task_id"]
+    row = value["row"]
+    if (
+        not isinstance(task_id, str)
+        or task_id not in slots
+        or value["status"] not in {"accepted", "rejected"}
+        or not isinstance(row, dict)
+        or row.get("task_id") != task_id
+        or (value["status"] == "rejected" and row.get("split") != slots[task_id]["split"])
+    ):
+        raise corpus.CorpusError("work record")
+    return task_id, cast(dict[str, Any], value)
+
+
+def _validate_fallback_resolution(
+    value: Mapping[str, Any], slots: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    task_id = value.get("task_id")
+    allowed = {"task_id", "split", "reason"} | _AUTHOR_LINEAGE_FIELDS | _REVIEWER_LINEAGE_FIELDS
+    author_fields = set(value) & _AUTHOR_LINEAGE_FIELDS
+    reviewer_fields = set(value) & _REVIEWER_LINEAGE_FIELDS
+    if (
+        set(value) - allowed
+        or not isinstance(task_id, str)
+        or task_id not in slots
+        or value.get("split") != slots[task_id]["split"]
+        or value.get("reason") not in _FALLBACK_REASONS
+        or author_fields not in (set(), set(_AUTHOR_LINEAGE_FIELDS))
+        or reviewer_fields not in (set(), set(_REVIEWER_LINEAGE_FIELDS))
+        or any(not isinstance(value[key], str) for key in author_fields | reviewer_fields)
+    ):
+        raise corpus.CorpusError("work record")
+    return {
+        "schema_version": _WORK_SCHEMA,
+        "task_id": task_id,
+        "status": "rejected",
+        "row": dict(value),
+    }
+
+
+def _validate_call_resolution(
+    value: Mapping[str, Any],
+    slots: Mapping[str, Mapping[str, Any]],
+    call_task_sets: set[frozenset[str]],
+) -> list[tuple[str, dict[str, Any]]]:
+    if (
+        set(value) != {"schema_version", "kind", "resolutions"}
+        or value["schema_version"] != _CALL_WORK_SCHEMA
+    ):
+        raise corpus.CorpusError("work record")
+    kind = value["kind"]
+    resolutions = value["resolutions"]
+    if (
+        kind not in {"normal", "settled_fallback"}
+        or not isinstance(resolutions, list)
+        or not resolutions
+    ):
+        raise corpus.CorpusError("work record")
+    task_ids = [entry.get("task_id") for entry in resolutions if isinstance(entry, dict)]
+    if (
+        len(task_ids) != len(resolutions)
+        or any(not isinstance(task_id, str) for task_id in task_ids)
+        or len(set(task_ids)) != len(task_ids)
+        or frozenset(cast(str, task_id) for task_id in task_ids) not in call_task_sets
+    ):
+        raise corpus.CorpusError("work record")
+    expanded: list[tuple[str, dict[str, Any]]] = []
+    for entry in cast(list[dict[str, Any]], resolutions):
+        task_id = cast(str, entry["task_id"])
+        if kind == "normal":
+            if set(entry) != {"task_id", "status", "row"}:
+                raise corpus.CorpusError("work record")
+            expanded.append(
+                _validate_legacy_resolution({"schema_version": _WORK_SCHEMA, **entry}, slots)
+            )
+        else:
+            expanded.append((task_id, _validate_fallback_resolution(entry, slots)))
+    return expanded
+
+
 def _load_resolved(work_dir: Path, plan: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     if not work_dir.exists():
         return {}
     if not work_dir.is_dir():
         raise corpus.CorpusError("work directory")
-    known = {cast(str, slot["task_id"]) for slot in cast(list[Mapping[str, Any]], plan["slots"])}
+    slots = _plan_slots_by_id(plan)
+    call_task_sets = _call_task_sets(plan)
     resolved: dict[str, dict[str, Any]] = {}
     for path in (
         sorted((work_dir / "resolved").glob("*.json")) if (work_dir / "resolved").exists() else []
     ):
         value = _read_json(path)
-        if set(value) != {"schema_version", "task_id", "status", "row"}:
+        if value.get("schema_version") == _WORK_SCHEMA:
+            entries = [_validate_legacy_resolution(value, slots)]
+        elif value.get("schema_version") == _CALL_WORK_SCHEMA:
+            entries = _validate_call_resolution(value, slots, call_task_sets)
+            if path != _call_work_path(work_dir, [task_id for task_id, _ in entries]):
+                raise corpus.CorpusError("work record")
+        else:
             raise corpus.CorpusError("work record")
-        task_id = value["task_id"]
-        if not isinstance(task_id, str) or task_id not in known or task_id in resolved:
-            raise corpus.CorpusError("work record")
-        if value["status"] not in {"accepted", "rejected"} or not isinstance(value["row"], dict):
-            raise corpus.CorpusError("work record")
-        resolved[task_id] = value
+        for task_id, entry in entries:
+            if task_id in resolved:
+                raise corpus.CorpusError("work record")
+            resolved[task_id] = entry
     return resolved
 
 
@@ -295,6 +434,94 @@ def _store_resolution(work_dir: Path, row: Mapping[str, Any], status: str) -> No
         )
         + b"\n",
     )
+
+
+def _store_call_resolution(
+    work_dir: Path,
+    slots: Sequence[Mapping[str, Any]],
+    resolutions: Sequence[tuple[Mapping[str, Any], str]],
+) -> None:
+    expected_ids = {cast(str, slot["task_id"]) for slot in slots}
+    actual_ids = [row.get("task_id") for row, _ in resolutions]
+    if (
+        not expected_ids
+        or len(actual_ids) != len(expected_ids)
+        or set(actual_ids) != expected_ids
+        or any(status not in {"accepted", "rejected"} for _, status in resolutions)
+    ):
+        raise corpus.CorpusError("work record")
+    atomic_create(
+        _call_work_path(work_dir, sorted(expected_ids)),
+        _canonical(
+            {
+                "schema_version": _CALL_WORK_SCHEMA,
+                "kind": "normal",
+                "resolutions": [
+                    {"task_id": row["task_id"], "status": status, "row": row}
+                    for row, status in resolutions
+                ],
+            }
+        )
+        + b"\n",
+    )
+
+
+def _lineage_or_none(
+    client: corpus.OpenRouterCorpusClient,
+    actor: Literal["author", "reviewer"],
+    expected_task_ids: Sequence[str],
+) -> dict[str, str] | None:
+    try:
+        stage: Literal["corpus_author", "corpus_reviewer"] = (
+            "corpus_author" if actor == "author" else "corpus_reviewer"
+        )
+        journal = client.last_journal(stage)
+        if journal.get("task_ids") != list(expected_task_ids):
+            return None
+        return corpus.lineage_from_journal(journal, actor)
+    except corpus.CorpusError:
+        return None
+
+
+def _store_settled_fallback(
+    work_dir: Path,
+    slots: Sequence[Mapping[str, Any]],
+    *,
+    reason: str,
+    author_lineage: Mapping[str, str] | None,
+    reviewer_lineages: Mapping[str, Mapping[str, str]],
+) -> list[dict[str, Any]]:
+    if reason not in _FALLBACK_REASONS or not slots:
+        raise corpus.CorpusError("work record")
+    if author_lineage is not None and set(author_lineage) != _AUTHOR_LINEAGE_FIELDS:
+        raise corpus.CorpusError("work record")
+    rows: list[dict[str, Any]] = []
+    for slot in slots:
+        task_id = cast(str, slot["task_id"])
+        reviewer_lineage = reviewer_lineages.get(task_id)
+        if reviewer_lineage is not None and set(reviewer_lineage) != _REVIEWER_LINEAGE_FIELDS:
+            raise corpus.CorpusError("work record")
+        rows.append(
+            {
+                "task_id": task_id,
+                "split": slot["split"],
+                "reason": reason,
+                **(dict(author_lineage) if author_lineage is not None else {}),
+                **(dict(reviewer_lineage) if reviewer_lineage is not None else {}),
+            }
+        )
+    atomic_create(
+        _call_work_path(work_dir, sorted(cast(str, slot["task_id"]) for slot in slots)),
+        _canonical(
+            {
+                "schema_version": _CALL_WORK_SCHEMA,
+                "kind": "settled_fallback",
+                "resolutions": rows,
+            }
+        )
+        + b"\n",
+    )
+    return rows
 
 
 def _load_ledger_or_fail_closed(work_dir: Path) -> corpus.BudgetLedger:
@@ -480,37 +707,109 @@ def run_corpus(
             ),
             author_max_output_tokens,
         )
-        author_response = _response_content(
-            client.author(slots=slots, max_output_tokens=author_max_output_tokens, api_key=api_key)
-        )
-        author_lineage = corpus.lineage_from_journal(client.last_journal("corpus_author"), "author")
-        authored = author_response.get("records")
-        usable, capacity_rejected = corpus.validate_author_rows_with_verified_minilm(
-            authored, slots, snapshot
-        )
+        try:
+            author_response = _response_content(
+                client.author(
+                    slots=slots, max_output_tokens=author_max_output_tokens, api_key=api_key
+                )
+            )
+        except Exception:
+            settled_author_lineage = _lineage_or_none(
+                client, "author", [cast(str, slot["task_id"]) for slot in slots]
+            )
+            if settled_author_lineage is not None:
+                with suppress(Exception):
+                    _store_settled_fallback(
+                        work_dir,
+                        slots,
+                        reason="author_response_failure",
+                        author_lineage=settled_author_lineage,
+                        reviewer_lineages={},
+                    )
+            raise
+        try:
+            author_lineage = corpus.lineage_from_journal(
+                client.last_journal("corpus_author"), "author"
+            )
+            authored = author_response.get("records")
+            usable, capacity_rejected = corpus.validate_author_rows_with_verified_minilm(
+                authored, slots, snapshot
+            )
+        except Exception:
+            settled_author_lineage = _lineage_or_none(
+                client, "author", [cast(str, slot["task_id"]) for slot in slots]
+            )
+            if settled_author_lineage is not None:
+                with suppress(Exception):
+                    _store_settled_fallback(
+                        work_dir,
+                        slots,
+                        reason="author_validation_failure",
+                        author_lineage=settled_author_lineage,
+                        reviewer_lineages={},
+                    )
+            raise
         usable = [{**row, **author_lineage} for row in usable]
         capacity_rejected = [{**row, **author_lineage} for row in capacity_rejected]
-        for item in capacity_rejected:
-            _store_resolution(work_dir, item, "rejected")
-            rejected.append(item)
-            completed.add(cast(str, item["task_id"]))
-        review_results = [_review_one(client, row, api_key) for row in usable]
+        review_results: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        reviewer_lineages: dict[str, dict[str, str]] = {}
+        for row in usable:
+            try:
+                review, journal = _review_one(client, row, api_key)
+            except Exception:
+                settled_reviewer_lineage = _lineage_or_none(
+                    client, "reviewer", [cast(str, row["task_id"])]
+                )
+                if settled_reviewer_lineage is not None:
+                    reviewer_lineages[cast(str, row["task_id"])] = settled_reviewer_lineage
+                with suppress(Exception):
+                    _store_settled_fallback(
+                        work_dir,
+                        slots,
+                        reason="reviewer_response_failure",
+                        author_lineage=author_lineage,
+                        reviewer_lineages=reviewer_lineages,
+                    )
+                raise
+            review_results.append((review, journal))
+            reviewer_lineages[cast(str, row["task_id"])] = corpus.lineage_from_journal(
+                journal, "reviewer"
+            )
         reviews = [review for review, _ in review_results]
-        reviewer_lineages = {
-            cast(str, row["task_id"]): corpus.lineage_from_journal(journal, "reviewer")
-            for row, (_, journal) in zip(usable, review_results, strict=True)
-        }
-        newly_accepted, newly_rejected = corpus.resolve_reviews(
-            usable, reviews, prior_rows=accepted, reviewer_lineages=reviewer_lineages
-        )
-        for item in newly_accepted:
-            _store_resolution(work_dir, item, "accepted")
-            accepted.append(item)
-            completed.add(cast(str, item["task_id"]))
-        for item in newly_rejected:
-            _store_resolution(work_dir, item, "rejected")
-            rejected.append(item)
-            completed.add(cast(str, item["task_id"]))
+        try:
+            newly_accepted, newly_rejected = corpus.resolve_reviews(
+                usable, reviews, prior_rows=accepted, reviewer_lineages=reviewer_lineages
+            )
+        except Exception:
+            with suppress(Exception):
+                _store_settled_fallback(
+                    work_dir,
+                    slots,
+                    reason="review_resolution_failure",
+                    author_lineage=author_lineage,
+                    reviewer_lineages=reviewer_lineages,
+                )
+            raise
+        normal_resolutions = [
+            *[(item, "rejected") for item in capacity_rejected],
+            *[(item, "accepted") for item in newly_accepted],
+            *[(item, "rejected") for item in newly_rejected],
+        ]
+        try:
+            _store_call_resolution(work_dir, slots, normal_resolutions)
+        except Exception:
+            with suppress(Exception):
+                _store_settled_fallback(
+                    work_dir,
+                    slots,
+                    reason="result_persistence_failure",
+                    author_lineage=author_lineage,
+                    reviewer_lineages=reviewer_lineages,
+                )
+            raise
+        accepted.extend(newly_accepted)
+        rejected.extend([*capacity_rejected, *newly_rejected])
+        completed.update(cast(str, item["task_id"]) for item, _ in normal_resolutions)
         if index % 10 == 0 and len(completed) >= 20:
             accepted_ids = {cast(str, row["task_id"]) for row in accepted}
             resolution_statuses = [
