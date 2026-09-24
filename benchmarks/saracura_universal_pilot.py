@@ -29,10 +29,11 @@ from benchmarks.saracura_universal_policy import AUTHOR_MODEL, REVIEWER_MODEL
 
 ROOT = Path(__file__).parents[1]
 POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-policy.v1.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v2.json"
+RECOVERY_POLICY_V2_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v2.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v3.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v2"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v3"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
@@ -116,9 +117,13 @@ def _pilot_reviewer_system() -> str:
         "Choose the single scenario that directly explains the decision, ignoring merely "
         "incidental wording. Attest one scenario, distinct ordered roles, and "
         "selected_role=matches_rule at the chosen position. Select one criterion or reject. "
-        "Independently judge fictionality from supplied content; do not treat provenance or "
-        "stated synthetic intent as proof. fictional=true only for fictional content without an "
-        "identifiable real person, organization, account, URL, credential, or private record. "
+        "Treat fictional as an observable content-safety flag, not a claim about hidden author "
+        "intent. Set fictional=true when every visible entity is generic or clearly invented and "
+        "the content contains no identifiable real person, real organization, account, URL, "
+        "credential, private record, or claim tied to a real record. The absence of those "
+        "identifiers is sufficient: do not require external provenance or an explicit synthetic "
+        "declaration. Set fictional=false only when visible content identifies or claims a real "
+        "person, organization, account, URL, credential, private record, or real-world record. "
         "exclusive_options=true only if exactly one criterion is best. Check language, "
         "sufficiency, privacy, and sensitive patterns. You do not receive answer, author "
         "attestation, family, pair, gold position, sibling, or split metadata."
@@ -278,15 +283,17 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "cost_mode",
         "cost_report_interval_usd",
         "maximum_attempts_per_request",
+        "review_protocol",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v2",
+        "schema_version": "phase4e-protocol-pilot-recovery.v3",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
         "cost_mode": "report_only",
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
+        "review_protocol": "observable-identifiers.v1",
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -568,6 +575,7 @@ def build_plan() -> dict[str, Any]:
         "source_policy_registry_sha256": registry_sha,
         "policy_sha256": hashlib.sha256(POLICY_PATH.read_bytes()).hexdigest(),
         "recovery_policy_sha256": hashlib.sha256(RECOVERY_POLICY_PATH.read_bytes()).hexdigest(),
+        "reviewer_system_sha256": _sha(_pilot_reviewer_system().encode("utf-8")),
         "domain_scenario_map_sha256": _sha(_canonical(policy["domain_scenario_map"])),
         "slots": slots,
         "cost_estimate": {
@@ -1071,7 +1079,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v2",
+        "schema_version": "phase4e-protocol-pilot-report.v3",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),

@@ -96,3 +96,13 @@ The work tree was copied create-only to the durable research root at `~/Library/
 | sealed ledger file | `19e2ff03cbcf583da5a9a4d2d789dbf1cdbfb49c307a2aa1f7233bd9eef06392` |
 
 Phase 4E.3 remains blocked on quality evidence, not financial authorization. The next increment must replace the ambiguous fictionality test with an observable-content test for generic/invented entities versus identifiable real-world or sensitive identifiers, preserve all v2 blindness and privacy invariants, and rerun the protocol in new create-only v3 evidence paths.
+
+## V3 diagnostic outcome
+
+V3 replaced the epistemic fictionality wording with an observable-content rule and cryptographically bound the exact reviewer instruction into the plan. The run was intentionally stopped after 12 of 70 pairs because the first 24 resolved rows reproduced the same systematic pattern: 22 `review_quality_fictional` rejections and 2 exhausted reviewer responses, with no accepted row.
+
+The remaining ambiguity is now narrower. The answer-blind payload necessarily includes `task_id` and criterion IDs for routing and answer selection. V3 told the reviewer to reject visible identifiers but did not explicitly exclude those technical metadata fields from the content-safety judgment. The next protocol must state that fictionality and privacy quality flags are computed only from `instruction`, `state.summary` and criterion descriptions; `task_id`, criterion IDs, locale and domain are trusted routing metadata, not evaluated content.
+
+The interrupted run has 46 settled ledger entries and one open reservation because interruption occurred while reading a provider response. Settled provider-reported cost was USD 0.02153594 and settled conservative debit was USD 0.19660007; the open reservation remains conservatively accounted for and must never be replayed. Its work tree was copied create-only to `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v3`, and the post-copy inventory SHA-256 is `0fef1659be91b467e5fe59fbf04cb24e35e5ee3f8de54377b88c8e75374a7d5c`.
+
+V3 is `INCONCLUSIVE` by interruption and is not resumable. Phase 4E.3 remains blocked until a new create-only protocol resolves all 140 tasks and reaches `PASS`.

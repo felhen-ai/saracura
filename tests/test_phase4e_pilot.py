@@ -247,6 +247,10 @@ def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path)
     pilot.validate_pilot_plan(plan)
     slots = plan["slots"]
     assert plan["schema_version"] == pilot.PILOT_PLAN_SCHEMA
+    assert (
+        plan["reviewer_system_sha256"]
+        == hashlib.sha256(pilot._pilot_reviewer_system().encode("utf-8")).hexdigest()
+    )
     assert plan["seed"] == pilot.PILOT_SEED
     assert len(slots) == 140
     corpus_ids = {slot["task_id"] for slot in corpus.build_plan()["slots"]}
@@ -296,6 +300,15 @@ def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path)
         corpus._validate_packet_resolution([], [{"task_id": next(iter(pilot_ids))}], {"slots": []})
     with pytest.raises(ValidationError):
         AcceptedPacketRow.model_validate({"split": "protocol_pilot"})
+
+
+def test_pilot_reviewer_uses_observable_fictionality_rule() -> None:
+    system = pilot._pilot_reviewer_system()
+    assert "observable content-safety flag" in system
+    assert "absence of those identifiers is sufficient" in system
+    assert "do not require external provenance" in system
+    assert "fictional=false only when visible content" in system
+    assert "do not treat provenance or stated synthetic intent as proof" not in system
 
 
 def test_v2_ledger_reports_cost_without_enforcing_a_ceiling(tmp_path: Path) -> None:
