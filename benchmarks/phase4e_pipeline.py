@@ -31,7 +31,7 @@ _OPENROUTER_HOST = "openrouter.ai"
 _OPENROUTER_PATH = "/api/v1/chat/completions"
 _WORK_SCHEMA = "phase4e-corpus-work.v1"
 _BOUNDARY_TEXT = "\U0001f9ea"
-_BOUNDARY_STATE_SUMMARY_CODEPOINTS = 186
+_BOUNDARY_STATE_SUMMARY_CODEPOINTS = 180
 
 Transport = Callable[[str, str, Mapping[str, str], bytes], tuple[int, Mapping[str, str], bytes]]
 

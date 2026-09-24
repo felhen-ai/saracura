@@ -415,6 +415,76 @@ def test_capacity_resolution_uses_task_identity_paths(
     assert len(list((tmp_path / "work" / "resolved").glob("task-*.json"))) == 2
 
 
+def test_source_contract_resolution_is_durable_and_has_settled_author_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bypass_aggregate_preflight: None
+) -> None:
+    plan = tmp_path / "plan.json"
+    pipeline.write_plan(plan)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        corpus.VerifiedMiniLMTokenizerReceipt,
+        "create",
+        classmethod(lambda cls, snapshot: _Counter()),
+    )
+    calls = 0
+
+    def fake(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        nonlocal calls
+        del method, url, headers
+        calls += 1
+        slots = json.loads(json.loads(body)["messages"][1]["content"])["slots"]
+        records = []
+        for slot in slots:
+            authored = _record(slot)
+            records.append(
+                {
+                    "instruction": authored["instruction"],
+                    "state": {"summary": "x" * 181},
+                    "criteria": [
+                        {"description": criterion["description"]}
+                        for criterion in authored["criteria"]
+                    ],
+                    "selected_index": slot["gold_position"],
+                    "semantic_equivalence_attestation": authored[
+                        "semantic_equivalence_attestation"
+                    ],
+                }
+            )
+        content = json.dumps({"records": records}) if calls == 1 else "{}"
+        return (
+            200,
+            {},
+            json.dumps(
+                {
+                    "id": f"source-contract-{calls}",
+                    "usage": {"cost": 0},
+                    "choices": [{"message": {"content": content}}],
+                }
+            ).encode(),
+        )
+
+    with pytest.raises(corpus.CorpusError, match="author record count"):
+        pipeline.run_corpus(
+            plan,
+            tmp_path / "unused-snapshot",
+            tmp_path / "work",
+            tmp_path / "packet",
+            allow_network=True,
+            transport=fake,
+        )
+    resolved = [
+        json.loads(path.read_bytes())["row"]
+        for path in (tmp_path / "work" / "resolved").glob("task-*.json")
+    ]
+    assert len(resolved) == 2
+    assert all(row["reason"] == "source_contract" for row in resolved)
+    assert all(row["author_response_sha256"] for row in resolved)
+    assert all(row["author_reservation_id"] for row in resolved)
+    assert all(row["author_request_id"] == "source-contract-1" for row in resolved)
+
+
 def test_conservative_preflight_refuses_stage_overage() -> None:
     with pytest.raises(corpus.CorpusError, match="stage budget exhausted"):
         pipeline._preflight_request("corpus_author", b"x", 10_000_000)
@@ -426,9 +496,11 @@ def test_aggregate_preflight_calculates_full_plan_and_stops_before_transport(
     plan = corpus.build_plan()
     totals = pipeline._aggregate_preflight(plan, {}, corpus.BudgetLedger())
     assert totals == {
-        "corpus_author": Decimal("4.4416999"),
-        "corpus_reviewer": Decimal("9.42617229"),
+        "corpus_author": Decimal("4.6230499"),
+        "corpus_reviewer": Decimal("9.92714829"),
     }
+    assert totals["corpus_author"] < Decimal("5")
+    assert totals["corpus_reviewer"] < Decimal("10")
 
     plan_path = tmp_path / "plan.json"
     pipeline.write_plan(plan_path)

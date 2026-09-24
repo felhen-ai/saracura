@@ -224,7 +224,20 @@ attestation before local reordering. The local pipeline binds every
 planner-owned field, moves the authored selected criterion and its authored role
 together to the planned gold position, and derives the selected criterion ID;
 it never fabricates a semantic attestation. Legacy full records are accepted
-only when those fields match exactly.
+only when those fields match exactly. Provider-authored `state.summary` is
+limited to 180 characters so the complete framed state remains within the
+200-code-point source contract. A generated row that still violates the source
+or tokenizer contract is durably resolved as rejected under its original task
+identity; a settled request must never be left unresolved or blindly retried.
+
+Author and reviewer receive the same concise, closed definitions for criterion
+roles. They must derive each role from the rule, facts, and option meaning, and
+must not write the role name into criterion text. The selected option directly
+matches the rule; each distractor must unambiguously be exactly one of direct
+contradiction, irrelevance, insufficient evidence, unsafe action, premature
+action, overbroad action, or duplicate action. Rejection evidence distinguishes
+scenario-code disagreement from criterion-role disagreement without retaining
+provider reasoning or raw rejected content.
 
 The reviewer receives only `task_id`, `family_id`, locale, domain, instruction,
 state, and the ordered criterion IDs/descriptions. It does not receive split,
@@ -312,7 +325,7 @@ of USD 0.30/M input and USD 2.50/M output for the author, and USD 0.71/M input
 and USD 0.71/M output for the reviewer, the planned maximum payload and retry
 envelope must calculate to no more than each stage limit before the first
 request. For the frozen 300-pair/1,000-single plan, the conservative aggregate
-preflight is currently USD 4.4416999 for the author and USD 9.42617229 for the
+preflight is currently USD 4.6230499 for the author and USD 9.92714829 for the
 reviewer. These whole-run bounds must fit before transport begins; request-level
 checks and ledger debits remain independently authoritative during execution.
 Provider-reported costs and conservative local worst-case debits both enter the

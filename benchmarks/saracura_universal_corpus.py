@@ -349,7 +349,7 @@ class CrossLocaleAttestation(SemanticEquivalenceAttestation):
 
 
 class AuthorGeneratedState(_Closed):
-    summary: str = Field(min_length=1, max_length=200)
+    summary: str = Field(min_length=1, max_length=180)
 
 
 class AuthorGeneratedCriterion(_Closed):
@@ -664,7 +664,7 @@ def author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": "Return only one JSON object whose sole top-level key is records; never return or echo a slots wrapper. Create exactly one generated-content record for each planned slot, in the same order as the supplied slots. Each record contains only instruction, state, criteria, selected_index, and semantic_equivalence_attestation; every criterion contains only description. Independently emit the closed scenario code and the ordered closed criterion-role attestation. The selected role must be matches_rule and must be at selected_index. Make state.summary contain an objective decision rule plus all facts needed to apply it. Make criteria distinct actions or labels that are logically mutually exclusive: exactly one must be correct, every distractor must conflict with the rule, and no two options may both apply. Distractor overlap may be lexical but never logical. Set selected_index to the sole correct criterion's current zero-based index. Avoid subjective preferences, ties, conditional alternatives, compound options, and catch-all wording. The local pipeline binds planner metadata and criterion IDs, then moves the selected criterion and its authored role together to gold_position. Create synthetic tasks using only generic roles and generic entities; never use proper names. Keep instruction and every criterion description at most 120 characters and state.summary at most 200 characters. For a cross-locale pair, use equivalent meanings and exactly the same semantic attestation in both languages. Do not use personal data, credentials, real organizations, URLs, identifiers, the @ character, or digit sequences longer than four digits.",
+            "content": "Return only one JSON object whose sole top-level key is records; never return or echo a slots wrapper. Create exactly one generated-content record for each planned slot, in the same order as the supplied slots. Each record contains only instruction, state, criteria, selected_index, and semantic_equivalence_attestation; every criterion contains only description. Independently emit the closed scenario code and the ordered closed criterion-role attestation. Criterion roles: matches_rule directly satisfies the decision rule; contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; premature_action acts before a prerequisite; overbroad_action exceeds the rule; duplicate_action repeats an already-required action. Infer roles from the rule, facts, and option meaning; do not write role labels into criterion descriptions. The selected role must be matches_rule and must be at selected_index. Make state.summary contain an objective decision rule plus all facts needed to apply it. Make criteria distinct actions or labels that are logically mutually exclusive: exactly one must be correct, every distractor must conflict with the rule, and no two options may both apply. Distractor overlap may be lexical but never logical. Set selected_index to the sole correct criterion's current zero-based index. Avoid subjective preferences, ties, conditional alternatives, compound options, and catch-all wording. The local pipeline binds planner metadata and criterion IDs, then moves the selected criterion and its authored role together to gold_position. Create synthetic tasks using only generic roles and generic entities; never use proper names. Keep instruction and every criterion description at most 120 characters and state.summary at most 180 characters. For a cross-locale pair, use equivalent meanings and exactly the same semantic attestation in both languages. Do not use personal data, credentials, real organizations, URLs, identifiers, the @ character, or digit sequences longer than four digits.",
         },
         {"role": "user", "content": _canonical({"slots": list(slots)}).decode("utf-8")},
     ]
@@ -685,7 +685,7 @@ def reviewer_messages(rows: Sequence[ValidatedAuthorRow]) -> list[dict[str, str]
     return [
         {
             "role": "system",
-            "content": "Return only one JSON object whose sole top-level key is reviews; never return or echo a tasks wrapper. Produce exactly one generated review containing only status, the chosen criterion ID, reason codes, the four quality flags for natural language, fictionality, exclusive options, and private or sensitive content, and an independently emitted closed semantic_equivalence_attestation. The attestation must state one closed scenario code, an ordered distinct closed criterion-role list, and selected_role=matches_rule at the chosen criterion position. Independently select one criterion or reject. Independently judge fictionality from the supplied content; do not treat provenance or stated synthetic intent as proof. Set fictional=true only when the content itself is fictional and contains no identifiable real person, organization, account, URL, credential, or private record. Set exclusive_options=true only when exactly one criterion is best under the supplied facts. Check natural language, internal sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
+            "content": "Return only one JSON object whose sole top-level key is reviews; never return or echo a tasks wrapper. Produce exactly one generated review containing only status, the chosen criterion ID, reason codes, the four quality flags for natural language, fictionality, exclusive options, and private or sensitive content, and an independently emitted closed semantic_equivalence_attestation. Criterion roles: matches_rule directly satisfies the decision rule; contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; premature_action acts before a prerequisite; overbroad_action exceeds the rule; duplicate_action repeats an already-required action. Infer roles from the rule, facts, and option meaning; do not write role labels into criterion descriptions. The attestation must state one closed scenario code, an ordered distinct closed criterion-role list, and selected_role=matches_rule at the chosen criterion position. Independently select one criterion or reject. Independently judge fictionality from the supplied content; do not treat provenance or stated synthetic intent as proof. Set fictional=true only when the content itself is fictional and contains no identifiable real person, organization, account, URL, credential, or private record. Set exclusive_options=true only when exactly one criterion is best under the supplied facts. Check natural language, internal sufficiency, privacy, and sensitive patterns. You do not receive answer, author attestation, pair, gold position, sibling, or split metadata.",
         },
         {"role": "user", "content": payload},
     ]
@@ -840,9 +840,15 @@ def _materialize_author_record(
     return {**{field: planned[field] for field in planner_fields}, **generated}
 
 
-def _materialize_author_rows(
+def _author_records_in_plan_order(
     records: Any, slots: Sequence[Mapping[str, Any]]
-) -> list[dict[str, Any]]:
+) -> list[Mapping[str, Any]]:
+    """Bind a well-formed response batch to its immutable planned order.
+
+    Count and identity failures mean the provider response cannot be assigned
+    safely to planned slots, so they are intentionally fatal rather than slot
+    rejections.
+    """
     if not isinstance(records, list) or len(records) != len(slots):
         raise CorpusError("author record count")
     if not all(isinstance(record, Mapping) for record in records):
@@ -862,11 +868,16 @@ def _materialize_author_rows(
             by_id[task_id] = record
         if set(by_id) != {cast(str, slot["task_id"]) for slot in slots}:
             raise CorpusError("author task identity")
-        return [
-            _materialize_author_record(by_id[cast(str, slot["task_id"])], slot) for slot in slots
-        ]
+        return [by_id[cast(str, slot["task_id"])] for slot in slots]
+    return typed
+
+
+def _materialize_author_rows(
+    records: Any, slots: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     return [
-        _materialize_author_record(record, slot) for record, slot in zip(typed, slots, strict=True)
+        _materialize_author_record(record, slot)
+        for record, slot in zip(_author_records_in_plan_order(records, slots), slots, strict=True)
     ]
 
 
@@ -985,12 +996,27 @@ def validate_author_rows(
 def classify_author_rows(
     records: Any, slots: Sequence[Mapping[str, Any]], counter: TokenCounter
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Resolve each planned identity once; capacity failures retain their original split."""
-    materialized = _materialize_author_rows(records, slots)
+    """Resolve each planned identity once without preserving rejected content.
+
+    Source and tokenizer failures belong to the already-settled planned slot.
+    In contrast, batch count/identity corruption and planner-field tampering
+    are fatal because accepting a partial or altered plan would break the
+    precommitted identity boundary.
+    """
+    raw_records = _author_records_in_plan_order(records, slots)
     usable: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for record, slot in zip(materialized, slots, strict=True):
-        task = _author_task(record, slot)
+    for raw_record, slot in zip(raw_records, slots, strict=True):
+        try:
+            record = _materialize_author_record(raw_record, slot)
+            task = _author_task(record, slot)
+        except CorpusError as error:
+            if str(error) == "author changed planner-owned field":
+                raise
+            rejected.append(
+                {"task_id": slot["task_id"], "split": slot["split"], "reason": "source_contract"}
+            )
+            continue
         try:
             validate_rendered_capacity(render_task(task), counter)
         except CapacityError:
@@ -1062,6 +1088,43 @@ def _reviewer_semantic_attestation(row: Mapping[str, Any]) -> dict[str, Any]:
     except (KeyError, ValidationError) as error:
         raise CorpusError("cross-locale reviewer attestation") from error
     return review.semantic_equivalence_attestation.model_dump(mode="json")
+
+
+def _attestation_disagreement_reason(
+    author: SemanticEquivalenceAttestation,
+    reviewer: SemanticEquivalenceAttestation,
+    *,
+    option_count: int,
+    selected_position: int,
+) -> Literal["scenario_disagreement", "criterion_role_disagreement"] | None:
+    """Classify only a closed attestation mismatch; never retain reasoning."""
+    if author.scenario != reviewer.scenario:
+        return "scenario_disagreement"
+    if (
+        len(reviewer.criterion_roles) != option_count
+        or reviewer.selected_role != reviewer.criterion_roles[selected_position]
+        or author.criterion_roles != reviewer.criterion_roles
+        or author.selected_role != reviewer.selected_role
+    ):
+        return "criterion_role_disagreement"
+    return None
+
+
+def _cross_locale_pair_disagreement_reason(
+    rows: Sequence[Mapping[str, Any]],
+) -> Literal["scenario_disagreement", "criterion_role_disagreement"]:
+    """Classify a pair-only mismatch without retaining row content."""
+    try:
+        author_attestations = [_cross_locale_attestation(row) for row in rows]
+        reviewer_attestations = [_reviewer_semantic_attestation(row) for row in rows]
+    except CorpusError:
+        return "criterion_role_disagreement"
+    if (
+        len({attestation["scenario"] for attestation in author_attestations}) != 1
+        or len({attestation["scenario"] for attestation in reviewer_attestations}) != 1
+    ):
+        return "scenario_disagreement"
+    return "criterion_role_disagreement"
 
 
 def _cross_locale_pair_is_attested(rows: Sequence[Mapping[str, Any]]) -> bool:
@@ -1178,29 +1241,29 @@ def resolve_reviews(
             reason = "review_rejected"
         elif review.selected_criterion_id != row["selected_criterion_id"]:
             reason = "review_disagreement"
-        elif (
-            len(review.semantic_equivalence_attestation.criterion_roles) != len(row["criteria"])
-            or review.semantic_equivalence_attestation.selected_role
-            != review.semantic_equivalence_attestation.criterion_roles[
-                next(
-                    index
-                    for index, criterion in enumerate(row["criteria"])
-                    if criterion["id"] == review.selected_criterion_id
-                )
-            ]
-            or _canonical(row["semantic_equivalence_attestation"])
-            != _canonical(review.semantic_equivalence_attestation.model_dump(mode="json"))
-        ):
-            reason = "semantic_attestation_disagreement"
-        elif not review.natural_language:
-            reason = "review_quality_natural_language"
-        elif not review.fictional:
-            reason = "review_quality_fictional"
-        elif not review.exclusive_options:
-            reason = "review_quality_exclusive_options"
-        elif review.private_or_sensitive or _privacy(row):
-            reason = "privacy"
         else:
+            selected_position = next(
+                index
+                for index, criterion in enumerate(row["criteria"])
+                if criterion["id"] == review.selected_criterion_id
+            )
+            reason = _attestation_disagreement_reason(
+                SemanticEquivalenceAttestation.model_validate(
+                    row["semantic_equivalence_attestation"]
+                ),
+                review.semantic_equivalence_attestation,
+                option_count=len(row["criteria"]),
+                selected_position=selected_position,
+            )
+        if reason is None and not review.natural_language:
+            reason = "review_quality_natural_language"
+        elif reason is None and not review.fictional:
+            reason = "review_quality_fictional"
+        elif reason is None and not review.exclusive_options:
+            reason = "review_quality_exclusive_options"
+        elif reason is None and (review.private_or_sensitive or _privacy(row)):
+            reason = "privacy"
+        elif reason is None:
             fingerprint = semantic_fingerprint(row)
             normalized = _normalized(row)
             if fingerprint in seen:
@@ -1238,20 +1301,25 @@ def resolve_reviews(
         if isinstance(row.get("pair_id"), str):
             paired[cast(str, row["pair_id"])].append(row)
     accepted_by_task = {cast(str, row["task_id"]): row for row in accepted}
-    invalid_pair_task_ids = {
-        cast(str, row["task_id"])
-        for members in paired.values()
-        if len(members) == 2
-        and (
-            any(cast(str, row["task_id"]) not in accepted_by_task for row in members)
-            or not _cross_locale_pair_is_attested(
-                [accepted_by_task[cast(str, row["task_id"])] for row in members]
-            )
-        )
-        for row in members
-        if cast(str, row["task_id"]) in accepted_by_task
-    }
-    if invalid_pair_task_ids:
+    invalid_pair_reasons: dict[str, str] = {}
+    for members in paired.values():
+        # Unit-level validators may inspect one row in isolation. Runtime
+        # author batches always contain both preplanned members.
+        if len(members) != 2:
+            continue
+        accepted_members = [
+            accepted_by_task[cast(str, row["task_id"])]
+            for row in members
+            if cast(str, row["task_id"]) in accepted_by_task
+        ]
+        if len(accepted_members) != len(members):
+            for row in accepted_members:
+                invalid_pair_reasons[cast(str, row["task_id"])] = "paired_member_rejected"
+        elif not _cross_locale_pair_is_attested(accepted_members):
+            reason = _cross_locale_pair_disagreement_reason(accepted_members)
+            for row in accepted_members:
+                invalid_pair_reasons[cast(str, row["task_id"])] = reason
+    if invalid_pair_reasons:
         paired_lineages = {
             cast(str, row["task_id"]): {
                 key: row[key]
@@ -1265,17 +1333,17 @@ def resolve_reviews(
                 )
             }
             for row in accepted
-            if row["task_id"] in invalid_pair_task_ids
+            if row["task_id"] in invalid_pair_reasons
         }
-        accepted = [row for row in accepted if row["task_id"] not in invalid_pair_task_ids]
+        accepted = [row for row in accepted if row["task_id"] not in invalid_pair_reasons]
         rejected.extend(
             {
                 "task_id": task_id,
                 "split": next(row["split"] for row in rows if row["task_id"] == task_id),
-                "reason": "cross_locale_semantic_attestation",
+                "reason": invalid_pair_reasons[task_id],
                 **paired_lineages[task_id],
             }
-            for task_id in sorted(invalid_pair_task_ids)
+            for task_id in sorted(invalid_pair_reasons)
         )
     return accepted, rejected
 

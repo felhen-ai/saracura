@@ -198,6 +198,28 @@ def test_author_capacity_gate_and_reviewer_blindness_are_fail_closed() -> None:
     assert "sole top-level key is records" in author_messages(slots)[0]["content"]
 
 
+def test_author_prompts_share_closed_role_definitions_and_forbid_role_labels() -> None:
+    slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
+    generated_row = validate_author_rows([_record(slot)], [slot], _Counter())[0]
+    row = ValidatedAuthorRow.model_validate(generated_row)
+    author_prompt = author_messages([slot])[0]["content"]
+    reviewer_prompt = reviewer_messages([row])[0]["content"]
+    definitions = (
+        "Criterion roles: matches_rule directly satisfies the decision rule; "
+        "contradicts_rule conflicts with it; irrelevant_to_rule does not bear on it; "
+        "insufficient_evidence lacks needed facts; unsafe_action creates avoidable harm; "
+        "premature_action acts before a prerequisite; overbroad_action exceeds the rule; "
+        "duplicate_action repeats an already-required action."
+    )
+    requirement = (
+        "Infer roles from the rule, facts, and option meaning; do not write role labels into "
+        "criterion descriptions."
+    )
+    assert definitions in author_prompt and definitions in reviewer_prompt
+    assert requirement in author_prompt and requirement in reviewer_prompt
+    assert "state.summary at most 180 characters" in author_prompt
+
+
 def test_reviewer_blindness_is_structural_and_preserves_legitimate_text() -> None:
     slot = next(slot for slot in build_plan()["slots"] if slot["pair_id"] is None)
     author_row = _record(slot)
@@ -265,6 +287,37 @@ def test_verified_minilm_capacity_classification_resolves_every_preassigned_slot
     assert rejected == [
         {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"} for slot in slots
     ]
+
+
+def test_source_contract_failure_resolves_planned_slot_but_tampering_is_fatal() -> None:
+    slot = next(
+        slot
+        for slot in build_plan()["slots"]
+        if slot["pair_id"] is None and slot["option_count"] == 2
+    )
+    generated = {
+        "instruction": "Choose the route supported by the fictional state.",
+        "state": {"summary": "x" * 181},
+        "criteria": [
+            {"description": "Route A conflicts with the rule."},
+            {"description": "Route B satisfies the rule."},
+        ],
+        "selected_index": 1,
+        "semantic_equivalence_attestation": {
+            "scenario": "topic_routing",
+            "criterion_roles": ["contradicts_rule", "matches_rule"],
+            "selected_role": "matches_rule",
+        },
+    }
+    usable, rejected = classify_author_rows([generated], [slot], _Counter())
+    assert usable == []
+    assert rejected == [
+        {"task_id": slot["task_id"], "split": slot["split"], "reason": "source_contract"}
+    ]
+
+    tampered = {**_record(slot), "domain": "tampered_domain"}
+    with pytest.raises(CorpusError, match="author changed planner-owned field"):
+        classify_author_rows([tampered], [slot], _Counter())
 
 
 def test_author_schema_requires_exact_planned_cardinality_and_full_cross_locale_pair() -> None:
@@ -375,7 +428,7 @@ def test_same_gold_position_with_different_closed_author_semantics_rejects_pair(
     }
     accepted, rejected = resolve_reviews(rows, [_review(row) for row in rows])
     assert accepted == []
-    assert {row["reason"] for row in rejected} == {"cross_locale_semantic_attestation"}
+    assert {row["reason"] for row in rejected} == {"scenario_disagreement"}
 
     role_rows = validate_author_rows(_paired_records(slots), slots, _Counter())
     roles = list(role_rows[1]["semantic_equivalence_attestation"]["criterion_roles"])
@@ -403,7 +456,7 @@ def test_same_gold_position_with_different_closed_author_semantics_rejects_pair(
     }
     accepted, rejected = resolve_reviews(role_rows, [_review(row) for row in role_rows])
     assert accepted == []
-    assert {row["reason"] for row in rejected} == {"cross_locale_semantic_attestation"}
+    assert {row["reason"] for row in rejected} == {"criterion_role_disagreement"}
 
 
 def test_generated_author_text_is_preserved_and_invalid_content_rejects() -> None:
@@ -447,8 +500,8 @@ def test_generated_author_text_is_preserved_and_invalid_content_rejects() -> Non
         validate_author_rows([non_nfc], [slot], _Counter())
     assert json.dumps(non_nfc, ensure_ascii=False, sort_keys=True) == non_nfc_original
 
-    state_over_final_limit = {**generated, "state": {"summary": "x" * 190}}
-    with pytest.raises(CorpusError, match="author task contract"):
+    state_over_final_limit = {**generated, "state": {"summary": "x" * 181}}
+    with pytest.raises(CorpusError, match="author record schema"):
         validate_author_rows([state_over_final_limit], [slot], _Counter())
 
 
@@ -649,8 +702,8 @@ def test_cross_locale_acceptance_requires_matching_author_and_reviewer_attestati
     accepted, rejected = resolve_reviews(rows, tampered)
     assert accepted == []
     assert {row["reason"] for row in rejected} == {
-        "semantic_attestation_disagreement",
-        "cross_locale_semantic_attestation",
+        "scenario_disagreement",
+        "paired_member_rejected",
     }
     assert {row["task_id"] for row in rejected} == {row["task_id"] for row in rows}
 
