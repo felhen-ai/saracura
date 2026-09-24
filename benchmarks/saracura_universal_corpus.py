@@ -211,7 +211,7 @@ PILOT_LEDGER_POLICY_V1 = LedgerPolicy(
     automatic_retries=0,
     enforce_budget=True,
 )
-PILOT_LEDGER_POLICY = LedgerPolicy(
+PILOT_LEDGER_POLICY_V2 = LedgerPolicy(
     schema_version="phase4e-pilot-cost-ledger.v2",
     entry_stages={
         "pilot_author": Decimal("0"),
@@ -226,6 +226,21 @@ PILOT_LEDGER_POLICY = LedgerPolicy(
     automatic_retries=4,
     enforce_budget=False,
 )
+PILOT_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-pilot-cost-ledger.v3",
+    entry_stages={
+        "pilot_author": Decimal("0"),
+        "pilot_reviewer": Decimal("0"),
+    },
+    total_budget=Decimal("0"),
+    prices={
+        "pilot_author": (Decimal("0.40"), Decimal("1.60")),
+        "pilot_reviewer": (Decimal("0.75"), Decimal("3.75")),
+    },
+    journal_stages=frozenset({"pilot_author", "pilot_reviewer"}),
+    automatic_retries=4,
+    enforce_budget=False,
+)
 
 
 def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
@@ -233,6 +248,8 @@ def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
         return CORPUS_LEDGER_POLICY
     if schema == PILOT_LEDGER_POLICY_V1.schema_version:
         return PILOT_LEDGER_POLICY_V1
+    if schema == PILOT_LEDGER_POLICY_V2.schema_version:
+        return PILOT_LEDGER_POLICY_V2
     if schema == PILOT_LEDGER_POLICY.schema_version:
         return PILOT_LEDGER_POLICY
     raise CorpusError("ledger identity")
@@ -2893,6 +2910,8 @@ def provider_request_bytes(
     max_output_tokens: int,
     author_stage: str,
     author_model: str,
+    provider_override: Mapping[str, Any] | None = None,
+    author_reasoning_effort: str | None = "none",
 ) -> bytes:
     """Canonical provider body shared by preflight and transport."""
 
@@ -2901,7 +2920,9 @@ def provider_request_bytes(
         "messages": list(messages),
         "max_tokens": max_output_tokens,
         "temperature": 0,
-        "provider": provider_preferences(stage),
+        "provider": dict(provider_override)
+        if provider_override is not None
+        else provider_preferences(stage),
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -2911,8 +2932,8 @@ def provider_request_bytes(
             },
         },
     }
-    if stage == author_stage and model == author_model:
-        request["reasoning_effort"] = "none"
+    if stage == author_stage and model == author_model and author_reasoning_effort is not None:
+        request["reasoning_effort"] = author_reasoning_effort
     return _canonical(request)
 
 
@@ -2931,6 +2952,8 @@ class OpenRouterCorpusClient:
         reviewer_stage: str = "corpus_reviewer",
         author_model: str = AUTHOR_MODEL,
         reviewer_model: str = REVIEWER_MODEL,
+        provider_preferences_by_stage: Mapping[str, Mapping[str, Any]] | None = None,
+        author_reasoning_effort: str | None = "none",
     ) -> None:
         if not allow_network or transport is None:
             raise CorpusError("network requires explicit injected transport")
@@ -2948,6 +2971,11 @@ class OpenRouterCorpusClient:
         self.reviewer_stage = reviewer_stage
         self.author_model = author_model
         self.reviewer_model = reviewer_model
+        self.provider_preferences_by_stage = {
+            stage: dict(preferences)
+            for stage, preferences in (provider_preferences_by_stage or {}).items()
+        }
+        self.author_reasoning_effort = author_reasoning_effort
         self._transport = transport
         self._ledger_directory = ledger_directory
         self._last_journal: dict[str, Any] | None = None
@@ -3053,6 +3081,8 @@ class OpenRouterCorpusClient:
             max_output_tokens=max_output_tokens,
             author_stage=self.author_stage,
             author_model=self.author_model,
+            provider_override=self.provider_preferences_by_stage.get(stage),
+            author_reasoning_effort=self.author_reasoning_effort,
         )
         prices = (
             None

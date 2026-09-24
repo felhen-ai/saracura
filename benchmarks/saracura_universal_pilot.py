@@ -33,13 +33,22 @@ RECOVERY_POLICY_V2_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-re
 RECOVERY_POLICY_V3_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v3.json"
 RECOVERY_POLICY_V4_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v4.json"
 RECOVERY_POLICY_V5_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v5.json"
-RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v6.json"
+RECOVERY_POLICY_V6_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v6.json"
+RECOVERY_POLICY_PATH = ROOT / "benchmarks/manifests/phase4e-protocol-pilot-recovery.v7.json"
 BASELINE_PATH = ROOT / "benchmarks/manifests/phase4e-spend-baseline.v1.json"
 PILOT_SEED = "saracura-phase4e-protocol-pilot-v1"
-PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v6"
+PILOT_PLAN_SCHEMA = "phase4e-protocol-pilot-plan.v7"
 PILOT_SPLIT = "protocol_pilot"
 AUTHOR_STAGE = "pilot_author"
 REVIEWER_STAGE = "pilot_reviewer"
+PILOT_AUTHOR_MODEL = "openai/gpt-4.1-mini"
+PILOT_REVIEWER_MODEL = "google/gemini-3.8-flash"
+PILOT_PROVIDER_POLICY = {
+    "allow_fallbacks": True,
+    "require_parameters": True,
+    "data_collection": "deny",
+    "zdr": True,
+}
 AUTHOR_MAX_OUTPUT_TOKENS = 1024
 REVIEWER_MAX_OUTPUT_TOKENS = 192
 _BOUNDARY = "\U0001f9ea"
@@ -295,9 +304,11 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "cost_report_interval_usd",
         "maximum_attempts_per_request",
         "review_protocol",
+        "models",
+        "provider_policy",
     }
     if set(payload) != expected or payload != {
-        "schema_version": "phase4e-protocol-pilot-recovery.v6",
+        "schema_version": "phase4e-protocol-pilot-recovery.v7",
         "id": "phase4e-protocol-pilot-recovery",
         "recovery_of": "phase4e-protocol-pilot-policy.v1",
         "plan_schema_version": PILOT_PLAN_SCHEMA,
@@ -305,6 +316,19 @@ def validate_pilot_recovery_policy(path: Path = RECOVERY_POLICY_PATH) -> dict[st
         "cost_report_interval_usd": "10.00",
         "maximum_attempts_per_request": 5,
         "review_protocol": "genericity-schema-metadata.v1",
+        "models": {
+            AUTHOR_STAGE: {
+                "id": PILOT_AUTHOR_MODEL,
+                "input_usd_per_million": "0.40",
+                "output_usd_per_million": "1.60",
+            },
+            REVIEWER_STAGE: {
+                "id": PILOT_REVIEWER_MODEL,
+                "input_usd_per_million": "0.75",
+                "output_usd_per_million": "3.75",
+            },
+        },
+        "provider_policy": PILOT_PROVIDER_POLICY,
     }:
         raise corpus.CorpusError("pilot recovery policy")
     return payload
@@ -391,7 +415,17 @@ _PREFLIGHT_CACHE: dict[str, dict[str, Decimal]] = {}
 def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
     """Exact canonical-body worst case for the complete 140-task plan."""
 
-    key = _sha(_canonical([dict(slot) for slot in slots]))
+    key = _sha(
+        _canonical(
+            {
+                "slots": [dict(slot) for slot in slots],
+                "author_model": PILOT_AUTHOR_MODEL,
+                "reviewer_model": PILOT_REVIEWER_MODEL,
+                "provider_policy": PILOT_PROVIDER_POLICY,
+                "reviewer_system": _pilot_reviewer_system(),
+            }
+        )
+    )
     cached = _PREFLIGHT_CACHE.get(key)
     if cached is not None:
         return cached
@@ -401,12 +435,14 @@ def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
     for batch in batches:
         author_body = corpus.provider_request_bytes(
             stage=AUTHOR_STAGE,
-            model=AUTHOR_MODEL,
+            model=PILOT_AUTHOR_MODEL,
             messages=corpus.author_messages(batch),
             response_schema=corpus.author_schema(batch),
             max_output_tokens=AUTHOR_MAX_OUTPUT_TOKENS,
             author_stage=AUTHOR_STAGE,
-            author_model=AUTHOR_MODEL,
+            author_model=PILOT_AUTHOR_MODEL,
+            provider_override=PILOT_PROVIDER_POLICY,
+            author_reasoning_effort=None,
         )
         author_total += corpus.request_worst_case(
             AUTHOR_STAGE,
@@ -417,12 +453,14 @@ def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
         for slot in batch:
             reviewer_body = corpus.provider_request_bytes(
                 stage=REVIEWER_STAGE,
-                model=REVIEWER_MODEL,
+                model=PILOT_REVIEWER_MODEL,
                 messages=pilot_reviewer_messages(_boundary_row(slot)),
                 response_schema=pilot_reviewer_schema(1),
                 max_output_tokens=REVIEWER_MAX_OUTPUT_TOKENS,
                 author_stage=AUTHOR_STAGE,
-                author_model=AUTHOR_MODEL,
+                author_model=PILOT_AUTHOR_MODEL,
+                provider_override=PILOT_PROVIDER_POLICY,
+                author_reasoning_effort=None,
             )
             reviewer_total += corpus.request_worst_case(
                 REVIEWER_STAGE,
@@ -632,6 +670,11 @@ def build_plan() -> dict[str, Any]:
         "policy_sha256": hashlib.sha256(POLICY_PATH.read_bytes()).hexdigest(),
         "recovery_policy_sha256": hashlib.sha256(RECOVERY_POLICY_PATH.read_bytes()).hexdigest(),
         "reviewer_system_sha256": _sha(_pilot_reviewer_system().encode("utf-8")),
+        "models": {
+            AUTHOR_STAGE: PILOT_AUTHOR_MODEL,
+            REVIEWER_STAGE: PILOT_REVIEWER_MODEL,
+        },
+        "provider_policy_sha256": _sha(_canonical(PILOT_PROVIDER_POLICY)),
         "domain_scenario_map_sha256": _sha(_canonical(policy["domain_scenario_map"])),
         "slots": slots,
         "cost_estimate": {
@@ -655,7 +698,7 @@ def pilot_task_ids() -> frozenset[str]:
 
 
 def write_pilot_plan(output: Path) -> Path:
-    _require_component(output, "pilot-plan-v6", file_path=True)
+    _require_component(output, "pilot-plan-v7", file_path=True)
     atomic_create(output, _canonical(build_plan()) + b"\n")
     os.chmod(output, 0o600)
     return output
@@ -1137,7 +1180,7 @@ def build_pilot_report(
     )
     this_debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
     return {
-        "schema_version": "phase4e-protocol-pilot-report.v6",
+        "schema_version": "phase4e-protocol-pilot-report.v7",
         "decision": decision,
         "seed": plan["seed"],
         "plan_sha256": _sha(_canonical(plan)),
@@ -1293,9 +1336,9 @@ def run_pilot(
 
     from benchmarks import phase4e_pipeline as pipeline
 
-    _require_component(plan_path, "pilot-plan-v6", file_path=True)
-    _require_component(work_dir, "pilot-work-v6")
-    _require_component(report_dir, "pilot-report-v6")
+    _require_component(plan_path, "pilot-plan-v7", file_path=True)
+    _require_component(work_dir, "pilot-work-v7")
+    _require_component(report_dir, "pilot-report-v7")
     if not allow_network:
         raise corpus.CorpusError("pilot requires literal --allow-network")
     plan = _read_object(plan_path)
@@ -1333,8 +1376,13 @@ def run_pilot(
         policy=corpus.PILOT_LEDGER_POLICY,
         author_stage=AUTHOR_STAGE,
         reviewer_stage=REVIEWER_STAGE,
-        author_model=AUTHOR_MODEL,
-        reviewer_model=REVIEWER_MODEL,
+        author_model=PILOT_AUTHOR_MODEL,
+        reviewer_model=PILOT_REVIEWER_MODEL,
+        provider_preferences_by_stage={
+            AUTHOR_STAGE: PILOT_PROVIDER_POLICY,
+            REVIEWER_STAGE: PILOT_PROVIDER_POLICY,
+        },
+        author_reasoning_effort=None,
     )
     maximum_attempts = cast(int, recovery["maximum_attempts_per_request"])
     report_interval = Decimal(cast(str, recovery["cost_report_interval_usd"]))
@@ -1478,7 +1526,7 @@ def _run_pilot_batch(
         try:
             provider_response = client._request(
                 stage=AUTHOR_STAGE,
-                model=AUTHOR_MODEL,
+                model=PILOT_AUTHOR_MODEL,
                 messages=messages,
                 response_schema=author_schema,
                 max_output_tokens=AUTHOR_MAX_OUTPUT_TOKENS,
@@ -1552,7 +1600,7 @@ def _run_pilot_batch(
             try:
                 provider_response = client._request(
                     stage=REVIEWER_STAGE,
-                    model=REVIEWER_MODEL,
+                    model=PILOT_REVIEWER_MODEL,
                     messages=review_body,
                     response_schema=pilot_reviewer_schema(1),
                     max_output_tokens=REVIEWER_MAX_OUTPUT_TOKENS,
