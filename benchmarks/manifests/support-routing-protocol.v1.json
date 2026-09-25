@@ -18,7 +18,7 @@
   "guide_path": "docs/annotation-guides/support-routing.v1.md",
   "guide_sha256": "3f84ff77ae57d50048485787ff2d934996c77cb8847f400a004db6fd943f8d03",
   "policy_registry_path": "benchmarks/manifests/training-data-source-policies.v1.json",
-  "policy_registry_sha256": "347c5b495259541d89d47a23183c488b224a11d3a6b74afb78fcb34195be44dc",
+  "policy_registry_sha256": "633245cde07b9f944647e615e17855d392048074b1dbb4a021f5f29718a5e43c",
   "base_state_schema": "support-routing-base-state.v1",
   "split_algorithm": "support-routing-stratified-sha256.v1",
   "split_proportions": [

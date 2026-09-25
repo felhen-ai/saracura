@@ -1,0 +1,35 @@
+{
+  "schema_version": "phase4e-protocol-pilot-recovery.v11",
+  "id": "phase4e-protocol-pilot-recovery",
+  "recovery_of": "phase4e-protocol-pilot-policy.v1",
+  "plan_schema_version": "phase4e-protocol-pilot-plan.v11",
+  "cost_mode": "report_only",
+  "cost_report_interval_usd": "10.00",
+  "maximum_attempts_per_request": 5,
+  "review_protocol": "genericity-schema-metadata.v2",
+  "models": {
+    "pilot_author": {
+      "id": "openai/gpt-4.1-mini",
+      "input_usd_per_million": "0.40",
+      "output_usd_per_million": "1.60"
+    },
+    "pilot_reviewer": {
+      "id": "openai/gpt-4.1",
+      "input_usd_per_million": "2.00",
+      "output_usd_per_million": "8.00"
+    }
+  },
+  "provider_policy": {
+    "order": ["Azure"],
+    "allow_fallbacks": false,
+    "require_parameters": true,
+    "data_collection": "deny",
+    "zdr": true
+  },
+  "transport_timeout_seconds": 240,
+  "reviewer_request": {
+    "max_output_tokens": 512,
+    "temperature": 0,
+    "reasoning": null
+  }
+}

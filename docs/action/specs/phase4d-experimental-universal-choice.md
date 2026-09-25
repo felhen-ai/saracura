@@ -31,7 +31,7 @@ sensitivity: public
 
 ADR 0001 selected a two-tier research architecture: a universal tier accepts new typed Choice schemas, while the compiled tier remains an optional optimization for stable high-volume work. Phase 4C.2 proved that the exact Laya multilingual option-marker candidate can load and execute locally on the target MacBook, but that benchmark code is checkout-only, permits explicitly reported truncation for measurement, and does not expose a runtime backend. Phase 4D turns that candidate into an opt-in installed runtime path without converting systems evidence into a quality, calibration, licensing, or production claim.
 
-The immediate downstream pilot is internal e-mail triage in Portuguese. That pilot needs dynamic labels and instructions without a task-specific training run, but it must begin in shadow mode: Saracura may rank choices and collect the operator's agreement or correction, while deletion, archive, movement, reply, forwarding, or any other mailbox mutation remains outside this phase and the next pilot's initial authority.
+The downstream internal Portuguese e-mail triage pilot is deferred to Phase 4F, after the independently trained Phase 4E checkpoint and comparison gates. It needs dynamic labels and instructions without a task-specific training run, but it must begin in shadow mode: Saracura may rank choices and collect the operator's agreement or correction, while deletion, archive, movement, reply, forwarding, or any other mailbox mutation remains outside this phase and the pilot's initial authority.
 
 ## Objective
 
@@ -177,7 +177,7 @@ Wire the opt-in CLI and backend description, add the synthetic PT-BR example and
 7. Complete state, instruction, and all criteria either fit unchanged or fail with `CAPACITY_EXCEEDED` before inference. Tests cover state overflow, prefix overflow, choice overflow, special-token injection, non-NFC text/key, unsupported locale, question count, and criteria count.
 8. Default installation and invalid/help CLI paths do not import optional ML packages. Wheel and sdist contain the small candidate ledger and runtime modules but no benchmark package, model, cache, report, private input, or generated artifact.
 9. A deterministic fake universal backend proves dynamic PT-BR and English Choice schemas, declared criterion-order preservation, exact score-key validation, finite-score validation, usage accounting, and response semantics without ML dependencies.
-10. The bilingual documentation and synthetic example make the research-only, uncalibrated, no-automation boundary visible and identify e-mail triage only as the next shadow-mode pilot.
+10. The bilingual documentation and synthetic example make the research-only, uncalibrated, no-automation boundary visible and identify e-mail triage only as a future Phase 4F shadow-mode pilot.
 11. If the existing local Laya snapshot is available, a no-network CPU or MPS smoke returns one structurally valid universal response. The result supports only local execution compatibility and is not committed as quality evidence.
 12. Repository policy and both public READMEs no longer claim that every installed backend is compiled or that all dynamic Choice labels are absent; they document only the exact reviewed Phase 4D exception without widening the product boundary.
 
@@ -203,11 +203,25 @@ Rollout is a normal merge to `main`. The backend is opt-in and inert unless a ca
 
 Rollback is a Git revert of the Phase 4D merge. Existing immutable local snapshots remain outside Git and operator-managed; rollback does not delete them. Existing compiled behavior remains available throughout because the universal path is additive and selected explicitly.
 
-## Next gate: Phase 4E shadow e-mail triage
+## Next gate: Phase 4E Saracura-owned universal checkpoint
 
-After Phase 4D merges, a separately reviewed Phase 4E may connect a read-only mailbox ingestion adapter or exported-message fixture to the universal API for an internal PT-BR shadow pilot. It must minimize retained content, separate message access from Saracura scoring, show category and abstention without mutating the mailbox, capture the operator's agree/correct decision with provenance, and produce disjoint fit/evaluation inputs. Archive, delete, move, reply, forward, send, unsubscribe, or any other external action requires a later calibrated risk policy and separate authorization.
+The next reviewed increment is the planned Phase 4E Saracura-owned universal
+checkpoint and blind Laya control comparison. Phase 4E.1 contains only
+offline deterministic contracts and explicitly does not call a provider,
+acquire a model, train a checkpoint, or register `saracura-universal`. Until
+Phase 4E.3 seals a real synthetic-only checkpoint that passes its holdout gate,
+`universal-choice@phase4e-saracura-ranker.v1` and `saracura-universal` remain
+planned and unsupported.
 
-Phase 4E is the first product-quality feedback loop: operator corrections measure usefulness on a real workflow and form human-original PT-BR evidence. It must not treat live e-mail as public training data, publish message content, or use corrections as an evaluation set after fitting on them.
+A read-only internal e-mail shadow pilot is Phase 4F, after the checkpoint and
+comparison gates. It must minimize retained content, separate message access
+from Saracura scoring, show category and abstention without mutating the
+mailbox, capture the operator's agree/correct decision with provenance, and
+produce disjoint fit/evaluation inputs. Archive, delete, move, reply, forward,
+send, unsubscribe, or any other external action requires a later calibrated
+risk policy and separate authorization. Corrections are private first-party
+evidence only under a new reviewed policy; they are not public training data
+and never serve as evaluation after fitting.
 
 ## Risks
 
@@ -217,4 +231,4 @@ Phase 4E is the first product-quality feedback loop: operator corrections measur
 - **No-truncation can reject realistic long e-mails:** expose the capacity error and measure its frequency in the shadow pilot; do not silently shorten content in order to improve apparent success.
 - **Large local model can make the pilot feel slow or memory-heavy:** keep the backend opt-in, report current systems limits honestly, and preserve the compiled tier as the future high-volume path.
 - **Research-only candidate provenance remains unresolved:** keep the runtime disposition in the model description, avoid release/production claims, and revisit provenance before any production or redistributed-weight plan.
-- **Mailbox pilot can create privacy or action risk:** Phase 4D contains no connector, and Phase 4E begins read-only with minimized retention and explicit operator feedback.
+- **Mailbox pilot can create privacy or action risk:** Phase 4D contains no connector. A read-only, minimized-retention pilot is deferred to Phase 4F after the Phase 4E checkpoint and comparison gates.

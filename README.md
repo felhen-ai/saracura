@@ -9,7 +9,7 @@ status: current
 canonical: README.md
 globalRef: qmd://saracura/README.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-22
+lastReviewedAt: 2026-09-23
 sourceRefs: []
 related:
   - docs/README.pt-BR.md
@@ -47,8 +47,9 @@ English is the canonical language for technical documentation. The quickstart, p
 - local in-process runtime and CLI
 - one opt-in experimental `laya-universal` backend for the exact dynamic Choice workflow
 - opt-in research lanes for encoder acquisition, synthetic head training, human PT-BR calibration, and external controls
+- planned-only Phase 4E policy and deterministic ranker contracts; no `saracura-universal` runtime is installed
 
-Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels outside the exact experimental Phase 4D Choice workflow, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
+Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, `saracura-universal`, dynamic labels outside the exact experimental Phase 4D Choice workflow, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. The planned `universal-choice@phase4e-saracura-ranker.v1` contract is unsupported until Phase 4E.3 seals a real checkpoint that passes its holdout gate. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
 ## Two-tier research architecture
 
@@ -158,7 +159,7 @@ isolated optional dependency group, an operator-supplied immutable local Laya
 snapshot, and an explicit CPU or MPS device; it never downloads, discovers, or
 contacts a model provider. The synthetic PT-BR request in
 [`examples/ptbr-universal-request.json`](examples/ptbr-universal-request.json)
-uses e-mail triage only as the next shadow-mode pilot and contains no mailbox
+uses e-mail triage only as a future Phase 4F shadow-mode pilot and contains no mailbox
 data.
 
 ```bash
@@ -177,6 +178,85 @@ any other mailbox change. The candidate remains
 `research_only_unresolved_provenance`; a successful local smoke demonstrates
 execution compatibility only, not quality, calibration, licensing, or
 production readiness.
+
+## Phase 4E planned Saracura-owned universal checkpoint
+
+Phase 4E.1 adds only offline policy, rendering, ranker, checkpoint, and
+backend/workflow compatibility contracts for a future Saracura-owned universal
+ranker. It does not download a MiniLM snapshot, call a provider, generate a
+corpus, train a checkpoint, or register `saracura-universal` in the CLI or
+runtime. The future `universal-choice@phase4e-saracura-ranker.v1` workflow is
+therefore planned and unsupported until Phase 4E.3 seals a real synthetic-only
+checkpoint and it passes the reviewed holdout gate. Laya remains an external
+control, never a teacher, checkpoint source, or Saracura-owned model.
+
+### Phase 4E operator lane
+
+The checkout-only Phase 4E pipeline is explicit and offline-first. Its `plan`,
+`extract`, `train`, and `verify` commands construct no socket. Generated
+material stays under ignored `.artifacts/`; it is synthetic-only research
+evidence, not a runtime registration, quality claim, or automation authority.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline plan \
+  --output .artifacts/phase4e/plan.json
+
+# Only corpus and pilot can use the network, and each requires literal
+# --allow-network. OPENROUTER_API_KEY is supplied ephemerally by the operator
+# environment; it is never an argument or an artifact.
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
+  --plan .artifacts/phase4e/plan.json \
+  --snapshot <verified-minilm-snapshot> \
+  --work-dir .artifacts/phase4e/corpus-work \
+  --packet .artifacts/phase4e/accepted-packet \
+  --allow-network
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline extract \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <verified-minilm-snapshot> --device cpu \
+  --output .artifacts/phase4e/embedding-capsule
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline train \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <verified-minilm-snapshot> \
+  --embeddings .artifacts/phase4e/embedding-capsule --device cpu \
+  --output-parent .artifacts/phase4e/training --output-name saracura-universal-v0
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
+  --packet .artifacts/phase4e/accepted-packet \
+  --embeddings .artifacts/phase4e/embedding-capsule \
+  --training .artifacts/phase4e/training/saracura-universal-v0
+```
+
+Corpus requests are pinned to OpenRouter HTTPS with redirects and proxies
+disabled. Historical corpus and comparison ledgers retain their original hard
+caps for reproducibility. The current acceptance-protocol pilot uses report-only
+cost telemetry: financial amounts never authorize, block, or stop execution.
+It reports every USD 10 of run-local provider spend and the final actual total.
+A durable pre-send reservation that cannot be resolved still stops resume
+instead of repeating a possibly charged request.
+
+The current policy keeps the legacy `corpus` and `train` entry points
+fail-closed. They can be re-enabled only by a reviewed post-pilot policy
+revision after a pilot `PASS`; the pilot itself never changes those
+authorizations.
+
+The planned PT-BR recovery lane requires `SARACURA_PRIVATE_STATE_ROOT` to name an existing, user-owned `0700` directory outside every repository and Git worktree. Operators must choose a private, non-synchronized external volume: never a cloud-synchronized directory. That runtime-only setting moves Phase 4E research ledgers, raw evidence, recovery reports, and recovery packet artifacts; it never moves the immutable holdout-release registry. The recovery lane remains unsupported until its separately reviewed increments are complete.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline pilot-plan \
+  --output .artifacts/phase4e/pilot-plan-v12/plan.json
+
+uv run python -m benchmarks.phase4e_pipeline import-ledgers \
+  --source .artifacts/phase4e \
+  --artifact-root <durable-phase4e-research-ledger-root>
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
+  --plan .artifacts/phase4e/pilot-plan-v12/plan.json \
+  --snapshot <verified-minilm-snapshot> \
+  --work-dir .artifacts/phase4e/pilot-work-v12 \
+  --report .artifacts/phase4e/pilot-report-v12 \
+  --artifact-root <durable-phase4e-research-ledger-root> \
+  --allow-network
+```
 
 ## Phase 2C data and privacy gate
 

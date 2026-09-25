@@ -217,6 +217,23 @@
       "publication_authorized": false,
       "quality_claims_allowed": false,
       "automation_authorized": false
+    },
+    {
+      "id": "phase4e_saracura_universal_synthetic",
+      "workflow_revision": "phase4e-saracura-universal-synthetic.v1",
+      "source_policy_id": "provider-model-generated",
+      "allowed_splits": ["synthetic_train", "synthetic_dev", "synthetic_holdout"],
+      "allowed_uses": ["synthetic_only"],
+      "author_model": "qwen/qwen3-30b-a3b",
+      "reviewer_model": "meta-llama/llama-3.3-70b-instruct",
+      "task_slots": 1600,
+      "spend_ceiling_usd": 17.0,
+      "canonical_training_authorized": false,
+      "calibration_authorized": false,
+      "blind_test_authorized": false,
+      "publication_authorized": false,
+      "quality_claims_allowed": false,
+      "automation_authorized": false
     }
   ]
 }

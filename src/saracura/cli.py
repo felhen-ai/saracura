@@ -15,6 +15,7 @@ from saracura.backends import (
     LayaUniversalBackend,
     MiniLMRoutingBackend,
 )
+from saracura.backends.base import BackendCapabilities
 from saracura.calibration import (
     ResearchCalibrationArtifact,
     create_identity_calibration,
@@ -31,10 +32,26 @@ from saracura.runtime import (
     default_workflows,
 )
 from saracura.runtime.engine import MAX_STATE_PAYLOAD_BYTES, calibration_context
+from saracura.runtime.workflows import (
+    UNIVERSAL_CHOICE_WORKFLOW_ID,
+    UNIVERSAL_CHOICE_WORKFLOW_REVISION,
+)
 from saracura.serialization import serialize_state
 from saracura.verified_bytes import read_public_external_file
 
 MAX_REQUEST_BYTES = 1_000_000
+_LAYA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
+    execution_tier="universal",
+    decision_types=frozenset({"choice"}),
+    max_questions=10,
+    max_criteria=20,
+    execution_boundary="preconstruction-laya-capability",
+    cold_warm_semantics="not-loaded",
+    quality_claims=False,
+    dynamic_workflows=frozenset(
+        {(UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION)}
+    ),
+)
 
 
 class _ArgumentFailure(ValueError):
@@ -203,7 +220,11 @@ def _prevalidate_request(
             "The local CLI accepts one calibration artifact and one question.",
             "/questions",
         )
-    default_workflows().validate(request, execution_tier=execution_tier)
+    default_workflows().validate(
+        request,
+        execution_tier=execution_tier,
+        capabilities=_LAYA_PREVALIDATION_CAPABILITIES if execution_tier == "universal" else None,
+    )
     if request.model in {"latest", "main", "master"}:
         raise SaracuraError(
             ErrorCode.MODEL_ALIAS_FORBIDDEN,

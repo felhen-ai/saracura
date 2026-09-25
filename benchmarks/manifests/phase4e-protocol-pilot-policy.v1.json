@@ -1,0 +1,70 @@
+{
+  "schema_version": "phase4e-protocol-pilot-policy.v1",
+  "id": "phase4e-protocol-pilot",
+  "seed": "saracura-phase4e-protocol-pilot-v1",
+  "task_count": 140,
+  "pair_count": 70,
+  "split": "protocol_pilot",
+  "plan_schema_version": "phase4e-protocol-pilot-plan.v1",
+  "source_policy_exception_id": "phase4e_saracura_universal_synthetic",
+  "source_policy_registry": {
+    "schema_version": "training-data-source-policies.v2",
+    "path": "benchmarks/manifests/training-data-source-policies.v2.json",
+    "sha256": "ea32197f712ed972556126482162ad02900200350a2081a98280a87a68861e78"
+  },
+  "provider": {
+    "host": "openrouter.ai",
+    "author_model": "qwen/qwen3-30b-a3b",
+    "reviewer_model": "meta-llama/llama-3.3-70b-instruct",
+    "author_provider": "DeepInfra",
+    "reviewer_provider": "CoreWeave",
+    "allow_fallbacks": false,
+    "require_parameters": true
+  },
+  "stages": {
+    "pilot_author": {
+      "cap_usd": "0.50",
+      "input_usd_per_million": "0.30",
+      "output_usd_per_million": "2.50"
+    },
+    "pilot_reviewer": {
+      "cap_usd": "1.00",
+      "input_usd_per_million": "0.71",
+      "output_usd_per_million": "0.71"
+    }
+  },
+  "total_cap_usd": "1.50",
+  "cumulative_authorization_usd": "17.00",
+  "automatic_retries": 0,
+  "thresholds": {
+    "minimum_accepted": 98,
+    "minimum_accepted_per_locale": 45,
+    "locale_members": 70,
+    "minimum_accepted_per_option_count": 11,
+    "option_count_members": 20,
+    "maximum_reviewer_privacy_flags": 7,
+    "maximum_local_privacy_violations": 0
+  },
+  "authorizations": {
+    "evaluation_only": true,
+    "training_authorized": false,
+    "calibration_authorized": false,
+    "publication_authorized": false,
+    "quality_claims_allowed": false,
+    "runtime_authorized": false
+  },
+  "domain_scenario_map": {
+    "email_triage": ["action_required", "informational_only", "suspected_abuse", "urgency_priority", "topic_routing"],
+    "customer_support": ["action_required", "missing_information", "policy_violation", "urgency_priority", "informational_only"],
+    "finance": ["threshold_approval", "reconciliation_mismatch", "deadline_risk", "policy_violation", "missing_information"],
+    "accounting": ["reconciliation_mismatch", "duplicate_record", "threshold_approval", "missing_information", "policy_violation"],
+    "commerce": ["fulfillment_exception", "duplicate_record", "threshold_approval", "topic_routing", "missing_information"],
+    "operations": ["fulfillment_exception", "deadline_risk", "action_required", "urgency_priority", "missing_information"],
+    "scheduling": ["schedule_conflict", "deadline_risk", "action_required", "missing_information", "urgency_priority"],
+    "document_routing": ["topic_routing", "duplicate_record", "informational_only", "missing_information", "action_required"],
+    "browser_action": ["access_risk", "action_required", "policy_violation", "suspected_abuse", "missing_information"],
+    "security_triage": ["access_risk", "suspected_abuse", "policy_violation", "content_safety", "urgency_priority"],
+    "content_moderation": ["content_safety", "policy_violation", "suspected_abuse", "informational_only", "action_required"],
+    "personal_productivity": ["action_required", "deadline_risk", "schedule_conflict", "informational_only", "urgency_priority"]
+  }
+}

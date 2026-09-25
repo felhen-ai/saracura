@@ -9,7 +9,7 @@ status: current
 canonical: docs/README.pt-BR.md
 globalRef: qmd://saracura/docs/README.pt-BR.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-22
+lastReviewedAt: 2026-09-23
 sourceRefs: []
 related:
   - README.md
@@ -46,9 +46,10 @@ O inglês é o idioma canônico da documentação técnica. O quickstart, os exe
 - artefatos de calibração imutáveis e compatíveis de forma fail-closed;
 - runtime in-process e CLI locais;
 - um backend experimental opt-in `laya-universal` para o workflow Choice dinâmico exato;
-- trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos.
+- trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos;
+- contratos de política e ranker determinístico da Fase 4E somente planejados; nenhum runtime `saracura-universal` está instalado.
 
-Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos fora do workflow Choice experimental exato da Fase 4D, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
+Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, `saracura-universal`, labels dinâmicos fora do workflow Choice experimental exato da Fase 4D, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria ou automação de produção. O contrato planejado `universal-choice@phase4e-saracura-ranker.v1` não é suportado até a Fase 4E.3 selar um checkpoint real aprovado no gate de holdout. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
 
 ## Arquitetura de pesquisa em duas camadas
 
@@ -155,7 +156,7 @@ grupo opcional isolado de dependências, um snapshot Laya local e imutável
 fornecido pelo operador e um dispositivo CPU ou MPS explícito; nunca baixa,
 descobre nem contata um provedor de modelo. A requisição sintética em PT-BR em
 [`examples/ptbr-universal-request.json`](../examples/ptbr-universal-request.json)
-usa a triagem de e-mail somente como o próximo piloto em modo sombra e não
+usa a triagem de e-mail somente como futuro piloto da Fase 4F em modo sombra e não
 contém dados de caixa postal.
 
 ```bash
@@ -174,6 +175,85 @@ fazer qualquer outra alteração em e-mail. O candidato permanece
 `research_only_unresolved_provenance`; um smoke local bem-sucedido demonstra
 somente compatibilidade de execução, não qualidade, calibração, licenciamento
 ou prontidão para produção.
+
+## Checkpoint universal Saracura-owned planejado da Fase 4E
+
+A Fase 4E.1 adiciona somente contratos offline de política, renderização,
+ranker, checkpoint e compatibilidade entre backend/workflow para um futuro
+ranker universal Saracura-owned. Ela não baixa um snapshot MiniLM, não chama
+provedor, não gera corpus, não treina checkpoint nem registra
+`saracura-universal` no CLI ou runtime. Portanto, o futuro workflow
+`universal-choice@phase4e-saracura-ranker.v1` é planejado e não suportado até
+a Fase 4E.3 selar um checkpoint real sintético e ele passar pelo gate de
+holdout revisado. Laya continua sendo um controle externo, nunca professor,
+fonte de checkpoint ou modelo Saracura-owned.
+
+### Trilha operacional da Fase 4E
+
+O pipeline da Fase 4E existe apenas no checkout e começa offline. Os comandos
+`plan`, `extract`, `train` e `verify` não constroem socket. Os materiais gerados
+ficam em `.artifacts/`, ignorado pelo Git, e continuam sendo evidência sintética
+de pesquisa: não instalam runtime, não provam qualidade e não autorizam
+automação.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline plan \
+  --output .artifacts/phase4e/plan.json
+
+# Apenas corpus e pilot podem usar rede, e cada um exige --allow-network
+# literal. OPENROUTER_API_KEY entra de forma efêmera pelo ambiente do operador;
+# nunca é argumento nem entra em artefato.
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
+  --plan .artifacts/phase4e/plan.json \
+  --snapshot <snapshot-minilm-verificado> \
+  --work-dir .artifacts/phase4e/corpus-work \
+  --packet .artifacts/phase4e/accepted-packet \
+  --allow-network
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline extract \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <snapshot-minilm-verificado> --device cpu \
+  --output .artifacts/phase4e/embedding-capsule
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline train \
+  --packet .artifacts/phase4e/accepted-packet \
+  --snapshot <snapshot-minilm-verificado> \
+  --embeddings .artifacts/phase4e/embedding-capsule --device cpu \
+  --output-parent .artifacts/phase4e/training --output-name saracura-universal-v0
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
+  --packet .artifacts/phase4e/accepted-packet \
+  --embeddings .artifacts/phase4e/embedding-capsule \
+  --training .artifacts/phase4e/training/saracura-universal-v0
+```
+
+As requisições de corpus são fixadas em HTTPS do OpenRouter, sem redirects e
+proxies. Os ledgers históricos de corpus e comparação preservam os tetos
+originais para reprodutibilidade. O piloto atual do protocolo de aceite usa
+telemetria de custo sem teto: valores financeiros não autorizam, bloqueiam nem
+interrompem a execução. O comando informa cada USD 10 de gasto real do provedor
+na execução e o total final. Uma reserva durável pré-envio que permaneça sem
+resolução continua bloqueando o resume; o comando não repete uma cobrança
+possivelmente efetuada.
+
+A política atual mantém as entradas legadas `corpus` e `train` fechadas. Elas
+só podem ser reativadas por uma revisão de política posterior ao piloto, depois
+de um `PASS`; o próprio piloto nunca altera essas autorizações.
+
+```bash
+uv run python -m benchmarks.phase4e_pipeline pilot-plan \
+  --output .artifacts/phase4e/pilot-plan-v12/plan.json
+
+uv run python -m benchmarks.phase4e_pipeline import-ledgers \
+  --source .artifacts/phase4e \
+  --artifact-root <raiz-duravel-dos-ledgers-phase4e>
+
+uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
+  --plan .artifacts/phase4e/pilot-plan-v12/plan.json \
+  --snapshot <snapshot-minilm-verificado> \
+  --work-dir .artifacts/phase4e/pilot-work-v12 \
+  --report .artifacts/phase4e/pilot-report-v12 \
+  --artifact-root <raiz-duravel-dos-ledgers-phase4e> \
+  --allow-network
+```
 
 ## Gate de dados, licença e privacidade da Fase 2C
 

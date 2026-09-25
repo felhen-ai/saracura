@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "phase4e-ptbr-transport-recovery",
+  "revision": "v1",
+  "language": "pt-BR",
+  "native_language": "pt-BR",
+  "source": "self-authored",
+  "license": "Apache-2.0",
+  "redistribution": "allowed",
+  "contains_external_data": false,
+  "contains_personal_data": false,
+  "purpose": "Immutable Phase 4E PT-BR supplemental corpus recovery plan.",
+  "quality_claims_allowed": false
+}

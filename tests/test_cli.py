@@ -218,6 +218,7 @@ def test_laya_cli_prevalidates_then_emits_abstained_response_and_closes_backend(
                 execution_boundary="test",
                 cold_warm_semantics="test",
                 quality_claims=False,
+                dynamic_workflows=frozenset({("universal-choice", "phase4d-laya.v1")}),
             )
 
         @property

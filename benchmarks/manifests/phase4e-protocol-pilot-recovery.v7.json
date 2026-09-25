@@ -1,0 +1,28 @@
+{
+  "schema_version": "phase4e-protocol-pilot-recovery.v7",
+  "id": "phase4e-protocol-pilot-recovery",
+  "recovery_of": "phase4e-protocol-pilot-policy.v1",
+  "plan_schema_version": "phase4e-protocol-pilot-plan.v7",
+  "cost_mode": "report_only",
+  "cost_report_interval_usd": "10.00",
+  "maximum_attempts_per_request": 5,
+  "review_protocol": "genericity-schema-metadata.v1",
+  "models": {
+    "pilot_author": {
+      "id": "openai/gpt-4.1-mini",
+      "input_usd_per_million": "0.40",
+      "output_usd_per_million": "1.60"
+    },
+    "pilot_reviewer": {
+      "id": "google/gemini-3.8-flash",
+      "input_usd_per_million": "0.75",
+      "output_usd_per_million": "3.75"
+    }
+  },
+  "provider_policy": {
+    "allow_fallbacks": true,
+    "require_parameters": true,
+    "data_collection": "deny",
+    "zdr": true
+  }
+}

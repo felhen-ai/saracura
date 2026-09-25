@@ -31,6 +31,10 @@ class BackendCapabilities:
     execution_boundary: str
     cold_warm_semantics: str
     quality_claims: bool
+    # Dynamic workflow revisions are backend-owned capabilities.  Keeping the
+    # default empty preserves the closed compiled contract: compiled backends
+    # cannot opt into a universal schema accidentally.
+    dynamic_workflows: frozenset[tuple[str, str]] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)

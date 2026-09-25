@@ -6,8 +6,29 @@ import json
 from pathlib import Path
 
 from benchmarks.data_policy_registry import load_registry as load_data_policy_registry
+from benchmarks.data_policy_registry import load_registry_v2 as load_data_policy_registry_v2
+from benchmarks.data_policy_registry import load_registry_v3 as load_data_policy_registry_v3
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
+from benchmarks.saracura_universal_pilot import (
+    RECOVERY_POLICY_V2_PATH,
+    RECOVERY_POLICY_V3_PATH,
+    RECOVERY_POLICY_V4_PATH,
+    RECOVERY_POLICY_V5_PATH,
+    RECOVERY_POLICY_V6_PATH,
+    RECOVERY_POLICY_V7_PATH,
+    RECOVERY_POLICY_V8_PATH,
+    RECOVERY_POLICY_V9_PATH,
+    RECOVERY_POLICY_V10_PATH,
+    RECOVERY_POLICY_V11_PATH,
+    validate_pilot_policy,
+    validate_pilot_recovery_policy,
+    validate_spend_baseline,
+)
+from benchmarks.saracura_universal_policy import (
+    validate_phase4e_policy,
+    validate_post_pilot_phase4e_policy,
+)
 from benchmarks.synthetic_research import validate_synthetic_policy
 from benchmarks.universal_bakeoff import load_candidate_registry, load_plan
 from benchmarks.universal_local.plan import load_plan as load_universal_local_plan
@@ -28,6 +49,22 @@ REQUIRED_FIELDS = {
     "contains_personal_data",
     "purpose",
     "quality_claims_allowed",
+}
+
+HISTORICAL_PILOT_RECOVERY_POLICIES = {
+    f"phase4e-protocol-pilot-recovery.v{version}": path
+    for version, path in (
+        (2, RECOVERY_POLICY_V2_PATH),
+        (3, RECOVERY_POLICY_V3_PATH),
+        (4, RECOVERY_POLICY_V4_PATH),
+        (5, RECOVERY_POLICY_V5_PATH),
+        (6, RECOVERY_POLICY_V6_PATH),
+        (7, RECOVERY_POLICY_V7_PATH),
+        (8, RECOVERY_POLICY_V8_PATH),
+        (9, RECOVERY_POLICY_V9_PATH),
+        (10, RECOVERY_POLICY_V10_PATH),
+        (11, RECOVERY_POLICY_V11_PATH),
+    )
 }
 
 
@@ -59,11 +96,37 @@ def validate_routed_manifest(path: Path) -> None:
     if schema_version == "training-data-source-policies.v1":
         load_data_policy_registry(raw)
         return
+    if schema_version == "training-data-source-policies.v2":
+        load_data_policy_registry_v2(raw)
+        return
+    if schema_version == "training-data-source-policies.v3":
+        load_data_policy_registry_v3(raw)
+        return
+    if schema_version == "phase4e-protocol-pilot-policy.v1":
+        validate_pilot_policy(path)
+        return
+    if schema_version == "phase4e-protocol-pilot-recovery.v12":
+        validate_pilot_recovery_policy(path)
+        return
+    if schema_version in HISTORICAL_PILOT_RECOVERY_POLICIES:
+        canonical = HISTORICAL_PILOT_RECOVERY_POLICIES[schema_version]
+        if raw != canonical.read_bytes():
+            raise ValueError(f"{path}: historical recovery policy must be canonical")
+        return
+    if schema_version == "phase4e-spend-baseline.v1":
+        validate_spend_baseline(path)
+        return
     if schema_version == "support-routing-protocol.v1":
         validate_protocol_bytes(raw)
         return
     if schema_version == "synthetic-research-policy.v1":
         validate_synthetic_policy(path)
+        return
+    if schema_version == "phase4e-saracura-universal-policy.v1":
+        validate_phase4e_policy(path)
+        return
+    if schema_version == "phase4e-saracura-universal-policy.v2":
+        validate_post_pilot_phase4e_policy(path)
         return
     if schema_version == "decision-backend-candidates.v1":
         load_candidate_registry(raw)

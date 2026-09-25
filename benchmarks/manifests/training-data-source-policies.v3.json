@@ -1,0 +1,8 @@
+{
+  "schema_version": "training-data-source-policies.v3",
+  "sources_from_v2_sha256": "ea32197f712ed972556126482162ad02900200350a2081a98280a87a68861e78",
+  "exceptions": [
+    {"id":"synthetic_experiment","workflow_revision":"phase3b-synthetic-research-training.v2","source_policy_id":"provider-model-generated","allowed_splits":["synthetic_train","synthetic_dev","synthetic_holdout"],"allowed_uses":["synthetic_only"],"author_model":"qwen/qwen3.5-9b","reviewer_model":"mistralai/ministral-8b-2512","canonical_training_authorized":false,"calibration_authorized":false,"blind_test_authorized":false,"publication_authorized":false,"quality_claims_allowed":false,"automation_authorized":false},
+    {"id":"phase4e_saracura_universal_synthetic","workflow_revision":"phase4e-saracura-universal-synthetic.v2","source_policy_id":"provider-model-generated","allowed_splits":["synthetic_train","synthetic_dev","synthetic_holdout"],"allowed_uses":["synthetic_only"],"author_model":"openai/gpt-4.1","reviewer_model":"openai/gpt-4.1-mini","task_slots":1600,"cost_mode":"report_only","synthetic_generation_authorized":true,"synthetic_research_training_authorized":false,"real_checkpoint_present":false,"runtime_registration_authorized":false,"canonical_training_authorized":false,"calibration_authorized":false,"blind_test_authorized":false,"publication_authorized":false,"quality_claims_allowed":false,"automation_authorized":false}
+  ]
+}

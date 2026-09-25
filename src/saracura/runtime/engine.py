@@ -227,7 +227,7 @@ class DecisionEngine:
                 "Universal research backends reject calibration artifacts.",
                 "/calibration",
             )
-        self._workflows.validate(request, execution_tier)
+        self._workflows.validate(request, execution_tier, self._backend.capabilities)
         if execution_tier == "universal":
             cast(UniversalBackend, self._backend).validate_request(request)
 
