@@ -1,0 +1,172 @@
+---
+title: Phase 4E.3b first Saracura-owned checkpoint
+kind: spec
+area: development
+project: saracura
+collection: saracura
+owner: saracura-maintainers
+status: active
+canonical: docs/action/specs/phase4e3b-first-owned-checkpoint.md
+globalRef: qmd://saracura/docs/action/specs/phase4e3b-first-owned-checkpoint.md
+reviewCadenceDays: 14
+lastReviewedAt: 2026-09-25
+sourceRefs:
+  - docs/action/phase4e-execution.md
+  - docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
+  - docs/action/specs/phase4e3a-v4-ptbr-transport-recovery.md
+related:
+  - benchmarks/phase4e_pipeline.py
+  - benchmarks/saracura_universal_training.py
+  - tests/test_phase4e_training.py
+  - tests/test_phase4e_post_pilot.py
+supersedes: []
+supersededBy: []
+sensitivity: public
+---
+
+# Phase 4E.3b first Saracura-owned checkpoint
+
+## Decision and task identity
+
+`task_id=saracura-phase4e3b-first-checkpoint-v1`.
+
+Use the sealed Phase 4E.3A v4 packet to produce and evaluate the first Saracura-owned universal ranker checkpoint on the local MacBook. The increment enables packet-v4 only through the central trusted training boundary, freezes train/dev embeddings, runs deterministic duplicate training, selects one checkpoint by the precommitted dev metric and opens the sealed synthetic holdout at most once after the checkpoint and success gates are immutable.
+
+This is a research checkpoint, not a calibrated or production model. A passing result may authorize a separately reviewed runtime-registration increment. It does not authorize calibration, confidence-based automation, mailbox access, a Laya comparison, publication of weights or any provider call.
+
+## Verified inputs and current state
+
+- The Phase 4E.3A v4 recovery is merged on `main` through PR #22 and its post-merge CI passed all 14 jobs.
+- The latest sealed report records 1,552 accepted, 148 rejected and 0 unresolved rows. The accepted corpus contains 943 PT-BR rows and 609 English rows, placing PT-BR at 60.7603%.
+- The execution record declares sealed packet manifest SHA-256 `3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239` and sealed report SHA-256 `4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c`. These private-state bindings remain preflight hypotheses until Phase D re-verifies the live files without opening holdout content.
+- The authoritative report binds recovery plan `a302b51d9eb9095de77b66f0da9ee0422e290687bd99e9b6abf1a5d2f3b551f1`, supplemental resolution `32a78f39a7f746f7b5d2f9fc2315ef2d9ef216a607c2337856017c3fadd1ab75`, supplemental ledger `b29b53f21ed4e3add28301bc16d15f1c1eb045cfa2c0df6c5019340a6b01a076` and final research inventory `5cd3c66ec9163867e7b5d4a715182496d3df6bde05348906b1c6d13229091a29`.
+- The accepted packet and raw evidence live only in the configured private external Phase 4E state root. No packet, row, ledger, embedding or weight is tracked by Git.
+- Existing v2/v3 training code already enforces physical train/dev versus holdout separation, a canonical per-user one-time holdout claim, fixed CPU-only extraction/training, byte-identical duplicate training, dev-only selection, a closed safetensors tensor set and fail-closed capsule verification.
+- Phase 4E.3A deliberately makes `validate_accepted_packet_binding` reject packet v4. The holdout-capable full validator must call that same boundary before reading holdout bytes. Enabling v4 anywhere else is forbidden.
+- No Phase 4E.3B extraction, training capsule or holdout-release claim exists. The preflight must prove this against the exact packet digest and reviewed output names before creating an artifact.
+- Provider-reported corpus-generation cost is USD 7.02487440. Phase 4E.3B performs no provider or network call and incurs no new API spend.
+
+## Scope
+
+1. Add a closed packet-v4 training validator to `benchmarks/saracura_universal_training.py`. It accepts only `phase4e-accepted-packet.v4` whose manifest, plan, accepted/rejected counts, locale minimum, source-policy binding, sealed report and complete lineage match the Phase 4E.3A contracts. Historical v2/v3 paths remain byte- and behavior-compatible.
+1. Require the exact reviewed sealed report when enabling packet v4. Code pins its file SHA-256 `4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c` alongside the existing v4 base/recovery bindings; the recovery plan cannot bind a report created after it. The canonical logical report directory is exactly `reports/ptbr-recovery-v1`. The validator resolves its greatest numbered `report-*.json`, requires that exact file to have the pinned digest, and rejects any later, missing, earlier, non-sealed or mismatched report before snapshot access or output creation. After a sealed report exists, the recovery pipeline must refuse to append another numbered report. It checks `outcome=sealed`, zero unresolved rows, exact packet-manifest digest and exact base/supplemental ledger and resolution hashes.
+1. Preserve the physical holdout boundary. Pre-holdout validation may read `accepted-train-dev.jsonl`, `holdout-identities.json`, canonical manifests and precommitted holdout digests. It must not open, deserialize, digest-check from bytes, render, tokenize, embed or log `accepted-holdout.jsonl` before the checkpoint digest, gate descriptor and one-time claim are frozen. Post-claim, one canonical loader reads and digest-validates the holdout payload exactly once, returns the validated rows/bytes to the full binding and task/embedding derivation code, and no downstream helper reopens the file. A direct instrumented test counts exactly one `accepted-holdout.jsonl` open on the complete v4 post-claim path.
+1. Preflight the canonical holdout-release registry and a new canonical holdout-terminal registry without adding a public path override. Both are keyed by the exact packet-manifest digest under the existing per-user platform state boundary. For the live packet, neither claim nor terminal may exist before execution. A prior claim, prior terminal, ambiguous state, wrong ownership/mode, symlink or unavailable platform state fails closed. Tests continue to use only the existing internal dependency-injection seam.
+1. Bind the live execution to one reviewed private layout below the configured external Phase 4E state root. The exact logical paths are `model-artifacts/accepted-packet-v4`, `model-artifacts/embedding-capsule-v1`, `model-artifacts/training-capsule-v1` and `reports/ptbr-recovery-v1`. The v4 CLI may retain the existing explicit `--snapshot`, `--embeddings`, `--output-parent` and `--output-name` arguments for v2/v3 compatibility, but for packet v4 it must validate each path against those exact names under the canonical configured private root before opening it. Repository, Git-common, worktree, synchronized, symlinked and arbitrary caller-selected destinations fail closed. Tracked docs and reports use only logical artifact names and digests.
+1. Verify the exact local multilingual MiniLM snapshot and tokenizer receipt before reading train/dev rows. The plan-bound policy-v2 `base_encoder` supplies repository ID, revision, frozen disposition and dimensions. The reviewed `benchmarks/manifests/encoder-candidates.v1.json`, loaded through `benchmarks/encoder_registry.py`, supplies the exact snapshot file ledger, per-file digests, loader and tokenizer class used by both corpus acceptance and training. The closed mapping is `policy.base_encoder.id == candidate.repository`, `policy.base_encoder.revision == candidate.revision` and `policy.base_encoder.dimensions == candidate.hidden_width`, with a direct negative test for each field. The current registry Python/JSON and `benchmarks/encoder_loader.py` bytes must equal their bytes at both accepted-corpus implementation revisions `edc5af4` and `740a58d`, and both commits must be ancestors of the clean reviewed source commit; the v4 receipt records the registry digest, candidate entry and `uv.lock` SHA-256 so tokenizer/runtime parity is explicit. Packet v4 validates its `training`, `base_encoder` and `ranker` objects directly from policy v2 and asserts their present equality to the historical v1 objects without using v1 as v4 authority. Renderer parity uses the same source-history pattern: `RENDERER_REVISION` is exactly `phase4e-universal-renderer.v1`, the current `src/saracura/universal/rendering.py` bytes equal the bytes at commit `2a07d6e`, and that commit is an ancestor of the clean reviewed source commit. These content-free bindings are checked before claim so a divergent tokenizer or renderer cannot first appear after claim. Network access, redirects, proxy use, cache discovery and model downloads remain prohibited.
+1. Run embedding extraction exactly once on CPU. The create-only capsule contains frozen train/dev tensors, token IDs, masks, row identities, encoder receipt, sealed-report digest, deterministic ABI descriptor and identity-only holdout descriptor. It contains no holdout text, holdout token, holdout mask or holdout embedding. Re-entry with an exact complete capsule verifies and reuses it byte-for-byte; a partial, extra-file or mismatched destination fails closed and is never overwritten. This is additive v4 behavior and has a direct test; v2/v3 keep their historical destination-exists behavior.
+1. Run the fixed v0 training configuration twice on CPU with deterministic algorithms, fixed seed and fixed thread count. Both runs must produce byte-identical checkpoint safetensors and canonical epoch/dev metrics. Selection uses only synthetic-dev stratified macro accuracy and lower epoch on exact ties. No hyperparameter sweep, adaptive seed, MPS training, checkpoint averaging or post-outcome adjustment is permitted.
+1. Freeze the selected checkpoint digest, training-code digest, architecture descriptor, source-packet receipt, pre-holdout gate descriptor and dev baselines before any holdout access. The literal dev formulas are `selected_dev_stratified_macro_accuracy >= untrained_cosine_stratified_macro_accuracy + 0.03` and `selected_dev_stratified_macro_accuracy >= random_projection_stratified_macro_accuracy + 0.03`. If either gate fails, seal a pre-holdout failed-experiment capsule, create no holdout claim and stop. Within the same training revision, defined by source commit, code digest and architecture revision, an identical frozen gate may be verified and reused only while claim and terminal are absent. A differing gate under that same revision fails closed. A future separately reviewed architecture/source revision receives its own gate identity and output name; it never overwrites this revision.
+1. Before claim, use only holdout identities to prove all 14 locale-by-option-count cells contain at least ten accepted identities and that dev has the same minimum. After both dev gates pass, create the one-time holdout claim atomically against the packet manifest digest. The claim binds the embedding capsule, checkpoint and gate descriptor. Only then may the full packet validator open the holdout payload once, bind it to the sealed identities/plan and derive holdout tensors in memory for descriptor-bound scoring. No reusable holdout embedding capsule is written.
+1. Apply the precommitted holdout gates without tuning: overall accuracy at least the maximum of 0.45, expected random plus 0.20 and most-frequent-gold-position plus 0.15; PT-BR at least 0.40; English at least 0.35; every option-count bucket 2 through 8 above its expected random accuracy; zero non-finite logits, missing/extra choices, truncation, family overlap or deterministic-repeat mismatch. Deterministic repeat means two exact inference passes over the same in-memory holdout tensors and model after the single derivation; logits, choices and canonical metrics must be byte-identical without reopening or re-embedding holdout data.
+1. Acquire a non-blocking exclusive `flock` keyed by packet-manifest digest in the canonical registry before inspecting claim/terminal state and hold it through terminal publication. A concurrent invocation fails `training_in_progress` and cannot reconcile, claim, score or write terminal state. Lock files are current-user, non-symlink, mode `0600`; their persistent existence is not evidence that a process still owns the advisory lock.
+1. Add a canonical create-only terminal record for every claimed experiment. It binds claim, packet, report, embedding, checkpoint and gate digests and has a closed outcome aligned with the training manifest: `passed`, `holdout_failed`, `holdout_invalid` or `holdout_interrupted`. Every caught failure after claim and before capsule publication maps to a closed failure code and seals `holdout_invalid` before re-raising. A normal gate failure publishes its complete capsule and seals `holdout_failed`; success publishes its complete capsule and seals `passed`. If the process is killed after claim before a terminal record can be written, the next invocation may reconcile only after acquiring the exclusive lock: if the exact canonical capsule is complete, historically verifiable and bound to the claim, seal the matching `passed` or `holdout_failed` terminal from it; otherwise seal `holdout_interrupted` without opening holdout and never retry scoring. Tests inject failures after claim at full-packet validation, tokenization/derivation, family/cell validation, first scoring, repeat scoring, report construction, capsule publication and the window between capsule publication and terminal publication. They also prove a concurrent invocation cannot misclassify a live run. Claim and terminal records contain no row, metric detail, path, host or user.
+1. Whether holdout passes, fails a gate, becomes invalid or is interrupted, the claimed experiment is immutable and final for this packet/model revision. A failure is reported and cannot be repaired through a rerun, threshold change or new hyperparameter choice. Any successor requires a new disjoint training revision and reviewed spec; the same packet holdout remains consumed.
+1. On pass or ordinary holdout-gate failure, seal one no-clobber training capsule containing the Saracura-only checkpoint, training manifest, epoch ledger, dev selection, holdout report, source packet receipt, encoder receipt, dependency/ABI descriptor, architecture descriptor, deterministic conformance vectors and exact clean source commit. The closed code ledger adds `benchmarks/saracura_universal_pilot.py`, `benchmarks/phase4e_pipeline.py`, `benchmarks/manifests/phase4e-saracura-universal-policy.v2.json`, `benchmarks/manifests/encoder-candidates.v1.json` and `uv.lock` to the existing training sources, explicitly retaining `benchmarks/encoder_registry.py`, `benchmarks/encoder_loader.py` and `src/saracura/universal/rendering.py`. Historical verification computes SHA-256 over the bytes returned by `git show <source_commit>:<path>` and compares those values with the recorded `code_sources`; it does not compare Git blob IDs and never compares historical artifacts to current working-tree HEAD. It always checks the closed `code_sources`/`code_sha256` consistency recorded by the content-addressed capsule. The source commit must be the clean `origin/main` commit already reviewed and green before live execution. Immediately before extraction and again before training, every working-tree source digest must equal the recorded commit's `git show` byte digest in addition to `git status` being clean. An invalid/interrupted post-claim experiment may have no training capsule, but always has the canonical terminal record above. The checkpoint tensor set remains closed to projections, LayerNorm tensors and bounded log-scale; it contains no encoder weights, optimizer state, Laya tensor, raw row, token, absolute path, hostname, username, secret or provider payload.
+1. Add an execution report section to `docs/action/phase4e-execution.md` only after the result is sealed. Record public-safe counts, metrics, logical disposition and artifact hashes. Never publish row content, holdout identities, local paths, weights, tensors, ledgers or registry contents.
+1. Keep `saracura-universal` unregistered in the installed runtime and CLI during this increment. A passing capsule authorizes a separate Phase 4E.3C registration spec that can review artifact discovery, CLI inputs, latency, MPS conformance, packaging and research-only response semantics independently.
+
+## Non-scope
+
+- No provider call, corpus generation, row replacement, prompt change, dedup change, acceptance relaxation or reopening of Phase 4E.3A.
+- No calibration, temperature map, selective-risk threshold, automation gate or `automation_allowed=true` response.
+- No Laya/TypeSafe/Jev comparison, benchmark narrative, performance claim or public weight/data release.
+- No mailbox, browser, AIOS, customer, Felhen-private or human-original data.
+- No runtime backend registration, CLI exposure, service, deployment, telemetry or request-triggered download.
+- No MPS training or second CPU/MPS checkpoint. MPS inference conformance belongs to the later runtime-registration increment.
+- No cleanup or deletion of corpus, raw evidence, packet, claim, embedding capsule or failed experiment.
+
+## Implementation and execution phases
+
+### A. Packet-v4 and report-bound training gate
+
+Implement the additive central packet-v4 validator and exact sealed-report binding. Add direct negative tests for missing/stale/mismatched reports, non-sealed outcomes, altered packet files, wrong counts, wrong resolution/ledger lineage and every attempt to reach snapshot or holdout access after a failed gate. With the sealed report already present, exercise every recovery report path, including `_persist_v4_terminal_report` fallback behavior, and prove no later `report-*.json` is created. Historical v2/v3 training fixtures remain unchanged.
+
+### B. Holdout and artifact safety QA
+
+Extend adversarial tests for the v4 path: no pre-claim holdout read, no public claim/terminal-registry override, exact complete extraction reuse, no output inside Git/synchronized roots, create-only outputs, deterministic duplicate training, renderer/tokenizer parity, per-cell minima, pre-holdout dev failure, identical frozen-gate reuse, single atomic claim, deterministic double inference and terminal sealing for every post-claim failure point. Simulate a concurrent invocation, an orphaned claim without a capsule that becomes `holdout_interrupted`, and an orphaned claim with a complete capsule that recovers the capsule's exact terminal outcome, all without reopening holdout. Run the full offline CI matrix before touching the live packet.
+
+### C. Independent review and pre-live Git integration
+
+Run the independent read-only code review and full QA. Commit and push the spec, implementation and tests, open a PR, require CI green, merge, validate post-merge CI and use that exact clean `origin/main` commit as the source revision recorded by the capsule. No live private packet, embedding extraction, claim or holdout access occurs before this gate returns `PASS` and the reviewed code is on `main`.
+
+### D. Read-only live preflight
+
+Resolve the configured private Phase 4E root and exact verified MiniLM snapshot without logging either absolute path. Verify the pinned latest sealed report/packet hashes, the exact logical names `accepted-packet-v4`, `embedding-capsule-v1` and `training-capsule-v1`, file modes, free disk and memory, CPU-only runtime, `uv.lock` digest, clean Git revision, every working-tree/code-ledger digest against `git show`, renderer/tokenizer parity, dev/holdout cell minima, absent output names and absent holdout claim/terminal. Print only public-safe digests and boolean readiness. Any failure stops before artifact creation.
+
+### E. Embedding extraction
+
+Create and verify the train/dev-only embedding capsule. Record its manifest/descriptor digests and confirm that its file ledger contains no holdout tensor or content. Do not start training unless independent verification passes.
+
+### F. Deterministic training and one-time evaluation
+
+Run the fixed training command once. The command itself performs duplicate deterministic training, dev selection and either stops before claim on dev failure or atomically claims and evaluates holdout once with deterministic repeat over the same in-memory tensors. Do not interrupt merely for duration. On terminal outcome, verify the capsule when present and always verify the canonical claim/terminal pair before recording hashes and metrics.
+
+### G. Post-execution evidence and documentation
+
+Run an independent read-only artifact/evidence review against the recorded source commit. Update the execution record with public-safe evidence in a new docs-only commit/PR, require CI green, merge and validate `main`. Documentation corrections cannot alter the already recorded source commit, code ledger, capsule or terminal outcome. Stop before runtime registration or calibration.
+
+## Acceptance criteria
+
+1. Packet v4 is enabled only by the central training validator and only with the exact pinned latest matching sealed report. A greater report index, wrong file digest or altered lineage blocks before snapshot/output access. Existing packet v2/v3 behavior remains unchanged.
+1. A valid v4 preflight proves the exact private logical paths, packet/report bindings, accepted counts, 943/609 locale composition, fixed source policy and complete lineage before snapshot access or output creation. Any other packet, embedding or training-capsule name fails closed.
+1. Before claim, tests prove the code never opens or derives bytes from `accepted-holdout.jsonl`; extraction produces no holdout text, tokens, masks, embeddings or tensors.
+1. Holdout-claim, terminal and lock state remain at their canonical platform path regardless of `SARACURA_PRIVATE_STATE_ROOT`; no production CLI/API argument can redirect them. A second live invocation cannot acquire the packet lock and produces no state change.
+1. The embedding capsule binds the exact sealed-report digest, verified snapshot/tokenizer, packet receipt, ABI, rendering revision, train/dev rows and identity-only holdout descriptor and passes independent verification. Exact complete v4 extraction re-entry reuses it; partial or mismatched destinations fail.
+1. Two deterministic CPU training executions produce byte-identical checkpoint bytes and canonical metrics. Selection uses only the fixed dev macro metric and tie rule.
+1. The explicit policy repository/revision/dimensions mapping matches the candidate-registry entry and live verified snapshot, the registry Python/JSON, loader and renderer source-history proofs pass, the receipt binds `uv.lock`, and every dev/holdout locale-by-option-count cell has at least ten accepted identities before claim. Both literal `>= baseline + 0.03` dev-improvement gates are frozen and pass before claim. A dev-gate failure creates a verifiable pre-holdout failed experiment, leaves claim absent and never reads holdout content. An identical frozen gate may be reused only while claim and terminal remain absent.
+1. A passing dev result creates exactly one atomic claim bound to packet, embedding capsule, checkpoint and gate descriptor. Re-entry cannot produce a second claim or alternate checkpoint.
+1. The terminal holdout report derives every accepted holdout identity once, performs two exact scoring passes over the same in-memory tensors and reports all fixed overall, locale, option-count, safety and determinism gates without post-outcome exclusions.
+1. Every claimed experiment has exactly one canonical terminal record. Injected failures at each point from claim through capsule publication produce a closed `holdout_invalid` record. Re-entry under the exclusive lock recovers a fully published and historically verified capsule into its matching `passed`/`holdout_failed` terminal; otherwise an orphaned claim produces `holdout_interrupted` without opening holdout. A concurrent invocation cannot reconcile a live process.
+1. A passing training capsule has a closed manifest and file ledger, a closed checkpoint tensor set, valid conformance vectors and no raw data, provider payload, path, user, host, secret, optimizer or encoder weight.
+1. A failed, invalid or interrupted holdout result remains a sealed terminal experiment and cannot be retried or tuned under the same packet/model revision.
+1. The live commands make zero network/provider calls and add USD 0 to API spend. No new financial milestone notification is triggered.
+1. Git status and built distributions contain no packet, report, claim, row, ledger, embedding, tensor or model-weight artifact. Wheel/sdist inspection remains green.
+1. Full lint, format, type check, isolated tests, local-MiniLM tests, manifest validation, default-environment validation, build, artifact inspection and `git diff --check` pass. Independent code review, PR CI and post-merge CI return `PASS` before private packet access, extraction or the live training command.
+1. The capsule records the exact clean reviewed `origin/main` source commit and its expanded closed code ledger, including the policy-v2 and encoder-registry JSON bytes. Historical verification hashes bytes from the recorded commit and remains valid after later working-tree changes.
+1. The public execution record contains only public-safe hashes, aggregate metrics and disposition. A passing outcome authorizes only a separately reviewed Phase 4E.3C runtime-registration increment.
+
+## Validation commands
+
+```bash
+uv run --isolated --locked ruff check .
+uv run --isolated --locked ruff format --check .
+uv run --isolated --locked mypy src tests benchmarks
+uv run --isolated --locked pytest -q
+uv run --isolated --locked --extra local-minilm pytest -q tests/test_phase4e_training.py tests/test_phase4e_pipeline.py tests/test_phase4e_post_pilot.py
+uv run --isolated --locked python -m benchmarks.validate_manifests
+uv run --isolated --locked python benchmarks/validate_default_environment.py
+uv build
+uv run --isolated --locked python benchmarks/inspect_wheel.py <wheel> <sdist>
+git diff --check
+```
+
+## Rollout and rollback
+
+Before the one-time claim, rollback is a Git revert plus preservation of any complete create-only embedding or failed pre-holdout capsule. Partial destinations are never reused or deleted automatically. After the claim, rollback cannot restore an unseen holdout; the immutable experiment and claim remain research evidence even if code is reverted. No production runtime changes in this increment, so there is no service rollback.
+
+## Risks
+
+- The thin projection head may fail the dev gates. That is a valid pre-holdout result and protects the unseen holdout for a separately reviewed architecture revision.
+- The checkpoint may pass dev and fail holdout. The one-time report is final; the failure is evidence, not permission to tune on holdout.
+- A packet-v4 exception can accidentally weaken historical training validation. The implementation must be additive, schema-exact and covered by unchanged v2/v3 fixtures plus direct dispatch tests.
+- A live path mistake can place private data in Git or synchronized storage. Canonical-root guards, create-only named outputs, tracked-file scans and distribution inspection fail closed before execution.
+- Long local CPU work can be interrupted. Extraction and pre-claim gates are reusable only when their complete digests match. After claim, a caught failure seals a closed invalid terminal; re-entry under the lock derives the terminal from an exact complete published capsule or otherwise records `holdout_interrupted` without reopening holdout. The design never resumes scoring or repeats a consumed claim.
+- A concurrent invocation can misclassify an active claimed run as interrupted. The packet-scoped exclusive registry lock spans state inspection through terminal publication; reconciliation is impossible while another process owns it.
+- Future code changes can make a capsule appear invalid if verification depends on HEAD. The capsule records the reviewed source commit and closed blob ledger, and historical verification uses those immutable objects instead of current files.
+
+## Critique resolution
+
+Round 1 returned `NO-GO` because current code can create the irreversible holdout claim and then raise during full-packet validation, derivation, family/cell checks or scoring without leaving a capsule or terminal outcome. The revision adds a canonical create-only holdout-terminal registry keyed by packet digest, closed terminal outcomes, failure injection at every point from claim through capsule publication and orphaned-claim reconciliation that writes `holdout_interrupted` without reopening holdout. Deterministic repeat is now explicitly two scoring passes over the same one-time in-memory tensors.
+
+The same revision incorporates the critic's non-blocking hardening points. It pins the exact reviewed sealed-report file digest and greatest numbered report, carries that digest in the v4 embedding receipt, validates the retained CLI path arguments against exact private-root names, permits only identical pre-claim gate reuse, binds acceptance/training renderer and tokenizer revisions, checks the ten-row dev/holdout cell minima before claim and makes exact complete v4 embedding-capsule reuse an explicit tested behavior.
+
+Round 2 returned `NO-GO` on three mechanisms introduced by the first revision. First, the sealed packet has no direct renderer/tokenizer fields, so the revision now derives the encoder/tokenizer from plan-bound policy v2 and proves the renderer through the fixed revision plus unchanged Git blob ancestry from `2a07d6e` to the reviewed source commit. Second, orphan reconciliation could race a live run or contradict a capsule published just before a crash; a packet-scoped exclusive registry lock now spans preflight through terminal, and reconciliation prefers an exact complete verified capsule before using `holdout_interrupted`. Third, the original phase order reviewed code only after consuming holdout and the verifier compared artifacts to mutable HEAD; review, PR, merge and post-merge CI now precede all live private access, capsules record the clean `origin/main` source commit and historical verification uses the recorded commit/blob ledger.
+
+The round-2 hardening points are also closed: post-claim holdout payload bytes are loaded once and passed through validation/derivation, the report directory is fixed to `reports/ptbr-recovery-v1`, packet v4 uses plan-bound policy v2 while proving the current v1-equivalent training axes, gate reuse is scoped to one source/architecture revision, terminal and manifest outcome names both use `holdout_failed`, and the recovery pipeline refuses to append any report after the sealed report.
+
+Round 3 returned one new `NO-GO`: policy v2 declares encoder identity, frozen state and dimensions but does not contain the snapshot file ledger or tokenizer class named by the revision. The spec now takes those fields from the reviewed `encoder-candidates.v1.json` through `encoder_registry.py`, the same route used by corpus acceptance, records the registry digest/candidate entry in the receipt and proves the registry Python/JSON bytes are unchanged across accepted-corpus implementation commits and the reviewed live source commit. The registry JSON and renderer are explicit members of the closed code ledger. This revision also makes the single holdout-file open directly countable, freezes the literal `>= baseline + 0.03` formulas, defines historical verification as SHA-256 over `git show` bytes rather than Git blob IDs and requires every report fallback path to refuse a later report once `sealed` exists.
+
+Round 4 returned `GO` with no blocker. Its hardening suggestions are included before implementation: the policy-to-registry mapping is explicit (`id` to `repository`, revision to revision and dimensions to hidden width) with field-specific negative tests; `encoder_loader.py`, the registry JSON and `uv.lock` join the parity proof and closed ledger; preflight compares every working-tree source byte digest to the recorded clean commit immediately before extraction and training; and the private packet/report hashes remain declared hypotheses until the live read-only preflight re-verifies them.
+
+The first implementation continuation surfaced one bounded naming ambiguity: earlier specs used `<reviewed-name>` for v4 model artifacts. This spec now fixes the only accepted names as `model-artifacts/accepted-packet-v4`, `model-artifacts/embedding-capsule-v1` and `model-artifacts/training-capsule-v1`, alongside the already fixed `reports/ptbr-recovery-v1`. No implementation may infer or choose alternate names.

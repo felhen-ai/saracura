@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import socket
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -154,8 +156,10 @@ def _fixture(
         training._identity_rows(holdout),
         training._identity_rows(tasks),
     )
-    monkeypatch.setattr(training, "validate_accepted_packet_binding", lambda _: binding)
-    monkeypatch.setattr(training, "validate_accepted_packet", lambda _: None)
+    monkeypatch.setattr(
+        training, "validate_accepted_packet_binding", lambda _packet, **_kwargs: binding
+    )
+    monkeypatch.setattr(training, "validate_accepted_packet_holdout_bytes", lambda *_args: None)
     return tmp_path / "capsule", packet, snapshot, binding
 
 
@@ -418,3 +422,557 @@ def test_conformance_mutation_dependency_schema_and_socket_free(
         "transformers",
         "tokenizers",
     }
+
+
+def test_v4_report_binding_requires_latest_sealed_matching_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packet = b'{"schema_version":"phase4e-accepted-packet.v4"}\n'
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    payload = {
+        "schema_version": "phase4e-corpus-terminal-report.v2",
+        "outcome": "sealed",
+        "packet_manifest_sha256": training._sha(packet),
+        "recovery_plan_sha256": "1" * 64,
+        "supplemental_resolution_sha256": "2" * 64,
+        "supplemental_ledger_sha256": "3" * 64,
+        "research_inventory_sha256": "4" * 64,
+        "accepted_count": 1552,
+        "rejected_count": 148,
+        "unresolved_count": 0,
+        "counts": {"locale": {"pt-BR": 943, "en": 609}},
+    }
+    selected = reports / "report-0000.json"
+    selected.write_bytes(training._canonical(payload) + b"\n")
+    monkeypatch.setattr(training, "_V4_PACKET_MANIFEST_SHA256", training._sha(packet))
+    monkeypatch.setattr(training, "_V4_RECOVERY_PLAN_SHA256", "1" * 64)
+    monkeypatch.setattr(training, "_V4_SUPPLEMENTAL_RESOLUTION_SHA256", "2" * 64)
+    monkeypatch.setattr(training, "_V4_SUPPLEMENTAL_LEDGER_SHA256", "3" * 64)
+    monkeypatch.setattr(training, "_V4_RESEARCH_INVENTORY_SHA256", "4" * 64)
+    monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", training._sha(selected.read_bytes()))
+    binding = training._validate_v4_report_binding(packet, reports)
+    assert binding.path == selected
+    (reports / "report-0001.json").write_bytes(
+        training._canonical({**payload, "outcome": "minimum_failed"}) + b"\n"
+    )
+    with pytest.raises(training.TrainingError, match="packet-v4 sealed report"):
+        training._validate_v4_report_binding(packet, reports)
+
+
+def test_v4_manifest_layout_precedes_every_nonmanifest_packet_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packet = tmp_path / "arbitrary-packet"
+    packet.mkdir()
+    manifest = packet / "packet.json"
+    manifest.write_bytes(training._canonical({"schema_version": "phase4e-accepted-packet.v4"}))
+    for name in ("plan.json", "accepted-train-dev.jsonl", "ledger.json", "holdout-identities.json"):
+        (packet / name).write_bytes(b"must not be read\n")
+    monkeypatch.setattr(
+        training,
+        "_v4_artifact_paths",
+        lambda: training.V4ArtifactPaths(
+            tmp_path / "canonical" / "accepted-packet-v4",
+            tmp_path / "canonical" / "embedding-capsule-v1",
+            tmp_path / "canonical" / "training-capsule-v1",
+            tmp_path / "canonical" / "reports" / "ptbr-recovery-v1",
+        ),
+    )
+    original = Path.read_bytes
+    reads: list[Path] = []
+
+    def record(path: Path) -> bytes:
+        if path.parent == packet:
+            reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", record)
+    with pytest.raises(training.TrainingError, match="packet-v4 packet path"):
+        training.validate_accepted_packet_binding(packet)
+    assert reads == [manifest]
+
+
+def test_rehashed_v4_encoder_receipt_tampering_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    expected = {
+        "registry_sha256": "a" * 64,
+        "candidate": get_candidate("multilingual-minilm-l12").model_dump(mode="json"),
+        "uv_lock_sha256": "b" * 64,
+    }
+    v4_binding = training.AcceptedPacketBinding(
+        binding.packet_json_sha256,
+        binding.accepted_train_dev_jsonl_sha256,
+        binding.accepted_holdout_jsonl_sha256,
+        binding.holdout_identities_json_sha256,
+        binding.accepted_rows_sha256,
+        binding.train_dev_identities,
+        binding.holdout_identities,
+        binding.identities,
+        sealed_report_sha256="c" * 64,
+    )
+
+    def reseal(receipt: dict[str, object]) -> None:
+        receipt_raw = training._canonical(receipt) + b"\n"
+        (capsule / "accepted-packet-receipt.json").write_bytes(receipt_raw)
+        manifest = json.loads((capsule / "embedding-manifest.json").read_bytes())
+        manifest["packet_receipt_sha256"] = training._sha(receipt_raw)
+        manifest["manifest_sha256"] = training._sha(
+            training._canonical(
+                {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+            )
+        )
+        (capsule / "embedding-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
+        files = {
+            name: (capsule / name).read_bytes()
+            for name in training._CAPSULE_FILES
+            if name != "capsule-descriptor.json"
+        }
+        (capsule / "capsule-descriptor.json").write_bytes(
+            training._descriptor(files, kind="embedding")
+        )
+
+    receipt = json.loads((capsule / "accepted-packet-receipt.json").read_bytes())
+    receipt["sealed_report_sha256"] = v4_binding.sealed_report_sha256
+    receipt["encoder_receipt"] = json.loads(json.dumps(expected))
+    reseal(receipt)
+    training.validate_embedding_capsule(capsule, v4_binding, expected_encoder_receipt=expected)
+    receipt["encoder_receipt"]["candidate"]["tokenizer"] = "ForeignTokenizer"
+    reseal(receipt)
+    with pytest.raises(training.TrainingError, match="encoder receipt binding"):
+        training.validate_embedding_capsule(capsule, v4_binding, expected_encoder_receipt=expected)
+
+
+def _reseal_training_capsule(path: Path) -> None:
+    """Rehash every mutable capsule file to model an internal tamper attempt."""
+
+    receipt_raw = (path / "accepted-packet-receipt.json").read_bytes()
+    gate = json.loads((path / "pre-holdout-gate.json").read_bytes())
+    gate["accepted_packet"]["packet_receipt_sha256"] = training._sha(receipt_raw)
+    gate["descriptor_sha256"] = training._sha(
+        training._canonical(
+            {key: value for key, value in gate.items() if key != "descriptor_sha256"}
+        )
+    )
+    gate_raw = training._canonical(gate) + b"\n"
+    (path / "pre-holdout-gate.json").write_bytes(gate_raw)
+    gate_sha256 = training._sha(gate_raw)
+    manifest = json.loads((path / "training-manifest.json").read_bytes())
+    manifest["packet_receipt_sha256"] = training._sha(receipt_raw)
+    manifest["pre_holdout_gate_descriptor_sha256"] = gate_sha256
+    manifest["manifest_sha256"] = training._sha(
+        training._canonical(
+            {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+        )
+    )
+    (path / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
+    selection = json.loads((path / "dev-selection.json").read_bytes())
+    selection["pre_holdout_gate_descriptor_sha256"] = gate_sha256
+    (path / "dev-selection.json").write_bytes(training._canonical(selection) + b"\n")
+    release = json.loads((path / "holdout-release.json").read_bytes())
+    release["pre_holdout_gate_descriptor_sha256"] = gate_sha256
+    (path / "holdout-release.json").write_bytes(training._canonical(release) + b"\n")
+    report = json.loads((path / "holdout-report.json").read_bytes())
+    report["pre_holdout_gate_descriptor_sha256"] = gate_sha256
+    (path / "holdout-report.json").write_bytes(training._canonical(report) + b"\n")
+    files = {
+        name: (path / name).read_bytes()
+        for name in training._FINAL_OUTPUT_FILES
+        if name != "capsule-descriptor.json"
+    }
+    (path / "capsule-descriptor.json").write_bytes(training._descriptor(files, kind="training"))
+
+
+def test_verify_v4_training_capsule_rejects_rehashed_receipt_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, _binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    output = training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    sealed_report = "c" * 64
+    historical_receipt = {
+        "registry_sha256": "a" * 64,
+        "candidate": get_candidate("multilingual-minilm-l12").model_dump(mode="json"),
+        "uv_lock_sha256": "b" * 64,
+    }
+    source_commit = "d" * 40
+    monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", sealed_report)
+    monkeypatch.setattr(training, "verify_historical_code_sources", lambda *_args: None)
+    monkeypatch.setattr(
+        training, "_historical_v4_encoder_receipt", lambda commit: historical_receipt
+    )
+    receipt = json.loads((output / "accepted-packet-receipt.json").read_bytes())
+    receipt["sealed_report_sha256"] = sealed_report
+    receipt["encoder_receipt"] = json.loads(json.dumps(historical_receipt))
+    (output / "accepted-packet-receipt.json").write_bytes(training._canonical(receipt) + b"\n")
+    manifest = json.loads((output / "training-manifest.json").read_bytes())
+    manifest["source_commit"] = source_commit
+    manifest["sealed_report_sha256"] = sealed_report
+    (output / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
+    _reseal_training_capsule(output)
+    assert training.verify_training_capsule(output)["source_commit"] == source_commit
+
+    # An attacker can rehash the receipt, manifest, and descriptor together,
+    # but cannot make the altered tokenizer agree with the recorded commit.
+    receipt["encoder_receipt"]["candidate"]["tokenizer"] = "ForeignTokenizer"
+    (output / "accepted-packet-receipt.json").write_bytes(training._canonical(receipt) + b"\n")
+    _reseal_training_capsule(output)
+    with pytest.raises(training.TrainingError, match="encoder receipt binding"):
+        training.verify_training_capsule(output)
+
+
+def test_verify_v4_training_capsule_requires_pinned_report_in_receipt_and_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, _binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    output = training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    sealed_report = "c" * 64
+    historical_receipt = {
+        "registry_sha256": "a" * 64,
+        "candidate": get_candidate("multilingual-minilm-l12").model_dump(mode="json"),
+        "uv_lock_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", sealed_report)
+    monkeypatch.setattr(training, "verify_historical_code_sources", lambda *_args: None)
+    monkeypatch.setattr(
+        training, "_historical_v4_encoder_receipt", lambda _commit: historical_receipt
+    )
+    receipt = json.loads((output / "accepted-packet-receipt.json").read_bytes())
+    receipt.update(sealed_report_sha256="e" * 64, encoder_receipt=historical_receipt)
+    (output / "accepted-packet-receipt.json").write_bytes(training._canonical(receipt) + b"\n")
+    manifest = json.loads((output / "training-manifest.json").read_bytes())
+    manifest.update(source_commit="d" * 40, sealed_report_sha256=sealed_report)
+    (output / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
+    _reseal_training_capsule(output)
+    with pytest.raises(training.TrainingError, match="accepted packet receipt"):
+        training.verify_training_capsule(output)
+
+
+def test_terminal_record_is_create_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    releases = tmp_path / "releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: releases)
+    binding = training.AcceptedPacketBinding(
+        packet_json_sha256="a" * 64,
+        accepted_train_dev_jsonl_sha256="b" * 64,
+        accepted_holdout_jsonl_sha256="c" * 64,
+        holdout_identities_json_sha256="d" * 64,
+        accepted_rows_sha256="e" * 64,
+        train_dev_identities=(),
+        holdout_identities=(),
+        identities=(),
+    )
+    capsule = cast(training.EmbeddingCapsule, SimpleNamespace(descriptor_sha256="f" * 64))
+    training._seal_holdout_terminal(binding, capsule, "1" * 64, "2" * 64, "holdout_invalid")
+    terminal = releases.parent / "holdout-terminals" / ("a" * 64 + ".json")
+    assert set(json.loads(terminal.read_bytes())) == {
+        "schema_version",
+        "packet_json_sha256",
+        "claim_sha256",
+        "embedding_descriptor_sha256",
+        "checkpoint_sha256",
+        "pre_holdout_gate_descriptor_sha256",
+        "sealed_report_sha256",
+        "outcome",
+        "terminal_sha256",
+    }
+    with pytest.raises(training.TrainingError, match="already sealed"):
+        training._seal_holdout_terminal(binding, capsule, "1" * 64, "2" * 64, "passed")
+
+
+@pytest.mark.parametrize("kind", ["symlink", "file", "mode", "owner"])
+def test_canonical_registry_directories_fail_closed(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "registry"
+    if kind == "symlink":
+        target = tmp_path / "target"
+        target.mkdir(mode=0o700)
+        registry.symlink_to(target, target_is_directory=True)
+    elif kind == "file":
+        registry.write_bytes(b"not a directory")
+    else:
+        registry.mkdir(mode=0o700)
+        if kind == "mode":
+            os.chmod(registry, 0o755)
+        else:
+            uid = os.getuid()
+            monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+    with pytest.raises(training.TrainingError, match="holdout release claim"):
+        training._secure_registry_directory(registry, "holdout release claim", create=True)
+
+
+def test_registry_files_fail_closed_on_symlink_type_or_mode(tmp_path: Path) -> None:
+    registry = tmp_path / "registry"
+    registry.mkdir(mode=0o700)
+    target = registry / "target"
+    target.write_bytes(b"x")
+    os.chmod(target, 0o600)
+    link = registry / "claim.json"
+    link.symlink_to(target)
+    with pytest.raises(training.TrainingError, match="holdout release claim"):
+        training._read_secure_registry_file(link, "holdout release claim")
+    wrong_mode = registry / "wrong-mode.json"
+    wrong_mode.write_bytes(b"x")
+    os.chmod(wrong_mode, 0o644)
+    with pytest.raises(training.TrainingError, match="holdout release claim"):
+        training._read_secure_registry_file(wrong_mode, "holdout release claim")
+
+
+@pytest.mark.parametrize("lane", ["release", "terminal", "lock"])
+@pytest.mark.parametrize("ancestor", ["parent", "grandparent"])
+def test_registry_lanes_reject_symlinked_existing_ancestors(
+    lane: str, ancestor: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "platform-state"
+    phase = root / "phase4e"
+    target = tmp_path / "safe-target"
+    target.mkdir()
+    if ancestor == "parent":
+        root.mkdir()
+        phase.symlink_to(target, target_is_directory=True)
+    else:
+        root.symlink_to(target, target_is_directory=True)
+    releases = phase / "holdout-releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: releases)
+    with pytest.raises(training.TrainingError):
+        if lane == "release":
+            training._secure_registry_directory(releases, "holdout release claim", create=True)
+        elif lane == "terminal":
+            training._secure_registry_directory(
+                training._holdout_terminal_registry_directory(), "holdout terminal", create=True
+            )
+        else:
+            with training._holdout_registry_lock("a" * 64):
+                pass
+
+
+def test_v4_source_ledger_is_bound_to_reviewed_commit_not_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "a" * 40
+    ledger = {"benchmarks/saracura_universal_training.py": "b" * 64}
+    calls: list[object] = []
+    monkeypatch.setattr(training, "_clean_reviewed_source_commit", lambda: source)
+    monkeypatch.setattr(training, "_training_code_sources", lambda: ledger)
+    monkeypatch.setattr(
+        training,
+        "verify_historical_code_sources",
+        lambda commit, sources: calls.append((commit, sources)),
+    )
+    monkeypatch.setattr(training, "_validate_v4_source_receipts", lambda commit: {"commit": commit})
+    assert training._prepare_v4_source_ledger() == (source, ledger, {"commit": source})
+    assert calls == [(source, ledger)]
+
+
+def test_differing_gate_for_same_v4_revision_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = {"code_sha256": "a" * 64}
+    monkeypatch.setattr(training, "_validate_pre_holdout_gate_descriptor", lambda _raw: descriptor)
+    source = "b" * 40
+    training._freeze_pre_holdout_gate(tmp_path, b"one\n", source_commit=source)
+    with pytest.raises(training.TrainingError, match="different frozen pre-holdout gate"):
+        training._freeze_pre_holdout_gate(tmp_path, b"two\n", source_commit=source)
+
+
+def _v4_binding() -> training.AcceptedPacketBinding:
+    return training.AcceptedPacketBinding(
+        packet_json_sha256="a" * 64,
+        accepted_train_dev_jsonl_sha256="b" * 64,
+        accepted_holdout_jsonl_sha256="c" * 64,
+        holdout_identities_json_sha256="d" * 64,
+        accepted_rows_sha256="e" * 64,
+        train_dev_identities=(),
+        holdout_identities=(),
+        identities=(),
+        sealed_report_sha256="f" * 64,
+    )
+
+
+def test_orphan_interrupted_terminal_preserves_validated_v4_report_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: registry)
+    monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", "f" * 64)
+    binding = _v4_binding()
+    capsule = cast(training.EmbeddingCapsule, SimpleNamespace(descriptor_sha256="1" * 64))
+    training._claim_holdout_once(binding, capsule, "2" * 64, "3" * 64)
+    claim = json.loads((registry / (binding.packet_json_sha256 + ".json")).read_bytes())
+    invalid = training.AcceptedPacketBinding(
+        binding.packet_json_sha256,
+        binding.accepted_train_dev_jsonl_sha256,
+        binding.accepted_holdout_jsonl_sha256,
+        binding.holdout_identities_json_sha256,
+        binding.accepted_rows_sha256,
+        binding.train_dev_identities,
+        binding.holdout_identities,
+        binding.identities,
+        sealed_report_sha256=None,
+    )
+    with pytest.raises(training.TrainingError, match="packet-v4 sealed report"):
+        training._seal_terminal_from_claim(invalid, claim, "holdout_interrupted")
+    with pytest.raises(training.TrainingError, match="terminal interrupted"):
+        training._reconcile_or_refuse_prior_claim(binding, tmp_path / "out", "run")
+    terminal = training._read_holdout_terminal(binding.packet_json_sha256)
+    assert terminal is not None
+    assert terminal["outcome"] == "holdout_interrupted"
+    assert terminal["sealed_report_sha256"] == binding.sealed_report_sha256
+
+
+def test_orphan_recovery_prefers_complete_capsule_and_preserves_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: registry)
+    monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", "f" * 64)
+    binding = _v4_binding()
+    descriptor = "1" * 64
+    checkpoint = "2" * 64
+    gate = "3" * 64
+    capsule = cast(training.EmbeddingCapsule, SimpleNamespace(descriptor_sha256=descriptor))
+    training._claim_holdout_once(binding, capsule, checkpoint, gate)
+    target = tmp_path / "out" / "run"
+    target.mkdir(parents=True)
+    (target / "embedding-descriptor.json").write_bytes(b"descriptor")
+    claim = json.loads((registry / (binding.packet_json_sha256 + ".json")).read_bytes())
+    monkeypatch.setattr(
+        training,
+        "verify_training_capsule",
+        lambda _path: {"outcome": "passed", "sealed_report_sha256": binding.sealed_report_sha256},
+    )
+    monkeypatch.setattr(
+        training, "_json", lambda path: claim if path.name == "holdout-release.json" else {}
+    )
+    original_sha = training._sha
+    monkeypatch.setattr(
+        training, "_sha", lambda raw: descriptor if raw == b"descriptor" else original_sha(raw)
+    )
+    with pytest.raises(training.TrainingError, match="terminal recovered"):
+        training._reconcile_or_refuse_prior_claim(binding, tmp_path / "out", "run")
+    assert training._read_holdout_terminal(binding.packet_json_sha256)["outcome"] == "passed"  # type: ignore[index]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
+def test_postpublication_failure_seals_capsule_outcome_not_invalid(
+    failure: type[BaseException], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    original_write = training._write_capsule
+
+    def publish_then_fail(*args: object, **kwargs: object) -> Path:
+        original_write(*args, **kwargs)  # type: ignore[arg-type]
+        raise failure("after publication")
+
+    monkeypatch.setattr(training, "_write_capsule", publish_then_fail)
+    with pytest.raises(failure, match="after publication"):
+        training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    terminal = training._read_holdout_terminal(binding.packet_json_sha256)
+    assert terminal is not None
+    assert terminal["outcome"] in {"passed", "holdout_failed"}
+    assert (tmp_path / "out" / "run").is_dir()
+
+
+def test_reentry_recovers_complete_capsule_before_interrupted_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    original_seal = training._seal_holdout_terminal
+    monkeypatch.setattr(
+        training,
+        "_seal_holdout_terminal",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt("before terminal")),
+    )
+    with pytest.raises(KeyboardInterrupt, match="before terminal"):
+        training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    assert (tmp_path / "out" / "run").is_dir()
+    assert training._read_holdout_terminal(binding.packet_json_sha256) is None
+
+    monkeypatch.setattr(training, "_seal_holdout_terminal", original_seal)
+    with (
+        training._holdout_registry_lock(binding.packet_json_sha256),
+        pytest.raises(training.TrainingError, match="terminal recovered"),
+    ):
+        training._reconcile_or_refuse_prior_claim(binding, tmp_path / "out", "run")
+    terminal = training._read_holdout_terminal(binding.packet_json_sha256)
+    assert terminal is not None
+    assert terminal["outcome"] in {"passed", "holdout_failed"}
+
+
+def test_lock_rejects_concurrent_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    digest = "a" * 64
+    with (
+        training._holdout_registry_lock(digest),
+        pytest.raises(training.TrainingError, match="already active"),
+        training._holdout_registry_lock(digest),
+    ):
+        pass
+
+
+def test_complete_training_opens_holdout_payload_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, _ = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    holdout = (packet / "accepted-holdout.jsonl").resolve()
+    original = Path.read_bytes
+    opens = 0
+
+    def count(path: Path) -> bytes:
+        nonlocal opens
+        if path.resolve() == holdout:
+            opens += 1
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", count)
+    training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    assert opens == 1
+
+
+def test_postclaim_failure_seals_invalid_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    monkeypatch.setattr(
+        training,
+        "derive_holdout_embeddings_in_memory",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected")),
+    )
+    with pytest.raises(RuntimeError, match="injected"):
+        training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    terminal = training._read_holdout_terminal(binding.packet_json_sha256)
+    assert terminal is not None and terminal["outcome"] == "holdout_invalid"

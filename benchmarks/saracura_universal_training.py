@@ -14,24 +14,28 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
+import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from benchmarks.encoder_loader import LoadedEncoder, VerifiedSnapshot, load_encoder
-from benchmarks.encoder_registry import get_candidate
+from benchmarks.encoder_registry import get_candidate, load_registry
 from benchmarks.io import atomic_create
 from benchmarks.saracura_universal_corpus import (
     CorpusError,
     _publish_packet_create_if_absent,
-    validate_accepted_packet,
+    validate_accepted_packet_holdout_bytes,
     validate_accepted_packet_pre_holdout,
 )
 from benchmarks.saracura_universal_policy import (
     require_phase4e_authorization,
     validate_phase4e_policy,
+    validate_post_pilot_phase4e_policy,
 )
 from saracura.serialization import canonical_json_bytes
 from saracura.universal.checkpoint import (
@@ -85,6 +89,15 @@ _EMBEDDING_TENSORS = {
 }
 _PRE_HOLDOUT_GATE_SCHEMA = "phase4e-pre-holdout-gate.v1"
 _HOLDOUT_RELEASE_SCHEMA = "phase4e-holdout-release.v4"
+_HOLDOUT_TERMINAL_SCHEMA = "phase4e-holdout-terminal.v1"
+_V4_SEALED_REPORT_SHA256 = "4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c"
+_V4_PACKET_MANIFEST_SHA256 = "3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239"
+_V4_RECOVERY_PLAN_SHA256 = "a302b51d9eb9095de77b66f0da9ee0422e290687bd99e9b6abf1a5d2f3b551f1"
+_V4_SUPPLEMENTAL_RESOLUTION_SHA256 = (
+    "32a78f39a7f746f7b5d2f9fc2315ef2d9ef216a607c2337856017c3fadd1ab75"
+)
+_V4_SUPPLEMENTAL_LEDGER_SHA256 = "b29b53f21ed4e3add28301bc16d15f1c1eb045cfa2c0df6c5019340a6b01a076"
+_V4_RESEARCH_INVENTORY_SHA256 = "5cd3c66ec9163867e7b5d4a715182496d3df6bde05348906b1c6d13229091a29"
 _REQUIRED_LOCALES = ("pt-BR", "en")
 _REQUIRED_OPTION_COUNTS = tuple(range(2, 9))
 _MAX_ENCODER_MICROBATCH = 20
@@ -102,6 +115,24 @@ class TrainingError(ValueError):
     """A closed Phase 4E offline training invariant was violated."""
 
 
+@dataclass(frozen=True)
+class V4ReportBinding:
+    """The one sealed corpus report which permits a packet-v4 training lane."""
+
+    path: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
+class V4ArtifactPaths:
+    """The only private logical layout admitted by packet-v4."""
+
+    packet: Path
+    embeddings: Path
+    training: Path
+    reports: Path
+
+
 def _canonical(value: object) -> bytes:
     return canonical_json_bytes(cast(Any, value))
 
@@ -112,6 +143,86 @@ def _sha(raw: bytes) -> str:
 
 def _is_sha(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX
+
+
+def _packet_manifest(packet: Path) -> tuple[bytes, dict[str, Any]]:
+    """Read the one packet file which may select the v4 security boundary."""
+
+    try:
+        raw = (packet / "packet.json").read_bytes()
+        value = json.loads(raw)
+    except (OSError, ValueError) as error:
+        raise TrainingError("accepted packet binding") from error
+    if not isinstance(value, dict):
+        raise TrainingError("accepted packet binding")
+    return raw, cast(dict[str, Any], value)
+
+
+def _v4_artifact_paths() -> V4ArtifactPaths:
+    """Resolve v4 names only through the configured private state root."""
+
+    # Importing pilot here avoids its pipeline import cycle while keeping the
+    # private-root policy in its existing single owner.
+    from benchmarks import saracura_universal_pilot as pilot
+
+    try:
+        root = pilot.require_live_private_phase4e_root()
+    except CorpusError as error:
+        raise TrainingError("packet-v4 private artifact root") from error
+    if root.is_symlink():
+        raise TrainingError("packet-v4 private artifact root")
+    artifacts = root / "model-artifacts"
+    return V4ArtifactPaths(
+        packet=artifacts / "accepted-packet-v4",
+        embeddings=artifacts / "embedding-capsule-v1",
+        training=artifacts / "training-capsule-v1",
+        reports=root / "reports" / "ptbr-recovery-v1",
+    )
+
+
+def _require_v4_artifact_path(actual: Path, expected: Path, label: str) -> None:
+    """Reject caller-selected, Git, synchronized, and symlinked v4 paths."""
+
+    if actual.is_symlink() or actual.absolute() != expected.absolute():
+        raise TrainingError(f"packet-v4 {label} path")
+    # Existing parents must be ordinary directories.  A non-existent leaf is
+    # allowed for the create-only capsule destination.
+    cursor = actual.parent
+    while cursor != cursor.parent:
+        if cursor.exists() and (cursor.is_symlink() or not cursor.is_dir()):
+            raise TrainingError(f"packet-v4 {label} path")
+        cursor = cursor.parent
+
+
+def _require_v4_layout(
+    packet: Path,
+    *,
+    packet_schema: str | None = None,
+    embeddings: Path | None = None,
+    output_parent: Path | None = None,
+    output_name: str | None = None,
+    report_dir: Path | None = None,
+) -> V4ArtifactPaths | None:
+    """Apply exact v4 logical names before snapshots or outputs are opened."""
+
+    schema = packet_schema
+    if schema is None:
+        _raw, manifest = _packet_manifest(packet)
+        schema_value = manifest.get("schema_version")
+        schema = schema_value if isinstance(schema_value, str) else None
+    if schema != "phase4e-accepted-packet.v4":
+        return None
+    paths = _v4_artifact_paths()
+    _require_v4_artifact_path(packet, paths.packet, "packet")
+    if embeddings is not None:
+        _require_v4_artifact_path(embeddings, paths.embeddings, "embedding")
+    if output_parent is not None:
+        if output_name != paths.training.name:
+            raise TrainingError("packet-v4 training output name")
+        _require_v4_artifact_path(output_parent / output_name, paths.training, "training")
+    if report_dir is not None:
+        _require_v4_artifact_path(report_dir, paths.reports, "report")
+    return paths
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -207,6 +318,69 @@ class AcceptedPacketBinding:
     train_dev_identities: tuple[dict[str, Any], ...]
     holdout_identities: tuple[dict[str, Any], ...]
     identities: tuple[dict[str, Any], ...]
+    sealed_report_sha256: str | None = None
+
+
+_ENCODER_RECEIPT_FIELDS = {"registry_sha256", "candidate", "uv_lock_sha256"}
+_ENCODER_RECEIPT_CANDIDATE_FIELDS = {
+    "id",
+    "repository",
+    "revision",
+    "license",
+    "role",
+    "disposition",
+    "reason",
+    "reviewed_at",
+    "files",
+    "model_type",
+    "architecture",
+    "hidden_width",
+    "loader",
+    "tokenizer",
+}
+_ENCODER_RECEIPT_FILE_FIELDS = {"path", "bytes", "sha256"}
+
+
+def _closed_encoder_receipt(value: object) -> dict[str, Any]:
+    """Validate the complete registry candidate carried by a v4 capsule."""
+
+    if not isinstance(value, dict) or set(value) != _ENCODER_RECEIPT_FIELDS:
+        raise TrainingError("packet-v4 encoder receipt")
+    candidate = value.get("candidate")
+    if not isinstance(candidate, dict) or set(candidate) != _ENCODER_RECEIPT_CANDIDATE_FIELDS:
+        raise TrainingError("packet-v4 encoder receipt")
+    files = candidate.get("files")
+    if (
+        not _is_sha(value.get("registry_sha256"))
+        or not _is_sha(value.get("uv_lock_sha256"))
+        or not isinstance(candidate.get("id"), str)
+        or not isinstance(candidate.get("repository"), str)
+        or not isinstance(candidate.get("revision"), str)
+        or not isinstance(candidate.get("license"), str)
+        or not isinstance(candidate.get("role"), str)
+        or not isinstance(candidate.get("disposition"), str)
+        or not isinstance(candidate.get("reason"), str)
+        or not isinstance(candidate.get("reviewed_at"), str)
+        or not isinstance(candidate.get("model_type"), str)
+        or not isinstance(candidate.get("architecture"), str)
+        or type(candidate.get("hidden_width")) is not int
+        or not isinstance(candidate.get("loader"), str)
+        or not isinstance(candidate.get("tokenizer"), str)
+        or not isinstance(files, list)
+        or not files
+    ):
+        raise TrainingError("packet-v4 encoder receipt")
+    for item in files:
+        if (
+            not isinstance(item, dict)
+            or set(item) != _ENCODER_RECEIPT_FILE_FIELDS
+            or not isinstance(item.get("path"), str)
+            or type(item.get("bytes")) is not int
+            or cast(int, item["bytes"]) <= 0
+            or not _is_sha(item.get("sha256"))
+        ):
+            raise TrainingError("packet-v4 encoder receipt")
+    return cast(dict[str, Any], value)
 
 
 def _identity_rows(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
@@ -278,22 +452,93 @@ def _accepted_identity_digest(rows: Sequence[Mapping[str, Any]]) -> str:
     return _sha(_canonical(_identity_rows(rows)))
 
 
-def validate_accepted_packet_binding(packet: Path) -> AcceptedPacketBinding:
+def _validate_v4_report_binding(packet_raw: bytes, report_dir: Path | None) -> V4ReportBinding:
+    """Require the exact latest sealed recovery report for packet-v4.
+
+    The report directory is deliberately not inferred from a packet path: a
+    packet cannot select its own authority.  Production callers provide the
+    configured private report root, while legacy packet versions never enter
+    this branch.  A later numbered report always invalidates the older seal.
+    """
+
+    if report_dir is None or not report_dir.is_dir() or report_dir.is_symlink():
+        raise TrainingError("packet-v4 sealed report")
+    reports = sorted(report_dir.glob("report-*.json"))
+    if not reports:
+        raise TrainingError("packet-v4 sealed report")
+    if any(not item.is_file() or item.is_symlink() for item in reports):
+        raise TrainingError("packet-v4 sealed report")
+    # Numbered reports are an append-only ledger.  Do not silently accept an
+    # arbitrary filename or a gap introduced by a partial recovery.
+    try:
+        indexes = [int(item.stem.removeprefix("report-")) for item in reports]
+    except ValueError as error:
+        raise TrainingError("packet-v4 sealed report") from error
+    if indexes != list(range(indexes[-1] + 1)):
+        raise TrainingError("packet-v4 sealed report")
+    selected = reports[-1]
+    try:
+        raw = selected.read_bytes()
+        value = json.loads(raw)
+    except (OSError, ValueError) as error:
+        raise TrainingError("packet-v4 sealed report") from error
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != "phase4e-corpus-terminal-report.v2"
+        or value.get("outcome") != "sealed"
+        or _sha(packet_raw) != _V4_PACKET_MANIFEST_SHA256
+        or value.get("packet_manifest_sha256") != _V4_PACKET_MANIFEST_SHA256
+        or value.get("recovery_plan_sha256") != _V4_RECOVERY_PLAN_SHA256
+        or value.get("supplemental_resolution_sha256") != _V4_SUPPLEMENTAL_RESOLUTION_SHA256
+        or value.get("supplemental_ledger_sha256") != _V4_SUPPLEMENTAL_LEDGER_SHA256
+        or value.get("research_inventory_sha256") != _V4_RESEARCH_INVENTORY_SHA256
+        or value.get("accepted_count") != 1552
+        or value.get("rejected_count") != 148
+        or value.get("unresolved_count") != 0
+        or not isinstance(value.get("counts"), dict)
+        or _sha(raw) != _V4_SEALED_REPORT_SHA256
+    ):
+        raise TrainingError("packet-v4 sealed report")
+    counts = cast(dict[str, Any], value["counts"])
+    locales = counts.get("locale")
+    if not isinstance(locales, dict) or locales != {"en": 609, "pt-BR": 943}:
+        raise TrainingError("packet-v4 sealed report")
+    return V4ReportBinding(path=selected, sha256=_sha(raw))
+
+
+def validate_accepted_packet_binding(
+    packet: Path, *, report_dir: Path | None = None
+) -> AcceptedPacketBinding:
     """Bind the pre-claim train/dev payload and holdout identity projection."""
 
+    try:
+        packet_raw, manifest = _packet_manifest(packet)
+    except (OSError, TypeError, ValueError, TrainingError) as error:
+        raise TrainingError("accepted packet binding") from error
+    report_binding: V4ReportBinding | None = None
+    schema = manifest.get("schema_version")
+    if schema == "phase4e-accepted-packet.v4":
+        # A v4 manifest has a single admitted private layout.  Prove that
+        # layout while packet.json is the only packet file opened: the generic
+        # pre-holdout validator otherwise reads plan/train-dev/ledger/identity
+        # files before it can know that an arbitrary v4 path is forbidden.
+        paths = _require_v4_layout(
+            packet,
+            packet_schema=cast(str, schema),
+            report_dir=report_dir,
+        )
+        if paths is None:  # pragma: no cover - guarded by the schema above
+            raise AssertionError("v4 layout dispatch")
+    else:
+        paths = None
     try:
         validate_accepted_packet_pre_holdout(packet)
     except (CorpusError, OSError, TypeError, ValueError) as error:
         raise TrainingError("accepted packet validation") from error
-    try:
-        packet_raw = (packet / "packet.json").read_bytes()
-        manifest = json.loads(packet_raw)
-    except (OSError, TypeError, ValueError) as error:
-        raise TrainingError("accepted packet binding") from error
-    if isinstance(manifest, dict) and manifest.get("schema_version") == (
-        "phase4e-accepted-packet.v4"
-    ):
-        raise TrainingError("post-pilot recovery training requires Phase 4E.3B")
+    if paths is not None:
+        # The report is validated before any snapshot, output, or holdout
+        # access.  Its digest is recorded by the caller in the v4 receipt.
+        report_binding = _validate_v4_report_binding(packet_raw, paths.reports)
     try:
         train_dev_raw = (packet / "accepted-train-dev.jsonl").read_bytes()
         train_dev = [
@@ -328,6 +573,7 @@ def validate_accepted_packet_binding(packet: Path) -> AcceptedPacketBinding:
         train_dev_identities=train_dev_identities,
         holdout_identities=holdout_identities,
         identities=identities,
+        sealed_report_sha256=None if report_binding is None else report_binding.sha256,
     )
 
 
@@ -337,10 +583,13 @@ def validate_full_accepted_packet_binding(
     capsule: EmbeddingCapsule,
     checkpoint_sha256: str,
     pre_holdout_gate_descriptor_sha256: str,
+    *,
+    report_dir: Path | None = None,
+    holdout_raw: bytes | None = None,
 ) -> AcceptedPacketBinding:
     """Open and bind accepted holdout content only after its release claim."""
 
-    actual = validate_accepted_packet_binding(packet)
+    actual = validate_accepted_packet_binding(packet, report_dir=report_dir)
     if actual != expected:
         raise TrainingError("full accepted packet binding")
     _validate_holdout_release_claim(
@@ -350,16 +599,18 @@ def validate_full_accepted_packet_binding(
         pre_holdout_gate_descriptor_sha256,
     )
     try:
-        validate_accepted_packet(packet)
-        holdout_raw = (packet / "accepted-holdout.jsonl").read_bytes()
-        holdout = [
-            cast(dict[str, Any], json.loads(line)) for line in holdout_raw.splitlines() if line
-        ]
+        raw = (
+            holdout_raw
+            if holdout_raw is not None
+            else (packet / "accepted-holdout.jsonl").read_bytes()
+        )
+        holdout = [cast(dict[str, Any], json.loads(line)) for line in raw.splitlines() if line]
+        validate_accepted_packet_holdout_bytes(packet, raw)
     except (CorpusError, OSError, TypeError, ValueError) as error:
         raise TrainingError("full accepted packet validation") from error
     holdout_identities = _identity_rows(holdout)
     if (
-        _sha(holdout_raw) != expected.accepted_holdout_jsonl_sha256
+        _sha(raw) != expected.accepted_holdout_jsonl_sha256
         or holdout_identities != expected.holdout_identities
         or actual != expected
     ):
@@ -368,7 +619,10 @@ def validate_full_accepted_packet_binding(
 
 
 def validate_embedding_capsule(
-    path: Path, accepted_packet: AcceptedPacketBinding | None = None
+    path: Path,
+    accepted_packet: AcceptedPacketBinding | None = None,
+    *,
+    expected_encoder_receipt: Mapping[str, object] | None = None,
 ) -> EmbeddingCapsule:
     """Validate a v3 pre-holdout capsule without opening holdout content."""
 
@@ -380,17 +634,18 @@ def validate_embedding_capsule(
         kind="embedding",
     )
     receipt = _json(path / "accepted-packet-receipt.json")
+    receipt_required = {
+        "schema_version",
+        "packet_json_sha256",
+        "accepted_train_dev_jsonl_sha256",
+        "accepted_holdout_jsonl_sha256",
+        "holdout_identities_json_sha256",
+        "accepted_rows_sha256",
+        "synthetic_only",
+    }
+    v4_receipt_fields = {"sealed_report_sha256", "encoder_receipt"}
     if (
-        set(receipt)
-        != {
-            "schema_version",
-            "packet_json_sha256",
-            "accepted_train_dev_jsonl_sha256",
-            "accepted_holdout_jsonl_sha256",
-            "holdout_identities_json_sha256",
-            "accepted_rows_sha256",
-            "synthetic_only",
-        }
+        set(receipt) not in (receipt_required, receipt_required | v4_receipt_fields)
         or receipt["schema_version"] != "phase4e-accepted-packet-receipt.v4"
         or receipt["synthetic_only"] is not True
         or not _is_sha(receipt["packet_json_sha256"])
@@ -398,8 +653,16 @@ def validate_embedding_capsule(
         or not _is_sha(receipt["accepted_holdout_jsonl_sha256"])
         or not _is_sha(receipt["holdout_identities_json_sha256"])
         or not _is_sha(receipt["accepted_rows_sha256"])
+        or ("sealed_report_sha256" in receipt and not _is_sha(receipt["sealed_report_sha256"]))
     ):
         raise TrainingError("accepted packet receipt")
+    actual_encoder_receipt: dict[str, Any] | None = None
+    if "encoder_receipt" in receipt:
+        actual_encoder_receipt = _closed_encoder_receipt(receipt["encoder_receipt"])
+    if expected_encoder_receipt is not None:
+        expected_receipt = _closed_encoder_receipt(dict(expected_encoder_receipt))
+        if actual_encoder_receipt != expected_receipt:
+            raise TrainingError("packet-v4 encoder receipt binding")
     manifest = _json(path / "embedding-manifest.json")
     expected = {
         "schema_version",
@@ -486,6 +749,7 @@ def validate_embedding_capsule(
         or identities != accepted_packet.identities
         or holdout_identities != accepted_packet.holdout_identities
         or holdout["sha256"] != accepted_packet.holdout_identities_json_sha256
+        or receipt.get("sealed_report_sha256") != accepted_packet.sealed_report_sha256
     ):
         raise TrainingError("validated accepted packet binding")
     digests = manifest["tensor_digests"]
@@ -744,6 +1008,7 @@ def _packet_tasks(
     binding: AcceptedPacketBinding,
     *,
     parts: Sequence[Literal["train_dev", "holdout"]],
+    payloads: Mapping[str, bytes] | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Read only the explicitly released accepted payload split(s)."""
 
@@ -765,7 +1030,11 @@ def _packet_tasks(
     for part in parts:
         name, expected_digest, expected_identities = sources[part]
         try:
-            accepted_raw = (packet / name).read_bytes()
+            accepted_raw = (
+                payloads[part]
+                if payloads is not None and part in payloads
+                else (packet / name).read_bytes()
+            )
             records = [json.loads(line) for line in accepted_raw.splitlines() if line]
         except (OSError, ValueError) as error:
             raise TrainingError("accepted packet source text") from error
@@ -802,6 +1071,7 @@ def _derive_descriptor_bound_embeddings(
     device_name: str,
     *,
     parts: Sequence[Literal["train_dev", "holdout"]] = ("train_dev",),
+    payloads: Mapping[str, bytes] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Derive the requested capsule tensors from packet text and verified MiniLM."""
 
@@ -815,7 +1085,7 @@ def _derive_descriptor_bound_embeddings(
         complete_sha256 = _sha((snapshot / "snapshot.complete.json").read_bytes())
     except OSError as error:
         raise TrainingError("verified MiniLM snapshot marker") from error
-    tasks = _packet_tasks(packet, binding, parts=parts)
+    tasks = _packet_tasks(packet, binding, parts=parts, payloads=payloads)
     sections: dict[str, dict[str, Any]] = {}
     for part, splits in (
         ("train_dev", {"synthetic_train", "synthetic_dev"}),
@@ -888,7 +1158,14 @@ def _derive_descriptor_bound_embeddings(
     return sections, metadata
 
 
-def extract_and_seal_embeddings(packet: Path, snapshot: Path, device: str, output: Path) -> Path:
+def extract_and_seal_embeddings(
+    packet: Path,
+    snapshot: Path,
+    device: str,
+    output: Path,
+    *,
+    report_dir: Path | None = None,
+) -> Path:
     """Create the exact no-clobber, holdout-blind v3 embedding capsule.
 
     This is the only public extraction producer.  It validates the packet's
@@ -898,7 +1175,23 @@ def extract_and_seal_embeddings(packet: Path, snapshot: Path, device: str, outpu
 
     if device != "cpu":
         raise TrainingError("Phase 4E.2c extraction is CPU-only")
-    binding = validate_accepted_packet_binding(packet)
+    paths = _require_v4_layout(packet, embeddings=output, report_dir=report_dir)
+    effective_report_dir = paths.reports if paths is not None else report_dir
+    source_receipt: dict[str, Any] | None = None
+    if paths is not None:
+        # Packet-v4 extraction is an artifact-creating operation.  Prove the
+        # reviewed commit and the entire closed ledger before touching a
+        # snapshot or deciding whether an existing capsule is reusable.
+        _source_commit, _source_ledger, source_receipt = _prepare_v4_source_ledger()
+    binding = validate_accepted_packet_binding(packet, report_dir=effective_report_dir)
+    if paths is not None and output.exists():
+        # A v4 extraction is reusable only when its complete immutable capsule
+        # still binds the exact encoder/tokenizer receipt derived from the
+        # clean reviewed source commit.
+        if source_receipt is None:  # pragma: no cover - guarded above
+            raise AssertionError("v4 source receipt")
+        validate_embedding_capsule(output, binding, expected_encoder_receipt=source_receipt)
+        return output
     sections, metadata = _derive_descriptor_bound_embeddings(
         packet, binding, snapshot, device, parts=("train_dev",)
     )
@@ -915,6 +1208,11 @@ def extract_and_seal_embeddings(packet: Path, snapshot: Path, device: str, outpu
         "accepted_rows_sha256": binding.accepted_rows_sha256,
         "synthetic_only": True,
     }
+    if binding.sealed_report_sha256 is not None:
+        receipt["sealed_report_sha256"] = binding.sealed_report_sha256
+        if source_receipt is None:
+            raise TrainingError("packet-v4 reviewed source commit")
+        receipt["encoder_receipt"] = source_receipt
     receipt_raw = _canonical(receipt) + b"\n"
     manifest: dict[str, Any] = {
         "schema_version": "phase4e-embedding-capsule.v3",
@@ -988,19 +1286,31 @@ def derive_holdout_embeddings_in_memory(
     device: str,
     checkpoint_sha256: str,
     pre_holdout_gate_descriptor_sha256: str,
+    *,
+    report_dir: Path | None = None,
 ) -> _Rows:
     """Open holdout exactly after claim and return its transient tensors only."""
 
+    # Prove the immutable authorization before opening even one payload byte.
+    _validate_holdout_release_claim(
+        binding, capsule, checkpoint_sha256, pre_holdout_gate_descriptor_sha256
+    )
+    try:
+        holdout_raw = (packet / "accepted-holdout.jsonl").read_bytes()
+    except OSError as error:
+        raise TrainingError("full accepted packet validation") from error
     validate_full_accepted_packet_binding(
         packet,
         binding,
         capsule,
         checkpoint_sha256,
         pre_holdout_gate_descriptor_sha256,
+        report_dir=report_dir,
+        holdout_raw=holdout_raw,
     )
 
     sections, metadata = _derive_descriptor_bound_embeddings(
-        packet, binding, snapshot, device, parts=("holdout",)
+        packet, binding, snapshot, device, parts=("holdout",), payloads={"holdout": holdout_raw}
     )
     if (
         capsule.manifest["base_encoder"] != metadata["base_encoder"]
@@ -1469,15 +1779,20 @@ def _training_code_sources() -> dict[str, str]:
     names = (
         "benchmarks/saracura_universal_training.py",
         "benchmarks/saracura_universal_corpus.py",
+        "benchmarks/phase4e_pipeline.py",
+        "benchmarks/saracura_universal_pilot.py",
         "benchmarks/saracura_universal_policy.py",
         "benchmarks/encoder_loader.py",
         "benchmarks/encoder_registry.py",
         "benchmarks/io.py",
         "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json",
+        "benchmarks/manifests/phase4e-saracura-universal-policy.v2.json",
+        "benchmarks/manifests/encoder-candidates.v1.json",
         "src/saracura/serialization.py",
         "src/saracura/universal/checkpoint.py",
         "src/saracura/universal/rendering.py",
         "src/saracura/universal/tasks.py",
+        "uv.lock",
     )
     try:
         return {name: _sha((root / name).read_bytes()) for name in names}
@@ -1487,6 +1802,229 @@ def _training_code_sources() -> dict[str, str]:
 
 def _training_code_digest() -> str:
     return _sha(_canonical(_training_code_sources()))
+
+
+def _git_show_bytes(revision: str, name: str) -> bytes:
+    root = Path(__file__).parents[1]
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{name}"],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode:
+        raise TrainingError("historical source receipt")
+    return result.stdout
+
+
+def _validate_v4_source_receipts(source_commit: str) -> dict[str, Any]:
+    """Prove v4 encoder/renderer parity before a snapshot or claim is used."""
+
+    policy = validate_post_pilot_phase4e_policy()
+    historical = validate_phase4e_policy()
+    for key in ("training", "base_encoder", "ranker"):
+        if policy[key] != historical[key]:
+            raise TrainingError("packet-v4 policy parity")
+    candidate = get_candidate("multilingual-minilm-l12")
+    encoder = cast(Mapping[str, Any], policy["base_encoder"])
+    if (
+        encoder.get("id") != candidate.repository
+        or encoder.get("revision") != candidate.revision
+        or encoder.get("dimensions") != candidate.hidden_width
+        or encoder.get("frozen") is not True
+    ):
+        raise TrainingError("packet-v4 encoder registry mapping")
+    root = Path(__file__).parents[1]
+    for revision in ("edc5af4", "740a58d"):
+        if subprocess.run(
+            ["git", "merge-base", "--is-ancestor", revision, source_commit],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode:
+            raise TrainingError("packet-v4 encoder source ancestry")
+        for name in (
+            "benchmarks/encoder_registry.py",
+            "benchmarks/encoder_loader.py",
+            "benchmarks/manifests/encoder-candidates.v1.json",
+        ):
+            if _git_show_bytes(source_commit, name) != _git_show_bytes(revision, name):
+                raise TrainingError("packet-v4 encoder source parity")
+    renderer = "src/saracura/universal/rendering.py"
+    if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "2a07d6e", source_commit],
+        cwd=root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode:
+        raise TrainingError("packet-v4 renderer source ancestry")
+    if RENDERER_REVISION != "phase4e-universal-renderer.v1" or _git_show_bytes(
+        source_commit, renderer
+    ) != _git_show_bytes("2a07d6e", renderer):
+        raise TrainingError("packet-v4 renderer source parity")
+    receipt = _historical_v4_encoder_receipt(source_commit)
+    # The live source proof above already established byte-for-byte registry
+    # parity.  Keep this explicit equality so extraction cannot record an
+    # historical receipt for a different candidate selected from this checkout.
+    if receipt["candidate"] != candidate.model_dump(mode="json"):
+        raise TrainingError("packet-v4 encoder source receipt")
+    return receipt
+
+
+def _historical_v4_encoder_receipt(source_commit: str) -> dict[str, Any]:
+    """Derive the closed v4 encoder receipt from the recorded commit only.
+
+    Capsule verification deliberately does not consult the working tree,
+    current registry, policy, or ``HEAD``.  A self-consistently rehashed
+    capsule can therefore not replace tokenizer or snapshot metadata merely by
+    updating its internal descriptors.
+    """
+
+    if len(source_commit) != 40 or any(char not in _HEX for char in source_commit):
+        raise TrainingError("historical source commit")
+    registry_raw = _git_show_bytes(source_commit, "benchmarks/manifests/encoder-candidates.v1.json")
+    try:
+        historical_registry = load_registry(registry_raw)
+        historical_candidate = next(
+            item for item in historical_registry.candidates if item.id == "multilingual-minilm-l12"
+        )
+    except (StopIteration, ValueError) as error:
+        raise TrainingError("packet-v4 encoder source receipt") from error
+    return _closed_encoder_receipt(
+        {
+            "registry_sha256": _sha(registry_raw),
+            "candidate": historical_candidate.model_dump(mode="json"),
+            "uv_lock_sha256": _sha(_git_show_bytes(source_commit, "uv.lock")),
+        }
+    )
+
+
+def _clean_reviewed_source_commit() -> str:
+    """Return only the clean reviewed main commit permitted in a v4 capsule."""
+
+    root = Path(__file__).parents[1]
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        ).stdout
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        reviewed = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise TrainingError("packet-v4 reviewed source commit") from error
+    if status or head != reviewed or len(head) != 40 or any(char not in _HEX for char in head):
+        raise TrainingError("packet-v4 reviewed source commit")
+    return head
+
+
+def _prepare_v4_source_ledger() -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Bind a v4 operation to the clean reviewed commit, never mutable HEAD.
+
+    ``code_sources`` is first read from the working tree and then compared to
+    bytes returned by ``git show`` at the exact reviewed ``origin/main``
+    commit.  This makes an independently verified capsule durable after HEAD
+    moves, while still rejecting any local divergence before extraction and
+    again before training.
+    """
+
+    source_commit = _clean_reviewed_source_commit()
+    code_sources = _training_code_sources()
+    verify_historical_code_sources(source_commit, code_sources)
+    return source_commit, code_sources, _validate_v4_source_receipts(source_commit)
+
+
+def verify_historical_code_sources(source_commit: str, code_sources: Mapping[str, object]) -> None:
+    """Verify a capsule ledger against immutable ``git show`` bytes, not HEAD.
+
+    This helper is intentionally offline and rejects a malformed closed ledger
+    before invoking Git.  It is used by independent post-execution review;
+    it never reads private packet or model material.
+    """
+
+    if not source_commit or any(char not in "0123456789abcdef" for char in source_commit):
+        raise TrainingError("historical source commit")
+    expected_names = set(_training_code_sources())
+    if set(code_sources) != expected_names or not all(
+        _is_sha(value) for value in code_sources.values()
+    ):
+        raise TrainingError("historical code sources")
+    root = Path(__file__).parents[1]
+    for name in sorted(expected_names):
+        result = subprocess.run(
+            ["git", "show", f"{source_commit}:{name}"],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode or _sha(result.stdout) != code_sources[name]:
+            raise TrainingError("historical code source digest")
+
+
+def _verify_v4_training_capsule_receipt(
+    manifest: Mapping[str, object], receipt: Mapping[str, object]
+) -> None:
+    """Bind a source-commit capsule to its pinned report and historical receipt."""
+
+    source_commit = manifest.get("source_commit")
+    if not isinstance(source_commit, str):
+        return
+    if manifest.get("sealed_report_sha256") != _V4_SEALED_REPORT_SHA256:
+        raise TrainingError("packet-v4 sealed report receipt")
+    required = {
+        "schema_version",
+        "packet_json_sha256",
+        "accepted_train_dev_jsonl_sha256",
+        "accepted_holdout_jsonl_sha256",
+        "holdout_identities_json_sha256",
+        "accepted_rows_sha256",
+        "synthetic_only",
+        "sealed_report_sha256",
+        "encoder_receipt",
+    }
+    if (
+        set(receipt) != required
+        or receipt.get("schema_version") != "phase4e-accepted-packet-receipt.v4"
+        or receipt.get("synthetic_only") is not True
+        or receipt.get("sealed_report_sha256") != _V4_SEALED_REPORT_SHA256
+        or receipt.get("sealed_report_sha256") != manifest.get("sealed_report_sha256")
+        or not all(
+            _is_sha(receipt.get(key))
+            for key in (
+                "packet_json_sha256",
+                "accepted_train_dev_jsonl_sha256",
+                "accepted_holdout_jsonl_sha256",
+                "holdout_identities_json_sha256",
+                "accepted_rows_sha256",
+            )
+        )
+    ):
+        raise TrainingError("packet-v4 accepted packet receipt")
+    if _closed_encoder_receipt(receipt.get("encoder_receipt")) != _historical_v4_encoder_receipt(
+        source_commit
+    ):
+        raise TrainingError("packet-v4 encoder receipt binding")
 
 
 def _pre_holdout_gate_descriptor(
@@ -1690,18 +2228,57 @@ def _validate_pre_holdout_gate_descriptor(raw: bytes) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def _freeze_pre_holdout_gate(parent: Path, raw: bytes) -> tuple[dict[str, Any], str]:
+def _freeze_pre_holdout_gate(
+    parent: Path,
+    raw: bytes,
+    *,
+    source_commit: str | None = None,
+) -> tuple[dict[str, Any], str]:
     """Atomically persist the exact gate before the irreversible holdout claim."""
 
     descriptor = _validate_pre_holdout_gate_descriptor(raw)
     digest = _sha(raw)
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = parent / f".phase4e-pre-holdout-{digest}.json"
+    revision_target: Path | None = None
+    if source_commit is not None:
+        if len(source_commit) != 40 or any(char not in _HEX for char in source_commit):
+            raise TrainingError("packet-v4 reviewed source commit")
+        # A digest-named file alone permits a second frozen gate under the
+        # same implementation revision.  The stable revision record makes
+        # that ambiguity fail closed before a claim can be created.
+        revision = _sha(
+            _canonical(
+                {
+                    "source_commit": source_commit,
+                    "code_sha256": descriptor["code_sha256"],
+                    "architecture_revision": CHECKPOINT_ARCHITECTURE_REVISION,
+                }
+            )
+        )
+        revision_target = parent / f".phase4e-pre-holdout-revision-{revision}.json"
+        try:
+            atomic_create(revision_target, raw)
+            os.chmod(revision_target, 0o600)
+        except FileExistsError as error:
+            try:
+                existing = revision_target.read_bytes()
+            except OSError as read_error:
+                raise TrainingError("pre-holdout gate was already frozen") from read_error
+            if existing != raw:
+                raise TrainingError("different frozen pre-holdout gate") from error
     try:
         atomic_create(target, raw)
         os.chmod(target, 0o600)
     except FileExistsError as error:
-        raise TrainingError("pre-holdout gate was already frozen") from error
+        try:
+            existing = target.read_bytes()
+        except OSError as read_error:
+            raise TrainingError("pre-holdout gate was already frozen") from read_error
+        # Reuse is deliberately byte-exact; a different gate under this
+        # source/architecture revision cannot be used to shop for a claim.
+        if existing != raw:
+            raise TrainingError("pre-holdout gate was already frozen") from error
     return descriptor, digest
 
 
@@ -1725,6 +2302,19 @@ def _dev_improvement_gates(gate: Mapping[str, Any]) -> dict[str, bool]:
         )
         + margin,
     }
+
+
+def _require_v4_cell_minimum(rows: Sequence[Mapping[str, Any]], label: str) -> None:
+    """Require the committed ten accepted identities in each v4 cell."""
+
+    counts = {
+        (locale, option_count): sum(
+            row.get("locale") == locale and row.get("option_count") == option_count for row in rows
+        )
+        for locale, option_count in _CELLS
+    }
+    if any(count < 10 for count in counts.values()):
+        raise TrainingError(f"packet-v4 {label} cell minimum")
 
 
 def _holdout_gates(
@@ -1826,6 +2416,38 @@ def _write_capsule(parent: Path, name: str, files: dict[str, bytes]) -> Path:
     return target
 
 
+def _published_training_capsule_outcome(
+    output_parent: Path,
+    output_name: str,
+    accepted_packet: AcceptedPacketBinding,
+    capsule: EmbeddingCapsule,
+    checkpoint_sha256: str,
+    gate_descriptor_sha256: str,
+) -> Literal["passed", "holdout_failed"] | None:
+    """Return an exact published capsule outcome without reopening holdout.
+
+    Publication is an atomic directory rename.  If an interrupt reaches the
+    caller after that rename, the published capsule is stronger evidence than
+    the exception and must never be relabeled ``holdout_invalid``.
+    """
+
+    target = output_parent / output_name
+    if not target.is_dir() or target.is_symlink():
+        return None
+    try:
+        manifest = verify_training_capsule(target)
+        outcome = manifest.get("outcome")
+        release = _json(target / "holdout-release.json")
+        expected_release = json.loads(
+            _holdout_release(accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256)
+        )
+    except (OSError, TrainingError, TypeError, ValueError):
+        return None
+    if outcome not in {"passed", "holdout_failed"} or release != expected_release:
+        return None
+    return cast(Literal["passed", "holdout_failed"], outcome)
+
+
 def _holdout_release_registry_directory() -> Path:
     """Return Saracura's canonical per-user holdout-release registry.
 
@@ -1841,6 +2463,346 @@ def _holdout_release_registry_directory() -> Path:
     except ImportError as error:
         raise TrainingError("local-minilm extra is required") from error
     return Path(user_state_path("saracura", appauthor=False)) / "phase4e" / "holdout-releases"
+
+
+def _holdout_terminal_registry_directory() -> Path:
+    """Return the non-configurable terminal registry beside release claims."""
+
+    return _holdout_release_registry_directory().parent / "holdout-terminals"
+
+
+def _holdout_lock_path(packet_json_sha256: str) -> Path:
+    if not _is_sha(packet_json_sha256):
+        raise TrainingError("holdout release identity")
+    return _holdout_release_registry_directory().parent / "locks" / f"{packet_json_sha256}.lock"
+
+
+def _require_secure_registry_ancestors(path: Path, label: str) -> None:
+    """Reject every existing non-directory or symlink ancestor by ``lstat``."""
+
+    candidate = path if path.is_absolute() else Path.cwd() / path
+    if ".." in candidate.parts:
+        raise TrainingError(label)
+    cursor = Path(candidate.anchor)
+    try:
+        root_metadata = cursor.lstat()
+    except OSError as error:
+        raise TrainingError(label) from error
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise TrainingError(label)
+    for part in candidate.parts[1:-1]:
+        cursor /= part
+        try:
+            metadata = cursor.lstat()
+        except FileNotFoundError:
+            # A later component cannot exist when this parent does not; it
+            # will be created only after the already-existing chain is proved.
+            continue
+        except OSError as error:
+            raise TrainingError(label) from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise TrainingError(label)
+
+
+def _secure_registry_directory(path: Path, label: str, *, create: bool) -> bool:
+    """Require a canonical state directory owned by the current user.
+
+    ``Path.is_dir`` follows symlinks, which is not safe for an irreversible
+    release registry.  Every existing parent and the leaf are checked with
+    ``lstat`` before mkdir/use, then the complete chain is checked again after
+    creation so the claim, terminal, and lock lanes share the same boundary.
+    """
+
+    _require_secure_registry_ancestors(path, label)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        if not create:
+            return False
+        try:
+            path.mkdir(mode=0o700, parents=True, exist_ok=False)
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise TrainingError(label) from error
+        _require_secure_registry_ancestors(path, label)
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            raise TrainingError(label) from error
+    except OSError as error:
+        raise TrainingError(label) from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise TrainingError(label)
+    return True
+
+
+def _read_secure_registry_file(path: Path, label: str) -> bytes:
+    """Read one registry file through an lstat/no-follow file descriptor."""
+
+    try:
+        initial = path.lstat()
+    except OSError as error:
+        raise TrainingError(label) from error
+    if (
+        not stat.S_ISREG(initial.st_mode)
+        or initial.st_uid != os.getuid()
+        or stat.S_IMODE(initial.st_mode) != 0o600
+    ):
+        raise TrainingError(label)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise TrainingError(label) from error
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise TrainingError(label)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            return handle.read()
+    except OSError as error:
+        raise TrainingError(label) from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _create_secure_registry_file(path: Path, payload: bytes, label: str) -> None:
+    """Create a registry file only under a checked 0700 directory."""
+
+    _secure_registry_directory(path.parent, label, create=True)
+    atomic_create(path, payload)
+    try:
+        os.chmod(path, 0o600)
+    except OSError as error:
+        raise TrainingError(label) from error
+    # The post-condition is intentionally a no-follow read, not ``exists``.
+    _read_secure_registry_file(path, label)
+
+
+@contextmanager
+def _holdout_registry_lock(packet_json_sha256: str) -> Any:
+    """Hold the packet-scoped advisory lock through claim and terminal sealing."""
+
+    try:
+        import fcntl
+    except ImportError as error:  # pragma: no cover - supported runtime is POSIX
+        raise TrainingError("holdout registry lock") from error
+    path = _holdout_lock_path(packet_json_sha256)
+    _secure_registry_directory(path.parent, "holdout registry lock", create=True)
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        metadata = os.fstat(descriptor)
+    except OSError as error:
+        raise TrainingError("holdout registry lock") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        os.close(descriptor)
+        raise TrainingError("holdout registry lock")
+    with os.fdopen(descriptor, "a+b") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise TrainingError("holdout run is already active") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _holdout_terminal_payload(
+    accepted_packet: AcceptedPacketBinding,
+    capsule: EmbeddingCapsule,
+    checkpoint_sha256: str,
+    gate_sha256: str,
+    claim_sha256: str,
+    outcome: Literal["passed", "holdout_failed", "holdout_invalid", "holdout_interrupted"],
+) -> bytes:
+    """Build a closed, public-safe terminal record with no run metadata."""
+
+    if not (
+        _is_sha(claim_sha256)
+        and _is_sha(capsule.descriptor_sha256)
+        and _is_sha(checkpoint_sha256)
+        and _is_sha(gate_sha256)
+    ):
+        raise TrainingError("holdout terminal binding")
+    value: dict[str, str | None] = {
+        "schema_version": _HOLDOUT_TERMINAL_SCHEMA,
+        "packet_json_sha256": accepted_packet.packet_json_sha256,
+        "claim_sha256": claim_sha256,
+        "embedding_descriptor_sha256": capsule.descriptor_sha256,
+        "checkpoint_sha256": checkpoint_sha256,
+        "pre_holdout_gate_descriptor_sha256": gate_sha256,
+        "sealed_report_sha256": accepted_packet.sealed_report_sha256,
+        "outcome": outcome,
+        "terminal_sha256": "",
+    }
+    value["terminal_sha256"] = _sha(
+        _canonical({key: item for key, item in value.items() if key != "terminal_sha256"})
+    )
+    return _canonical(value) + b"\n"
+
+
+def _seal_holdout_terminal(
+    accepted_packet: AcceptedPacketBinding,
+    capsule: EmbeddingCapsule,
+    checkpoint_sha256: str,
+    gate_sha256: str,
+    outcome: Literal["passed", "holdout_failed", "holdout_invalid", "holdout_interrupted"],
+) -> None:
+    """Create exactly one terminal record for a claim; never overwrite evidence."""
+
+    claim = _holdout_release_payload(accepted_packet, capsule, checkpoint_sha256, gate_sha256)
+    claim_sha256 = _sha(claim)
+    root = _holdout_terminal_registry_directory()
+    target = root / f"{accepted_packet.packet_json_sha256}.json"
+    payload = _holdout_terminal_payload(
+        accepted_packet, capsule, checkpoint_sha256, gate_sha256, claim_sha256, outcome
+    )
+    try:
+        _create_secure_registry_file(target, payload, "holdout terminal")
+    except FileExistsError:
+        try:
+            if _read_secure_registry_file(target, "holdout terminal") != payload:
+                raise TrainingError("holdout terminal already sealed")
+        except OSError as error:
+            raise TrainingError("holdout terminal") from error
+
+
+def _read_holdout_terminal(packet_json_sha256: str) -> dict[str, Any] | None:
+    """Read one closed terminal record without deriving any holdout material."""
+
+    if not _is_sha(packet_json_sha256):
+        raise TrainingError("holdout terminal")
+    root = _holdout_terminal_registry_directory()
+    if not _secure_registry_directory(root, "holdout terminal", create=False):
+        return None
+    target = root / f"{packet_json_sha256}.json"
+    try:
+        raw = _read_secure_registry_file(target, "holdout terminal")
+    except TrainingError as error:
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            return None
+        raise error
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise TrainingError("holdout terminal") from error
+    expected = {
+        "schema_version",
+        "packet_json_sha256",
+        "claim_sha256",
+        "embedding_descriptor_sha256",
+        "checkpoint_sha256",
+        "pre_holdout_gate_descriptor_sha256",
+        "sealed_report_sha256",
+        "outcome",
+        "terminal_sha256",
+    }
+    unsigned = {key: item for key, item in value.items() if key != "terminal_sha256"}
+    if (
+        set(value) != expected
+        or value.get("schema_version") != _HOLDOUT_TERMINAL_SCHEMA
+        or value.get("packet_json_sha256") != packet_json_sha256
+        or value.get("outcome")
+        not in {"passed", "holdout_failed", "holdout_invalid", "holdout_interrupted"}
+        or not all(
+            _is_sha(value.get(key))
+            for key in (
+                "claim_sha256",
+                "embedding_descriptor_sha256",
+                "checkpoint_sha256",
+                "pre_holdout_gate_descriptor_sha256",
+                "terminal_sha256",
+            )
+        )
+        or (
+            value["sealed_report_sha256"] is not None and not _is_sha(value["sealed_report_sha256"])
+        )
+        or value["terminal_sha256"] != _sha(_canonical(unsigned))
+    ):
+        raise TrainingError("holdout terminal")
+    return cast(dict[str, Any], value)
+
+
+def _seal_terminal_from_claim(
+    accepted_packet: AcceptedPacketBinding,
+    claim: Mapping[str, Any],
+    outcome: Literal["holdout_interrupted"],
+) -> None:
+    """Close an orphaned claim without reading the packet or reopening holdout."""
+
+    packet_json_sha256 = accepted_packet.packet_json_sha256
+    # Reconciliation must never invent lineage.  The only permitted
+    # interrupted v4 terminal carries the sealed report validated before the
+    # original claim; it does not reopen packet or holdout bytes.
+    if accepted_packet.sealed_report_sha256 != _V4_SEALED_REPORT_SHA256:
+        raise TrainingError("packet-v4 sealed report")
+    expected = {
+        "schema_version",
+        "packet_json_sha256",
+        "embedding_descriptor_sha256",
+        "checkpoint_sha256",
+        "pre_holdout_gate_descriptor_sha256",
+    }
+    if (
+        set(claim) != expected
+        or claim.get("schema_version") != _HOLDOUT_RELEASE_SCHEMA
+        or claim.get("packet_json_sha256") != packet_json_sha256
+        or not all(
+            _is_sha(claim.get(key))
+            for key in (
+                "embedding_descriptor_sha256",
+                "checkpoint_sha256",
+                "pre_holdout_gate_descriptor_sha256",
+            )
+        )
+    ):
+        raise TrainingError("holdout release claim binding")
+    value: dict[str, str | None] = {
+        "schema_version": _HOLDOUT_TERMINAL_SCHEMA,
+        "packet_json_sha256": packet_json_sha256,
+        "claim_sha256": _sha(_canonical(claim) + b"\n"),
+        "embedding_descriptor_sha256": cast(str, claim["embedding_descriptor_sha256"]),
+        "checkpoint_sha256": cast(str, claim["checkpoint_sha256"]),
+        "pre_holdout_gate_descriptor_sha256": cast(
+            str, claim["pre_holdout_gate_descriptor_sha256"]
+        ),
+        "sealed_report_sha256": accepted_packet.sealed_report_sha256,
+        "outcome": outcome,
+        "terminal_sha256": "",
+    }
+    value["terminal_sha256"] = _sha(
+        _canonical({key: item for key, item in value.items() if key != "terminal_sha256"})
+    )
+    root = _holdout_terminal_registry_directory()
+    try:
+        _create_secure_registry_file(
+            root / f"{packet_json_sha256}.json", _canonical(value) + b"\n", "holdout terminal"
+        )
+    except FileExistsError:
+        _read_holdout_terminal(packet_json_sha256)
 
 
 def _holdout_release_claim_key(
@@ -1868,7 +2830,7 @@ def _holdout_release_payload(
 
     if (
         not _is_sha(accepted_packet.packet_json_sha256)
-        or not _is_sha(capsule.descriptor_sha256)
+        or not _is_sha(getattr(capsule, "descriptor_sha256", None))
         or not _is_sha(checkpoint_sha256)
         or not _is_sha(pre_holdout_gate_descriptor_sha256)
     ):
@@ -1896,19 +2858,96 @@ def _claim_holdout_once(
     """Irreversibly bind one holdout release to all frozen pre-holdout bytes."""
 
     registry = _holdout_release_registry_directory()
-    registry.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _secure_registry_directory(registry, "holdout release claim", create=True)
     key = _holdout_release_claim_key(accepted_packet.packet_json_sha256)
     claim = registry / f"{key}.json"
     payload = _holdout_release_payload(
         accepted_packet, capsule, checkpoint_sha256, pre_holdout_gate_descriptor_sha256
     )
     try:
-        atomic_create(claim, payload)
-        os.chmod(claim, 0o600)
+        _create_secure_registry_file(claim, payload, "holdout release claim")
     except FileExistsError as error:
         # A crash after the release claim must remain conservative: another
         # command cannot gain an unrecorded second holdout observation.
         raise TrainingError("holdout was already released") from error
+
+
+def _reconcile_or_refuse_prior_claim(
+    accepted_packet: AcceptedPacketBinding,
+    output_parent: Path,
+    output_name: str,
+) -> None:
+    """Resolve an orphan only while the packet lock is held.
+
+    This function is intentionally holdout-blind.  A complete published
+    capsule is the sole evidence that can recover a passed/failed terminal;
+    every other orphan is irrevocably marked interrupted.
+    """
+
+    packet_digest = accepted_packet.packet_json_sha256
+    terminal = _read_holdout_terminal(packet_digest)
+    registry = _holdout_release_registry_directory()
+    _secure_registry_directory(registry, "holdout release claim", create=True)
+    claim_path = registry / f"{_holdout_release_claim_key(packet_digest)}.json"
+    if terminal is not None:
+        if terminal["sealed_report_sha256"] != accepted_packet.sealed_report_sha256:
+            raise TrainingError("holdout terminal binding")
+        try:
+            _read_secure_registry_file(claim_path, "holdout release claim")
+        except TrainingError as error:
+            try:
+                claim_path.lstat()
+            except FileNotFoundError:
+                raise TrainingError("holdout terminal without claim") from error
+            raise
+        raise TrainingError("holdout was already released (terminal sealed)")
+    try:
+        claim_raw = _read_secure_registry_file(claim_path, "holdout release claim")
+    except TrainingError as error:
+        try:
+            claim_path.lstat()
+        except FileNotFoundError:
+            return
+        raise error
+    try:
+        claim = json.loads(claim_raw)
+    except ValueError as error:
+        raise TrainingError("holdout release claim binding") from error
+    if not isinstance(claim, dict):
+        raise TrainingError("holdout release claim binding")
+    target = output_parent / output_name
+    if target.is_dir() and not target.is_symlink():
+        try:
+            manifest = verify_training_capsule(target)
+            release = _json(target / "holdout-release.json")
+        except (OSError, TrainingError):
+            manifest = {}
+            release = {}
+        if (
+            release == claim
+            and manifest.get("outcome") in {"passed", "holdout_failed"}
+            and manifest.get("sealed_report_sha256") == accepted_packet.sealed_report_sha256
+        ):
+            # The existing capsule's closed release is stronger than a caller's
+            # newly-computed values.  It is safe to derive only its terminal.
+            try:
+                capsule_descriptor = _sha((target / "embedding-descriptor.json").read_bytes())
+                expected_embedding = claim["embedding_descriptor_sha256"]
+            except (OSError, KeyError):
+                capsule_descriptor = ""
+                expected_embedding = None
+            if capsule_descriptor == expected_embedding:
+                capsule = EmbeddingCapsule(target, {}, {}, cast(str, expected_embedding))
+                _seal_holdout_terminal(
+                    accepted_packet,
+                    capsule,
+                    cast(str, claim["checkpoint_sha256"]),
+                    cast(str, claim["pre_holdout_gate_descriptor_sha256"]),
+                    cast(Literal["passed", "holdout_failed"], manifest["outcome"]),
+                )
+                raise TrainingError("holdout terminal recovered")
+    _seal_terminal_from_claim(accepted_packet, claim, "holdout_interrupted")
+    raise TrainingError("holdout terminal interrupted")
 
 
 def _validate_holdout_release_claim(
@@ -1920,6 +2959,7 @@ def _validate_holdout_release_claim(
     """Require the canonical immutable claim before any holdout payload access."""
 
     registry = _holdout_release_registry_directory()
+    _secure_registry_directory(registry, "holdout release claim", create=False)
     claim = registry / f"{_holdout_release_claim_key(accepted_packet.packet_json_sha256)}.json"
     expected = _holdout_release_payload(
         accepted_packet,
@@ -1927,10 +2967,7 @@ def _validate_holdout_release_claim(
         checkpoint_sha256,
         pre_holdout_gate_descriptor_sha256,
     )
-    try:
-        actual = claim.read_bytes()
-    except OSError as error:
-        raise TrainingError("holdout release claim") from error
+    actual = _read_secure_registry_file(claim, "holdout release claim")
     if actual != expected:
         raise TrainingError("holdout release claim binding")
 
@@ -2053,14 +3090,38 @@ def train_and_seal(
     device: str,
     output_parent: Path,
     output_name: str,
+    *,
+    report_dir: Path | None = None,
 ) -> Path:
     """Train only from packet text re-derived on an explicit verified device."""
 
     require_phase4e_authorization("synthetic_research_training")
+    paths = _require_v4_layout(
+        accepted_packet_path,
+        embeddings=capsule_path,
+        output_parent=output_parent,
+        output_name=output_name,
+        report_dir=report_dir,
+    )
+    effective_report_dir = paths.reports if paths is not None else report_dir
+    source_commit: str | None = None
+    source_ledger: dict[str, str] | None = None
+    if paths is not None:
+        source_commit, source_ledger, source_receipt = _prepare_v4_source_ledger()
+    else:
+        source_receipt = None
     # This must precede every embedding read.  A receipt inside the capsule is
     # only a copied binding; it is never an authority to train.
-    accepted_packet = validate_accepted_packet_binding(accepted_packet_path)
-    capsule = validate_embedding_capsule(capsule_path, accepted_packet)
+    accepted_packet = validate_accepted_packet_binding(
+        accepted_packet_path, report_dir=effective_report_dir
+    )
+    capsule = validate_embedding_capsule(
+        capsule_path,
+        accepted_packet,
+        expected_encoder_receipt=source_receipt,
+    )
+    if paths is not None:
+        _require_v4_cell_minimum(accepted_packet.holdout_identities, "holdout")
     # Self-consistent capsule hashes are not an authority.  This production
     # path has no caller-supplied encoder or derivation callback: it must
     # reproduce every token, mask, and embedding from the packet and snapshot.
@@ -2088,6 +3149,14 @@ def train_and_seal(
         raise TrainingError("train/dev family overlap")
     if {(row["locale"], row["option_count"]) for row in dev.rows} != set(_CELLS):
         raise TrainingError("dev stratified cells")
+    if paths is not None:
+        _require_v4_cell_minimum(dev.rows, "dev")
+        # Repeat the proof immediately before deterministic training.  No
+        # source change or branch movement may appear between extraction
+        # verification and the irreversible training lane.
+        repeated_commit, repeated_ledger, _repeated_receipt = _prepare_v4_source_ledger()
+        if repeated_commit != source_commit or repeated_ledger != source_ledger:
+            raise TrainingError("packet-v4 reviewed source commit")
     first, ledger, selected = _run_once(train, dev, policy)
     second, second_ledger, second_selected = _run_once(train, dev, policy)
     if (
@@ -2104,7 +3173,8 @@ def train_and_seal(
         _baseline(dev, random_projection=False, seed=int(policy["seed"])),
         _baseline(dev, random_projection=True, seed=int(policy["seed"])),
     )
-    code_sha256 = _training_code_digest()
+    code_sources = source_ledger if source_ledger is not None else _training_code_sources()
+    code_sha256 = _sha(_canonical(code_sources))
     gate, gate_descriptor_sha256 = _freeze_pre_holdout_gate(
         output_parent,
         _pre_holdout_gate_descriptor(
@@ -2117,6 +3187,7 @@ def train_and_seal(
             checkpoint_sha256,
             code_sha256,
         ),
+        source_commit=source_commit,
     )
     dev_gates = _dev_improvement_gates(gate)
     common_manifest: dict[str, Any] = {
@@ -2131,7 +3202,9 @@ def train_and_seal(
         "architecture_revision": CHECKPOINT_ARCHITECTURE_REVISION,
         "training": policy,
         "code_sha256": code_sha256,
-        "code_sources": _training_code_sources(),
+        "code_sources": code_sources,
+        "source_commit": source_commit,
+        "sealed_report_sha256": accepted_packet.sealed_report_sha256,
         "selected": selected,
         "baselines": {"untrained_cosine": cosine, "random_projection": random_projection},
         "dev_gates": dev_gates,
@@ -2183,60 +3256,104 @@ def train_and_seal(
         if set(files) != _PRE_HOLDOUT_FAILED_OUTPUT_FILES:
             raise AssertionError("pre-holdout output file set")
         return _write_capsule(output_parent, output_name, files)
-    _claim_holdout_once(accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256)
-    # The claim is intentionally adjacent to the first holdout-content read.
-    # Now that retry or reselection is impossible, verify every descriptor,
-    # digest, token, mask, and embedding before constructing any score.
-    holdout = derive_holdout_embeddings_in_memory(
-        capsule,
-        accepted_packet_path,
-        accepted_packet,
-        snapshot_path,
-        device,
-        checkpoint_sha256,
-        gate_descriptor_sha256,
-    )
-    if families & {row["family_id"] for row in holdout.rows}:
-        raise TrainingError("holdout family overlap")
-    if {(row["locale"], row["option_count"]) for row in holdout.rows} != set(_CELLS):
-        raise TrainingError("holdout stratified cells")
-    torch, _load, _save = _ml()
-    model = _model_from_checkpoint(first)
-    with torch.inference_mode():
-        holdout_metric = _metric(holdout, _logits(model, holdout))
-    report = _holdout_gates(holdout, holdout_metric, gate, gate_descriptor_sha256)
-    conformance_vectors, conformance_manifest = _conformance_vectors(holdout, model)
-    common_manifest["outcome"] = "passed" if report["passed"] else "holdout_failed"
-    common_manifest["manifest_sha256"] = _sha(
-        _canonical(
-            {key: value for key, value in common_manifest.items() if key != "manifest_sha256"}
-        )
-    )
-    files = {
-        **base_files,
-        "training-manifest.json": _canonical(common_manifest) + b"\n",
-        "dev-selection.json": _canonical(
-            {
-                "selected": selected,
-                "checkpoint_sha256": checkpoint_sha256,
-                "pre_holdout_gate_descriptor_sha256": gate_descriptor_sha256,
-                "dev_gates": dev_gates,
-                "holdout_opened_after_pre_holdout_gate_and_claim": True,
+    with _holdout_registry_lock(accepted_packet.packet_json_sha256):
+        _reconcile_or_refuse_prior_claim(accepted_packet, output_parent, output_name)
+        _claim_holdout_once(accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256)
+        try:
+            # The claim is intentionally adjacent to the one holdout-content
+            # derivation.  No retry path can score a second payload.
+            holdout = derive_holdout_embeddings_in_memory(
+                capsule,
+                accepted_packet_path,
+                accepted_packet,
+                snapshot_path,
+                device,
+                checkpoint_sha256,
+                gate_descriptor_sha256,
+                report_dir=report_dir,
+            )
+            if families & {row["family_id"] for row in holdout.rows}:
+                raise TrainingError("holdout family overlap")
+            if {(row["locale"], row["option_count"]) for row in holdout.rows} != set(_CELLS):
+                raise TrainingError("holdout stratified cells")
+            torch, _load, _save = _ml()
+            model = _model_from_checkpoint(first)
+            with torch.inference_mode():
+                first_logits = _logits(model, holdout)
+                second_logits = _logits(model, holdout)
+            if len(first_logits) != len(second_logits) or any(
+                not bool(torch.equal(left, right))
+                for left, right in zip(first_logits, second_logits, strict=True)
+            ):
+                raise TrainingError("holdout deterministic repeat mismatch")
+            holdout_metric = _metric(holdout, first_logits)
+            report = _holdout_gates(holdout, holdout_metric, gate, gate_descriptor_sha256)
+            conformance_vectors, conformance_manifest = _conformance_vectors(holdout, model)
+            outcome: Literal["passed", "holdout_failed"] = (
+                "passed" if report["passed"] else "holdout_failed"
+            )
+            common_manifest["outcome"] = outcome
+            common_manifest["manifest_sha256"] = _sha(
+                _canonical(
+                    {
+                        key: value
+                        for key, value in common_manifest.items()
+                        if key != "manifest_sha256"
+                    }
+                )
+            )
+            files = {
+                **base_files,
+                "training-manifest.json": _canonical(common_manifest) + b"\n",
+                "dev-selection.json": _canonical(
+                    {
+                        "selected": selected,
+                        "checkpoint_sha256": checkpoint_sha256,
+                        "pre_holdout_gate_descriptor_sha256": gate_descriptor_sha256,
+                        "dev_gates": dev_gates,
+                        "holdout_opened_after_pre_holdout_gate_and_claim": True,
+                    }
+                )
+                + b"\n",
+                "holdout-release.json": _holdout_release(
+                    accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256
+                ),
+                "holdout-report.json": _canonical(report) + b"\n",
+                "conformance-vectors.safetensors": conformance_vectors,
+                "conformance-manifest.json": conformance_manifest,
+                "dependency-versions.json": _dependency_versions(),
             }
+            files["capsule-descriptor.json"] = _descriptor(files, kind="training")
+            if set(files) != _FINAL_OUTPUT_FILES:
+                raise AssertionError("training output file set")
+            result = _write_capsule(output_parent, output_name, files)
+        except BaseException:
+            # ``_write_capsule`` publishes with one exclusive rename.  An
+            # injected failure (including KeyboardInterrupt) can therefore
+            # occur after a complete capsule exists but before this frame
+            # receives its return value.  Verify that stronger immutable
+            # evidence before deciding whether this is a pre-publication
+            # invalid experiment.
+            published_outcome = _published_training_capsule_outcome(
+                output_parent,
+                output_name,
+                accepted_packet,
+                capsule,
+                checkpoint_sha256,
+                gate_descriptor_sha256,
+            )
+            _seal_holdout_terminal(
+                accepted_packet,
+                capsule,
+                checkpoint_sha256,
+                gate_descriptor_sha256,
+                published_outcome if published_outcome is not None else "holdout_invalid",
+            )
+            raise
+        _seal_holdout_terminal(
+            accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256, outcome
         )
-        + b"\n",
-        "holdout-release.json": _holdout_release(
-            accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256
-        ),
-        "holdout-report.json": _canonical(report) + b"\n",
-        "conformance-vectors.safetensors": conformance_vectors,
-        "conformance-manifest.json": conformance_manifest,
-        "dependency-versions.json": _dependency_versions(),
-    }
-    files["capsule-descriptor.json"] = _descriptor(files, kind="training")
-    if set(files) != _FINAL_OUTPUT_FILES:
-        raise AssertionError("training output file set")
-    return _write_capsule(output_parent, output_name, files)
+        return result
 
 
 def verify_training_capsule(path: Path) -> dict[str, Any]:
@@ -2259,6 +3376,8 @@ def verify_training_capsule(path: Path) -> dict[str, Any]:
         "training",
         "code_sha256",
         "code_sources",
+        "source_commit",
+        "sealed_report_sha256",
         "selected",
         "baselines",
         "dev_gates",
@@ -2302,10 +3421,30 @@ def verify_training_capsule(path: Path) -> dict[str, Any]:
         or manifest["base_encoder"].get("frozen") is not True
         or not _is_sha(manifest["base_encoder"].get("snapshot_complete_sha256"))
         or not _is_sha(manifest["code_sha256"])
-        or manifest["code_sources"] != _training_code_sources()
-        or manifest["code_sha256"] != _training_code_digest()
+        or not isinstance(manifest["code_sources"], dict)
+        or (
+            manifest["source_commit"] is not None and not isinstance(manifest["source_commit"], str)
+        )
+        or (
+            manifest["sealed_report_sha256"] is not None
+            and not _is_sha(manifest["sealed_report_sha256"])
+        )
     ):
         raise TrainingError("training manifest binding")
+    if manifest["source_commit"] is None:
+        if (
+            manifest["code_sources"] != _training_code_sources()
+            or manifest["code_sha256"] != _training_code_digest()
+        ):
+            raise TrainingError("training manifest binding")
+    else:
+        verify_historical_code_sources(
+            manifest["source_commit"],
+            cast(Mapping[str, object], manifest["code_sources"]),
+        )
+        if manifest["code_sha256"] != _sha(_canonical(manifest["code_sources"])):
+            raise TrainingError("training manifest binding")
+        _verify_v4_training_capsule_receipt(manifest, _json(path / "accepted-packet-receipt.json"))
     gate_raw = (path / "pre-holdout-gate.json").read_bytes()
     gate = _validate_pre_holdout_gate_descriptor(gate_raw)
     if (
