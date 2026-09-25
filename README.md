@@ -239,6 +239,8 @@ fail-closed. They can be re-enabled only by a reviewed post-pilot policy
 revision after a pilot `PASS`; the pilot itself never changes those
 authorizations.
 
+The planned PT-BR recovery lane requires `SARACURA_PRIVATE_STATE_ROOT` to name an existing, user-owned `0700` directory outside every repository and Git worktree. Operators must choose a private, non-synchronized external volume: never a cloud-synchronized directory. That runtime-only setting moves Phase 4E research ledgers, raw evidence, recovery reports, and recovery packet artifacts; it never moves the immutable holdout-release registry. The recovery lane remains unsupported until its separately reviewed increments are complete.
+
 ```bash
 uv run python -m benchmarks.phase4e_pipeline pilot-plan \
   --output .artifacts/phase4e/pilot-plan-v12/plan.json

@@ -13,6 +13,7 @@ import pytest
 from benchmarks import phase4e_pipeline as pipeline
 from benchmarks import saracura_universal_corpus as corpus
 from benchmarks import saracura_universal_pilot as pilot
+from benchmarks import saracura_universal_training as training
 
 
 class _Counter:
@@ -307,6 +308,9 @@ def test_completed_post_pilot_work_recovers_seal_and_report_without_transport(
         work / "ledger", corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
     )
     pipeline._store_post_pilot_diagnostics(work, [slot], pipeline._post_pilot_blank_diagnostics())
+    # Fixture-sized stand-in for the many historical snapshots omitted by the
+    # compact capsule, so the real 10x compactness guard remains exercised.
+    (work / "raw-evidence.bin").write_bytes(b"x" * 100_000)
     packet = tmp_path / "packet"
     report = tmp_path / "report"
     root = tmp_path / "research"
@@ -322,6 +326,12 @@ def test_completed_post_pilot_work_recovers_seal_and_report_without_transport(
 
     monkeypatch.setattr(corpus, "seal_packet", fake_seal)
     monkeypatch.setattr(corpus, "validate_accepted_packet_pre_holdout", lambda path: None)
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
+    monkeypatch.setattr(
+        pilot,
+        "_copy_work_tree",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("full work tree must not publish")),
+    )
 
     def transport(
         method: str, url: str, headers: Mapping[str, str], body: bytes
@@ -426,3 +436,146 @@ def test_reviewed_v3_paths_require_packet_below_private_model_root(
             report,
             research,
         )
+
+
+def test_private_state_root_moves_research_not_the_holdout_claim_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+    import types
+
+    module = types.ModuleType("platformdirs")
+    module.user_state_path = lambda *_args, **_kwargs: "/tmp/saracura-platform-state"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "platformdirs", module)
+    baseline_claim_root = training._holdout_release_registry_directory()
+    configured = tmp_path / "private-state"
+    configured.mkdir(mode=0o700)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(configured))
+
+    assert pilot.canonical_research_ledger_root() == configured / "phase4e/research-ledgers"
+    assert pilot.private_phase4e_paths()["raw_evidence"] == configured / "phase4e/raw-evidence"
+    assert training._holdout_release_registry_directory() == baseline_claim_root
+
+
+@pytest.mark.parametrize("value", ["relative-state", "missing-state"])
+def test_private_state_root_rejects_nonprivate_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    configured = tmp_path / value
+    root_value = str(configured) if value != "relative-state" else value
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", root_value)
+    with pytest.raises(corpus.CorpusError, match="private state root"):
+        pilot.configured_private_phase4e_root()
+
+
+def test_private_state_root_rejects_permissive_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = tmp_path / "private-state"
+    configured.mkdir(mode=0o700)
+    configured.chmod(0o755)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(configured))
+    with pytest.raises(corpus.CorpusError, match="private state root"):
+        pilot.configured_private_phase4e_root()
+
+
+def test_private_state_root_rejects_symlink_and_checkout_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    link = tmp_path / "private-link"
+    link.symlink_to(target, target_is_directory=True)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(link))
+    with pytest.raises(corpus.CorpusError, match="private state root"):
+        pilot.configured_private_phase4e_root()
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir(mode=0o700)
+    nested = checkout / "private-state"
+    nested.mkdir(mode=0o700)
+    monkeypatch.setattr(pilot, "_git_protected_paths", lambda: {checkout})
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(nested))
+    with pytest.raises(corpus.CorpusError, match="private state root"):
+        pilot.configured_private_phase4e_root()
+
+
+def test_catalog_migration_marker_blocks_internal_research_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+    import types
+
+    module = types.ModuleType("platformdirs")
+    module.user_state_path = lambda *_args, **_kwargs: tmp_path / "platform-state"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "platformdirs", module)
+    configured = tmp_path / "private-state"
+    configured.mkdir(mode=0o700)
+    external = configured / "phase4e" / "research-ledgers"
+    corpus.write_ledger_snapshot(
+        external / "history" / "ledger",
+        corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY),
+    )
+    inventory, _scan = pilot.record_research_catalog(external)
+    marker = pilot.write_research_catalog_migration_marker(external, inventory)
+    payload = json.loads(marker.read_bytes())
+    assert str(external) not in marker.read_text()
+    assert payload["inventory_sha256"] == inventory
+
+    monkeypatch.delenv("SARACURA_PRIVATE_STATE_ROOT", raising=False)
+    with pytest.raises(corpus.CorpusError, match="private state root required"):
+        pilot.canonical_research_ledger_root()
+
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(configured))
+    assert pilot.canonical_research_ledger_root() == external
+
+
+def test_minimum_failure_writes_a_numbered_report_before_sealing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    complete_plan = corpus.build_post_pilot_plan()
+    slot = next(item for item in complete_plan["slots"] if item["pair_id"] is None)
+    plan = {**complete_plan, "slots": [slot], "author_batch_order": [[slot["task_id"]]]}
+    work = tmp_path / "work"
+    rejected = {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"}
+    pipeline._store_call_resolution(work, [slot], [(rejected, "rejected")])
+    corpus.write_ledger_snapshot(
+        work / "ledger", corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    )
+    pipeline._store_post_pilot_diagnostics(work, [slot], pipeline._post_pilot_blank_diagnostics())
+    (work / "raw-evidence.bin").write_bytes(b"x" * 100_000)
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: ["locale_minimum"])
+    monkeypatch.setattr(
+        corpus,
+        "seal_packet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("seal must not run")),
+    )
+    monkeypatch.setattr(
+        corpus,
+        "validate_accepted_packet_pre_holdout",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("holdout must not open")),
+    )
+    monkeypatch.setattr(
+        pilot,
+        "_copy_work_tree",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("full work tree must not publish")),
+    )
+    packet = tmp_path / "packet"
+    report = tmp_path / "report"
+    root = tmp_path / "research"
+
+    with pytest.raises(corpus.CorpusError, match="minimum_failed"):
+        pipeline._run_post_pilot_corpus(
+            plan, tmp_path / "snapshot", work, packet, report, root, transport=None
+        )
+    payload = json.loads((report / "report-0000.json").read_bytes())
+    assert payload["outcome"] == "minimum_failed"
+    assert payload["errors"] == ["locale_minimum"]
+    assert payload["unresolved_count"] == 0
+    assert not packet.exists()
+
+    with pytest.raises(corpus.CorpusError, match="minimum_failed"):
+        pipeline._run_post_pilot_corpus(
+            plan, tmp_path / "snapshot", work, packet, report, root, transport=None
+        )
+    assert [path.name for path in report.glob("report-*.json")] == ["report-0000.json"]

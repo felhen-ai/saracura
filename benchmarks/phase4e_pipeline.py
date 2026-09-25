@@ -1067,6 +1067,138 @@ def _post_pilot_report(
     }
 
 
+def _resolution_sha256(work_dir: Path) -> str:
+    files: list[dict[str, str]] = []
+    for directory in ("resolved", "diagnostics"):
+        for path in sorted((work_dir / directory).glob("call-*.json")):
+            if not path.is_file() or path.is_symlink():
+                raise corpus.CorpusError("post-pilot resolution evidence")
+            files.append(
+                {
+                    "path": path.relative_to(work_dir).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+            )
+    return hashlib.sha256(_canonical(files)).hexdigest()
+
+
+def _terminal_outcome_report(
+    *,
+    plan: Mapping[str, Any],
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    ledger: corpus.BudgetLedger,
+    work_dir: Path,
+    outcome: Literal["minimum_failed", "seal_validation_failed"],
+    errors: Sequence[str],
+    inventory_sha256: str,
+) -> dict[str, Any]:
+    """Return closed, text-free evidence for a post-network terminal outcome."""
+
+    slots = {
+        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    counts: dict[str, dict[str, int]] = {
+        "split": {},
+        "locale": {},
+        "domain": {},
+        "option_count": {},
+        "reason": {},
+    }
+    for row in [*accepted, *rejected]:
+        task_id = row.get("task_id")
+        if not isinstance(task_id, str) or task_id not in slots:
+            raise corpus.CorpusError("report task identity")
+        slot = slots[task_id]
+        for name, value in (
+            ("split", slot["split"]),
+            ("locale", slot["locale"]),
+            ("domain", slot["domain"]),
+            ("option_count", str(slot["option_count"])),
+        ):
+            bucket = counts[name]
+            string_value = str(value)
+            bucket[string_value] = bucket.get(string_value, 0) + 1
+    for row in rejected:
+        reason = row.get("reason")
+        if isinstance(reason, str):
+            counts["reason"][reason] = counts["reason"].get(reason, 0) + 1
+    snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not snapshots:
+        raise corpus.CorpusError("post-pilot ledger missing")
+    provider_cost = sum(
+        (Decimal(entry["provider_cost_usd"]) for entry in ledger.entries), Decimal()
+    )
+    debit = sum((Decimal(entry["debit_usd"]) for entry in ledger.entries), Decimal())
+    all_ids = set(slots)
+    settled_ids = {
+        cast(str, row["task_id"])
+        for row in [*accepted, *rejected]
+        if isinstance(row.get("task_id"), str)
+    }
+    return {
+        "schema_version": "phase4e-corpus-terminal-report.v1",
+        "outcome": outcome,
+        "accepted_count": len(accepted),
+        "rejected_count": len(rejected),
+        "unresolved_count": len(all_ids - settled_ids),
+        "counts": {key: dict(sorted(value.items())) for key, value in counts.items()},
+        "errors": sorted(set(errors)),
+        "provider_reported_cost_usd": str(provider_cost),
+        "conservative_debit_usd": str(debit),
+        "plan_sha256": corpus._sha(_canonical(plan)),
+        "ledger_sha256": hashlib.sha256(snapshots[-1].read_bytes()).hexdigest(),
+        "resolution_sha256": _resolution_sha256(work_dir),
+        "research_inventory_sha256": inventory_sha256,
+    }
+
+
+def _write_terminal_outcome_report(report_dir: Path, payload: Mapping[str, Any]) -> Path:
+    """Append a numbered report, or reuse an identical terminal outcome."""
+
+    report_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    encoded = _canonical(payload) + b"\n"
+    for path in pilot._numbered_files(report_dir, "report"):
+        if path.read_bytes() == encoded:
+            return path
+    return pilot._append_numbered(report_dir, "report", payload)
+
+
+def _persist_terminal_outcome(
+    *,
+    plan: Mapping[str, Any],
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    ledger: corpus.BudgetLedger,
+    work_dir: Path,
+    report_dir: Path,
+    artifact_root: Path,
+    outcome: Literal["minimum_failed", "seal_validation_failed"],
+    errors: Sequence[str],
+) -> Path:
+    _publish_research_capsule(work_dir, artifact_root)
+    inventory_sha, _historical = pilot.record_research_catalog(artifact_root)
+    return _write_terminal_outcome_report(
+        report_dir,
+        _terminal_outcome_report(
+            plan=plan,
+            accepted=accepted,
+            rejected=rejected,
+            ledger=ledger,
+            work_dir=work_dir,
+            outcome=outcome,
+            errors=errors,
+            inventory_sha256=inventory_sha,
+        ),
+    )
+
+
+def _publish_research_capsule(work_dir: Path, artifact_root: Path) -> Path:
+    """Publish the compact work evidence without importing its full ledger chain."""
+
+    return pilot.create_research_capsule(work_dir, artifact_root / f"{work_dir.name}-capsule")
+
+
 def _run_post_pilot_batch(
     client: corpus.OpenRouterCorpusClient,
     slots: Sequence[Mapping[str, Any]],
@@ -1369,11 +1501,48 @@ def _run_post_pilot_corpus(
     snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
     if not snapshots or _read_json(snapshots[-1]).get("stop_reason") != "complete":
         corpus.write_ledger_snapshot(work_dir / "ledger", ledger, stop_reason="complete")
+    minimum_errors = corpus._minimums(accepted)
+    if minimum_errors:
+        if packet.exists():
+            raise corpus.CorpusError("minimum failed packet present")
+        _persist_terminal_outcome(
+            plan=plan,
+            accepted=accepted,
+            rejected=rejected,
+            ledger=ledger,
+            work_dir=work_dir,
+            report_dir=report_dir,
+            artifact_root=artifact_root,
+            outcome="minimum_failed",
+            errors=minimum_errors,
+        )
+        provider_cost = sum(
+            (Decimal(entry["provider_cost_usd"]) for entry in ledger.entries), Decimal()
+        )
+        print(f"phase4e corpus final provider spend USD {provider_cost}", flush=True)
+        raise corpus.CorpusError("minimum_failed")
     if not packet.exists():
-        corpus.seal_packet(packet, plan, accepted, rejected, ledger.as_json(final=True))
+        try:
+            corpus.seal_packet(packet, plan, accepted, rejected, ledger.as_json(final=True))
+        except corpus.CorpusError as error:
+            try:
+                _persist_terminal_outcome(
+                    plan=plan,
+                    accepted=accepted,
+                    rejected=rejected,
+                    ledger=ledger,
+                    work_dir=work_dir,
+                    report_dir=report_dir,
+                    artifact_root=artifact_root,
+                    outcome="seal_validation_failed",
+                    errors=["seal_validation_failed"],
+                )
+            except Exception as report_error:
+                raise error from report_error
+            raise
     else:
         corpus.validate_accepted_packet_pre_holdout(packet)
-    pilot._copy_work_tree(work_dir, artifact_root / work_dir.name)
+    _publish_research_capsule(work_dir, artifact_root)
     inventory_sha, historical = pilot.record_research_catalog(artifact_root)
     report_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     report_path = report_dir / "report.json"

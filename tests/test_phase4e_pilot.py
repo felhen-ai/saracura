@@ -1539,3 +1539,88 @@ def test_canonical_research_root_uses_platformdirs(monkeypatch: pytest.MonkeyPat
     assert pilot.canonical_research_ledger_root() == Path(
         "/tmp/saracura-state/phase4e/research-ledgers"
     )
+
+
+def test_research_capsule_is_counted_once_and_tampering_fails_closed(tmp_path: Path) -> None:
+    raw = tmp_path / "raw-corpus"
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    reservation = "reservation-" + f"{1:064x}"
+    ledger.reserve_request("corpus_author", reservation, Decimal("0.01"))
+    ledger.settle_request(reservation, "request-1", Decimal(), "a" * 64)
+    corpus.write_ledger_snapshot(raw / "ledger", ledger)
+    (raw / "raw-response.bin").write_bytes(b"x" * 100_000)
+    (raw / "resolved").mkdir(parents=True)
+    (raw / "resolved" / "call-0000.json").write_bytes(b'{"status":"accepted"}\n')
+    (raw / "diagnostics").mkdir()
+    (raw / "diagnostics" / "call-0000.json").write_bytes(b'{"reviewed":1}\n')
+
+    root = tmp_path / "research-ledgers"
+    capsule = root / "corpus-v3-capsule"
+    raw_copy = tmp_path / "external-raw-corpus"
+    assert pilot.copy_raw_research_evidence(raw, raw_copy)
+    pilot.create_research_capsule(raw_copy, capsule)
+    pilot.validate_research_capsule(capsule, raw_copy)
+    scan = pilot.scan_research_ledgers(root)
+    assert scan.directory_count == 1
+    assert scan.entry_count == 1
+
+    (capsule / "resolved" / "call-0000.json").write_bytes(b'{"status":"rejected"}\n')
+    with pytest.raises(corpus.CorpusError, match="research capsule digest"):
+        pilot.scan_research_ledgers(root)
+
+
+def test_interrupted_capsule_publication_never_becomes_a_catalog_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = tmp_path / "raw-corpus"
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    corpus.write_ledger_snapshot(raw / "ledger", ledger)
+    (raw / "raw-response.bin").write_bytes(b"x" * 100_000)
+    root = tmp_path / "research-ledgers"
+    corpus.write_ledger_snapshot(
+        root / "history" / "ledger",
+        corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY),
+    )
+    capsule = root / "corpus-v3-capsule"
+
+    def interrupt_publish(_staging: Path, _destination: Path) -> None:
+        raise OSError("simulated publication interruption")
+
+    monkeypatch.setattr(corpus, "_publish_packet_create_if_absent", interrupt_publish)
+    with pytest.raises(OSError, match="simulated publication interruption"):
+        pilot.create_research_capsule(raw, capsule)
+
+    assert not capsule.exists()
+    staging = list(root.glob(".corpus-v3-capsule.staging-*"))
+    assert len(staging) == 1
+    assert (staging[0] / "research-capsule.json").is_file()
+    _inventory, scan = pilot.record_research_catalog(root)
+    assert scan.directory_count == 1
+    assert not any(".staging-" in item["path"] for item in pilot._inventory_payload(root)["files"])
+
+
+def test_catalog_rejects_a_full_chain_matching_a_capsule_source(tmp_path: Path) -> None:
+    raw = tmp_path / "raw-corpus"
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    corpus.write_ledger_snapshot(raw / "ledger", ledger)
+    (raw / "raw-response.bin").write_bytes(b"x" * 100_000)
+    root = tmp_path / "research-ledgers"
+    pilot.create_research_capsule(raw, root / "corpus-v3-capsule")
+    duplicate = root / "ordinary-copy" / "ledger"
+    duplicate.mkdir(parents=True)
+    (duplicate / "ledger-0000.json").write_bytes((raw / "ledger" / "ledger-0000.json").read_bytes())
+    with pytest.raises(corpus.CorpusError, match="research capsule duplicates full ledger"):
+        pilot.scan_research_ledgers(root)
+
+
+def test_complete_research_catalog_copy_preserves_inventory_and_spend(tmp_path: Path) -> None:
+    source = tmp_path / "internal-research-ledgers"
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    corpus.write_ledger_snapshot(source / "corpus-v3" / "ledger", ledger)
+    inventory, scan = pilot.record_research_catalog(source)
+
+    copied_inventory, copied_scan = pilot.copy_research_catalog(
+        source, tmp_path / "external-research-ledgers"
+    )
+    assert copied_inventory == inventory
+    assert copied_scan == scan

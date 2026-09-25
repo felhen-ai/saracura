@@ -10,6 +10,9 @@ import hashlib
 import importlib
 import json
 import os
+import stat
+import subprocess
+import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -97,6 +100,12 @@ _PERSISTED_DIAGNOSTIC_KEYS = (
     "retry_recoveries",
     "transport_uncertain_calls",
 )
+_PRIVATE_STATE_ROOT_ENV = "SARACURA_PRIVATE_STATE_ROOT"
+_RESEARCH_CAPSULE_SCHEMA = "research-capsule.v1"
+_RESEARCH_CAPSULE_MANIFEST = "research-capsule.json"
+_LEDGER_CHAIN_VALIDATOR_REVISION = "phase4e-ledger-chain.v1"
+_RESEARCH_CATALOG_MIGRATION_SCHEMA = "phase4e-research-catalog-migration.v1"
+_RESEARCH_CATALOG_MIGRATION_MARKER = "research-catalog-migration.json"
 
 
 class PilotSemanticEquivalenceAttestation(corpus._Closed):
@@ -804,6 +813,7 @@ def scan_research_ledgers(root: Path) -> SpendScan:
 
     if not root.is_dir():
         raise corpus.CorpusError("artifact root")
+    capsules = _catalog_capsules(root)
     directories = _ledger_directories(root)
     provider = Decimal()
     debit = Decimal()
@@ -815,6 +825,11 @@ def scan_research_ledgers(root: Path) -> SpendScan:
     overspent = 0
     for directory in directories:
         ledger = _validate_ledger_chain(directory)
+        if directory not in capsules:
+            snapshots = _numbered_files(directory, "ledger")
+            source_key = (_sha_file(snapshots[0]), _sha_file(snapshots[-1]))
+            if source_key in capsules.values():
+                raise corpus.CorpusError("research capsule duplicates full ledger")
         for entry in ledger.entries:
             amount = Decimal(entry["debit_usd"])
             provider += Decimal(entry["provider_cost_usd"])
@@ -896,12 +911,302 @@ def _validate_ledger_chain(directory: Path) -> corpus.BudgetLedger:
     return previous
 
 
+def _sha_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _raw_inventory(source: Path) -> dict[str, Any]:
+    """Inventory raw evidence without retaining its contents in catalog state."""
+
+    if not source.is_dir() or source.is_symlink():
+        raise corpus.CorpusError("raw research evidence")
+    files: list[dict[str, Any]] = []
+    bytes_count = 0
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            raise corpus.CorpusError("raw research evidence rejects symlinks")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source)
+        if ".." in relative.parts:
+            raise corpus.CorpusError("raw research evidence path")
+        payload = path.read_bytes()
+        bytes_count += len(payload)
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    if not files:
+        raise corpus.CorpusError("raw research evidence")
+    payload = {"files": files}
+    return {
+        "sha256": hashlib.sha256(_canonical(payload)).hexdigest(),
+        "file_count": len(files),
+        "byte_count": bytes_count,
+        "files": files,
+    }
+
+
+def _copy_complete_tree_create_only(source: Path, destination: Path) -> None:
+    inventory = _raw_inventory(source)
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for item in cast(list[dict[str, str]], inventory["files"]):
+        relative = Path(item["path"])
+        source_path = source / relative
+        destination_path = destination / relative
+        payload = source_path.read_bytes()
+        if destination_path.exists():
+            if destination_path.is_symlink() or destination_path.read_bytes() != payload:
+                raise FileExistsError(f"benchmark artifact already exists: {destination_path.name}")
+            continue
+        destination_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic_create(destination_path, payload)
+        os.chmod(destination_path, 0o600)
+    copied = _raw_inventory(destination)
+    if copied != inventory:
+        raise corpus.CorpusError("research copy inventory")
+
+
+def copy_raw_research_evidence(source: Path, destination: Path) -> str:
+    """Copy a complete raw work tree create-only and validate its ledger chain."""
+
+    _validate_ledger_chain(source / "ledger")
+    _copy_complete_tree_create_only(source, destination)
+    _validate_ledger_chain(destination / "ledger")
+    return cast(str, _raw_inventory(destination)["sha256"])
+
+
+def _capsule_manifest_path(capsule: Path) -> Path:
+    return capsule / _RESEARCH_CAPSULE_MANIFEST
+
+
+def _capsule_files(capsule: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in capsule.rglob("*"):
+        if path.is_symlink():
+            raise corpus.CorpusError("research capsule rejects symlinks")
+        if path.is_file():
+            files.append(path)
+    return sorted(files)
+
+
+def _capsule_payload(capsule: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(_capsule_manifest_path(capsule).read_bytes())
+    except (OSError, ValueError) as error:
+        raise corpus.CorpusError("research capsule") from error
+    if not isinstance(payload, dict):
+        raise corpus.CorpusError("research capsule")
+    return cast(dict[str, Any], payload)
+
+
+def _validated_research_capsule(capsule: Path) -> tuple[dict[str, Any], tuple[str, str]]:
+    """Validate the closed compact derivative before it joins a spend catalog."""
+
+    if not capsule.is_dir() or capsule.is_symlink():
+        raise corpus.CorpusError("research capsule")
+    payload = _capsule_payload(capsule)
+    required = {
+        "schema_version",
+        "raw_inventory_sha256",
+        "raw_file_count",
+        "raw_byte_count",
+        "first_ledger_sha256",
+        "final_ledger_sha256",
+        "ledger_snapshot_count",
+        "chain_validator_revision",
+        "files",
+    }
+    if set(payload) != required or payload.get("schema_version") != _RESEARCH_CAPSULE_SCHEMA:
+        raise corpus.CorpusError("research capsule")
+    scalar_keys = (
+        "raw_inventory_sha256",
+        "first_ledger_sha256",
+        "final_ledger_sha256",
+    )
+    if (
+        any(
+            not isinstance(payload[key], str)
+            or len(cast(str, payload[key])) != 64
+            or any(char not in "0123456789abcdef" for char in cast(str, payload[key]))
+            for key in scalar_keys
+        )
+        or type(payload["raw_file_count"]) is not int
+        or type(payload["raw_byte_count"]) is not int
+        or type(payload["ledger_snapshot_count"]) is not int
+        or cast(int, payload["raw_file_count"]) <= 0
+        or cast(int, payload["raw_byte_count"]) <= 0
+        or cast(int, payload["ledger_snapshot_count"]) <= 0
+        or payload["chain_validator_revision"] != _LEDGER_CHAIN_VALIDATOR_REVISION
+        or not isinstance(payload["files"], list)
+    ):
+        raise corpus.CorpusError("research capsule")
+    expected_files: dict[str, str] = {}
+    for item in cast(list[object], payload["files"]):
+        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
+            raise corpus.CorpusError("research capsule")
+        relative = item["path"]
+        digest = item["sha256"]
+        if (
+            not isinstance(relative, str)
+            or not isinstance(digest, str)
+            or relative.startswith("/")
+            or ".." in Path(relative).parts
+            or relative in expected_files
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise corpus.CorpusError("research capsule")
+        expected_files[relative] = digest
+    actual_files = {
+        path.relative_to(capsule).as_posix(): _sha_file(path)
+        for path in _capsule_files(capsule)
+        if path.name != _RESEARCH_CAPSULE_MANIFEST
+    }
+    if expected_files != actual_files or not expected_files:
+        raise corpus.CorpusError("research capsule digest")
+    capsule_bytes = sum(path.stat().st_size for path in _capsule_files(capsule))
+    if cast(int, payload["raw_byte_count"]) < capsule_bytes * 10:
+        raise corpus.CorpusError("research capsule is not compact")
+    allowed = {"ledger/ledger-0000.json"}
+    allowed.update(
+        name
+        for name in expected_files
+        if (
+            (Path(name).parent.name == "resolved" and Path(name).name.startswith("call-"))
+            or (Path(name).parent.name == "diagnostics" and Path(name).name.startswith("call-"))
+        )
+        and name.endswith(".json")
+    )
+    if set(expected_files) != allowed:
+        raise corpus.CorpusError("research capsule files")
+    ledger_path = capsule / "ledger" / "ledger-0000.json"
+    if _sha_file(ledger_path) != payload["final_ledger_sha256"]:
+        raise corpus.CorpusError("research capsule final ledger")
+    _validate_ledger_chain(capsule / "ledger")
+    return payload, (
+        cast(str, payload["first_ledger_sha256"]),
+        cast(str, payload["final_ledger_sha256"]),
+    )
+
+
+def create_research_capsule(raw_source: Path, capsule: Path) -> Path:
+    """Create a compact, immutable evidence derivative from a validated raw work tree."""
+
+    raw = _raw_inventory(raw_source)
+    ledger_directory = raw_source / "ledger"
+    _validate_ledger_chain(ledger_directory)
+    snapshots = _numbered_files(ledger_directory, "ledger")
+    if not snapshots:
+        raise corpus.CorpusError("research ledger")
+    sources = [
+        snapshots[-1],
+        *sorted((raw_source / "resolved").glob("call-*.json")),
+        *sorted((raw_source / "diagnostics").glob("call-*.json")),
+    ]
+    files: list[dict[str, str]] = []
+    for source in sources:
+        if not source.is_file() or source.is_symlink():
+            raise corpus.CorpusError("research capsule source")
+        relative = (
+            Path("ledger/ledger-0000.json")
+            if source == snapshots[-1]
+            else source.relative_to(raw_source)
+        )
+        files.append(
+            {"path": relative.as_posix(), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+        )
+    manifest = {
+        "schema_version": _RESEARCH_CAPSULE_SCHEMA,
+        "raw_inventory_sha256": raw["sha256"],
+        "raw_file_count": raw["file_count"],
+        "raw_byte_count": raw["byte_count"],
+        "first_ledger_sha256": _sha_file(snapshots[0]),
+        "final_ledger_sha256": _sha_file(snapshots[-1]),
+        "ledger_snapshot_count": len(snapshots),
+        "chain_validator_revision": _LEDGER_CHAIN_VALIDATOR_REVISION,
+        "files": sorted(files, key=lambda item: item["path"]),
+    }
+    if capsule.exists():
+        if _capsule_payload(capsule) != manifest:
+            raise FileExistsError(f"benchmark artifact already exists: {capsule.name}")
+        _validated_research_capsule(capsule)
+        return _capsule_manifest_path(capsule)
+    capsule.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Keep incomplete payloads in a hidden, same-volume sibling.  The manifest
+    # is last and the directory rename is the only canonical publication.
+    staging = Path(tempfile.mkdtemp(prefix=f".{capsule.name}.staging-", dir=capsule.parent))
+    for source, item in zip(sources, files, strict=True):
+        relative = Path(item["path"])
+        destination = staging / relative
+        payload = source.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != item["sha256"]:
+            raise corpus.CorpusError("research capsule source")
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic_create(destination, payload)
+        os.chmod(destination, 0o600)
+    if _raw_inventory(raw_source) != raw:
+        raise corpus.CorpusError("research capsule source")
+    manifest_path = _capsule_manifest_path(staging)
+    encoded = _canonical(manifest) + b"\n"
+    atomic_create(manifest_path, encoded)
+    os.chmod(manifest_path, 0o600)
+    _validated_research_capsule(staging)
+    try:
+        corpus._publish_packet_create_if_absent(staging, capsule)
+    except FileExistsError:
+        # A concurrent completed publisher is reusable only when it is the
+        # exact immutable capsule; partial or different evidence is untouched.
+        if _capsule_payload(capsule) != manifest:
+            raise FileExistsError(f"benchmark artifact already exists: {capsule.name}") from None
+        _validated_research_capsule(capsule)
+    return _capsule_manifest_path(capsule)
+
+
+def validate_research_capsule(capsule: Path, raw_source: Path | None = None) -> None:
+    """Validate a capsule and, when available, its complete raw evidence source."""
+
+    payload, _source_key = _validated_research_capsule(capsule)
+    if raw_source is None:
+        return
+    raw = _raw_inventory(raw_source)
+    if (
+        payload["raw_inventory_sha256"] != raw["sha256"]
+        or payload["raw_file_count"] != raw["file_count"]
+        or payload["raw_byte_count"] != raw["byte_count"]
+    ):
+        raise corpus.CorpusError("research capsule raw inventory")
+
+
+def _catalog_capsules(root: Path) -> dict[Path, tuple[str, str]]:
+    capsules: dict[Path, tuple[str, str]] = {}
+    source_keys: set[tuple[str, str]] = set()
+    for manifest in sorted(root.rglob(_RESEARCH_CAPSULE_MANIFEST)):
+        relative = manifest.relative_to(root)
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        capsule = manifest.parent.resolve()
+        _payload, source_key = _validated_research_capsule(capsule)
+        if source_key in source_keys:
+            raise corpus.CorpusError("research capsule source duplicate")
+        source_keys.add(source_key)
+        capsules[capsule / "ledger"] = source_key
+    return capsules
+
+
 def _ledger_directories(root: Path) -> list[Path]:
     found: set[Path] = set()
     for path in root.rglob("ledger-*.json"):
         if path.is_symlink() or path.parent.is_symlink():
             raise corpus.CorpusError("research ledger rejects symlinks")
         if path.parent.name != "ledger":
+            continue
+        # Hidden siblings are interrupted capsule publications.  They are not
+        # canonical research evidence until the final directory rename.
+        relative = path.parent.relative_to(root)
+        if any(part.startswith(".") for part in relative.parts):
             continue
         found.add(path.parent.resolve())
     return sorted(found)
@@ -917,6 +1222,8 @@ def _research_files(source: Path) -> list[Path]:
         if path.is_symlink():
             raise corpus.CorpusError("research import rejects symlinks")
         relative = path.relative_to(source)
+        if any(part.startswith(".") for part in relative.parts):
+            continue
         if _is_research_artifact(relative):
             files.append(path)
     if not files:
@@ -927,6 +1234,8 @@ def _research_files(source: Path) -> list[Path]:
 def _is_research_artifact(relative: Path) -> bool:
     parent = relative.parent.name
     name = relative.name
+    if name == _RESEARCH_CAPSULE_MANIFEST:
+        return True
     if (
         parent == "ledger"
         and name.endswith(".json")
@@ -961,6 +1270,22 @@ def import_research_artifacts(source: Path, destination: Path) -> str:
     return inventory_sha
 
 
+def copy_research_catalog(source: Path, destination: Path) -> tuple[str, SpendScan]:
+    """Migrate a complete sealed catalog create-only without changing accounting scope."""
+
+    source_inventory = verify_inventory(source)
+    source_scan = scan_research_ledgers(source)
+    if _validate_spend_index_chain(source) != source_scan:
+        raise corpus.CorpusError("research catalog spend index")
+    _copy_complete_tree_create_only(source, destination)
+    if verify_inventory(destination) != source_inventory:
+        raise corpus.CorpusError("research catalog inventory")
+    destination_scan = scan_research_ledgers(destination)
+    if destination_scan != source_scan or _validate_spend_index_chain(destination) != source_scan:
+        raise corpus.CorpusError("research catalog copy")
+    return source_inventory, destination_scan
+
+
 def _inventory_payload(root: Path) -> dict[str, Any]:
     files = []
     for path in _research_files(root):
@@ -990,6 +1315,7 @@ def _append_numbered(root: Path, prefix: str, payload: Mapping[str, Any]) -> Pat
 
 
 def verify_inventory(root: Path) -> str:
+    _catalog_capsules(root)
     paths = _numbered_files(root, "inventory")
     if not paths:
         raise corpus.CorpusError("research inventory missing")
@@ -1095,6 +1421,7 @@ def _validate_spend_index_chain(root: Path) -> SpendScan:
 
 
 def record_research_catalog(root: Path) -> tuple[str, SpendScan]:
+    _catalog_capsules(root)
     scan = scan_research_ledgers(root)
     payload = _inventory_payload(root)
     current = _latest_numbered(root, "inventory")
@@ -1130,14 +1457,162 @@ def require_pilot_research_history(root: Path) -> tuple[SpendScan, str]:
     return scan, inventory_sha
 
 
-def canonical_research_ledger_root() -> Path:
-    """Return the platform state root. Tests and the CLI pass ``--artifact-root`` explicitly."""
-
+def _platform_phase4e_root() -> Path:
     try:
         user_state_path = importlib.import_module("platformdirs").user_state_path
     except ImportError as error:
         raise corpus.CorpusError("durable research root requires platformdirs") from error
-    return Path(user_state_path("saracura")) / "phase4e" / "research-ledgers"
+    return Path(user_state_path("saracura")) / "phase4e"
+
+
+def _research_catalog_migration_marker() -> Path:
+    return _platform_phase4e_root() / _RESEARCH_CATALOG_MIGRATION_MARKER
+
+
+def _catalog_identifier(root: Path) -> str:
+    try:
+        metadata = root.stat()
+    except OSError as error:
+        raise corpus.CorpusError("research catalog migration") from error
+    # Device and inode form a stable local identifier without persisting a
+    # sensitive absolute path in the internal marker.
+    return hashlib.sha256(
+        _canonical({"device": metadata.st_dev, "inode": metadata.st_ino})
+    ).hexdigest()
+
+
+def write_research_catalog_migration_marker(external_catalog: Path, inventory_sha256: str) -> Path:
+    """Bind the verified external catalog before retiring internal catalog writes."""
+
+    if (
+        not external_catalog.is_absolute()
+        or len(inventory_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in inventory_sha256)
+        or verify_inventory(external_catalog) != inventory_sha256
+    ):
+        raise corpus.CorpusError("research catalog migration")
+    payload = {
+        "schema_version": _RESEARCH_CATALOG_MIGRATION_SCHEMA,
+        "catalog_identifier": _catalog_identifier(external_catalog),
+        "inventory_sha256": inventory_sha256,
+    }
+    marker = _research_catalog_migration_marker()
+    marker.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    encoded = _canonical(payload) + b"\n"
+    if marker.exists():
+        if marker.is_symlink() or marker.read_bytes() != encoded:
+            raise FileExistsError(f"benchmark artifact already exists: {marker.name}")
+    else:
+        atomic_create(marker, encoded)
+        os.chmod(marker, 0o600)
+    return marker
+
+
+def _require_no_internal_catalog_migration_marker() -> None:
+    marker = _research_catalog_migration_marker()
+    if not marker.exists():
+        return
+    if marker.is_symlink():
+        raise corpus.CorpusError("research catalog migration marker")
+    try:
+        payload = json.loads(marker.read_bytes())
+    except (OSError, ValueError) as error:
+        raise corpus.CorpusError("research catalog migration marker") from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"schema_version", "catalog_identifier", "inventory_sha256"}
+        or payload.get("schema_version") != _RESEARCH_CATALOG_MIGRATION_SCHEMA
+        or any(
+            not isinstance(payload[key], str)
+            or len(cast(str, payload[key])) != 64
+            or any(character not in "0123456789abcdef" for character in cast(str, payload[key]))
+            for key in ("catalog_identifier", "inventory_sha256")
+        )
+    ):
+        raise corpus.CorpusError("research catalog migration marker")
+    raise corpus.CorpusError("private state root required after research catalog migration")
+
+
+def _git_protected_paths() -> set[Path]:
+    """Return checkout locations that private research state must never inhabit."""
+
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--git-common-dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        worktrees = subprocess.run(
+            ["git", "-C", str(ROOT), "worktree", "list", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise corpus.CorpusError("private state repository boundary") from error
+    common_path = Path(common)
+    if not common_path.is_absolute():
+        common_path = ROOT / common_path
+    protected = {ROOT.resolve(), common_path.resolve()}
+    for line in worktrees:
+        if line.startswith("worktree "):
+            protected.add(Path(line.removeprefix("worktree ")).resolve())
+    return protected
+
+
+def configured_private_phase4e_root() -> Path | None:
+    """Resolve the optional, closed private root without creating it."""
+
+    raw = os.environ.get(_PRIVATE_STATE_ROOT_ENV)
+    if raw is None:
+        return None
+    candidate = Path(raw)
+    if not candidate.is_absolute() or candidate.is_symlink():
+        raise corpus.CorpusError("private state root")
+    cursor = Path(candidate.anchor)
+    for part in candidate.parts[1:]:
+        cursor /= part
+        if cursor.is_symlink():
+            raise corpus.CorpusError("private state root")
+    try:
+        metadata = candidate.stat()
+    except OSError as error:
+        raise corpus.CorpusError("private state root") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise corpus.CorpusError("private state root")
+    resolved = candidate.resolve()
+    if any(
+        resolved == protected or protected in resolved.parents
+        for protected in _git_protected_paths()
+    ):
+        raise corpus.CorpusError("private state root")
+    return resolved / "phase4e"
+
+
+def private_phase4e_paths() -> dict[str, Path]:
+    """Return movable Phase 4E evidence roots, never the holdout-claim registry."""
+
+    phase_root = configured_private_phase4e_root()
+    if phase_root is None:
+        _require_no_internal_catalog_migration_marker()
+        phase_root = _platform_phase4e_root()
+    return {
+        "phase_root": phase_root,
+        "research_ledgers": phase_root / "research-ledgers",
+        "raw_evidence": phase_root / "raw-evidence",
+        "model_artifacts": phase_root / "model-artifacts",
+    }
+
+
+def canonical_research_ledger_root() -> Path:
+    """Return configured Phase 4E research state or the historical platform root."""
+
+    return private_phase4e_paths()["research_ledgers"]
 
 
 def _semantic_kind(row: Mapping[str, Any], review: Mapping[str, Any]) -> str | None:
@@ -1900,6 +2375,10 @@ __all__ = [
     "apply_pair_author_target_rule",
     "build_plan",
     "canonical_research_ledger_root",
+    "configured_private_phase4e_root",
+    "copy_raw_research_evidence",
+    "copy_research_catalog",
+    "create_research_capsule",
     "import_research_artifacts",
     "pilot_acceptance",
     "pilot_pair_resolution",
@@ -1907,11 +2386,14 @@ __all__ = [
     "pilot_reviewer_view",
     "pilot_task_ids",
     "preflight_bounds",
+    "private_phase4e_paths",
     "require_pilot_research_history",
     "run_pilot",
     "scan_research_ledgers",
     "validate_pilot_plan",
     "validate_pilot_policy",
+    "validate_research_capsule",
     "validate_spend_baseline",
     "write_pilot_plan",
+    "write_research_catalog_migration_marker",
 ]
