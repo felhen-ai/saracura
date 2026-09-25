@@ -174,6 +174,183 @@ def test_post_pilot_settled_validation_retries_are_bounded_and_diagnostic(
     assert (packet / "packet.json").is_file()
 
 
+def test_local_runtime_failure_closes_settled_author_without_retry(tmp_path: Path) -> None:
+    slot = next(item for item in corpus.build_post_pilot_plan()["slots"] if item["pair_id"] is None)
+    calls = 0
+
+    def transport(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        nonlocal calls
+        del method, url, headers, body
+        calls += 1
+        return _completion({"records": [_record(slot)]}, "settled-author")
+
+    class UnavailableCounter:
+        def count(self, text: str) -> int:
+            del text
+            raise RuntimeError("local encoder unavailable")
+
+    work = tmp_path / "work"
+    client = _client(work, transport)
+    diagnostics = pipeline._post_pilot_blank_diagnostics()
+    rejected: list[dict[str, Any]] = []
+    with pytest.raises(RuntimeError, match="encoder unavailable"):
+        pipeline._run_post_pilot_batch(
+            client,
+            [slot],
+            tmp_path / "snapshot",
+            "test-key",
+            [],
+            rejected,
+            diagnostics,
+            work,
+            token_counter=UnavailableCounter(),
+        )
+    assert calls == 1
+    resolved = pipeline._load_resolved(work, corpus.build_post_pilot_plan())
+    assert resolved[slot["task_id"]]["row"]["reason"] == "author_validation_failure"
+    assert rejected[0]["task_id"] == slot["task_id"]
+    assert diagnostics["author_response_failures"] == 1
+
+
+def test_v4_resume_reconciles_one_report_bound_trailing_settled_gap(tmp_path: Path) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    slot = plan["slots"][1600]
+    work = tmp_path / "work"
+    execution_id = pilot.ensure_research_execution_marker(work)
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    reservation = "reservation-" + "a" * 64
+    ledger.reserve_request("corpus_author", reservation, Decimal("0.01"))
+    ledger.settle_request(reservation, "request-1", Decimal("0.003"), "b" * 64)
+    ledger.record_provider_journal(
+        stage="corpus_author", reservation_id=reservation, task_ids=[slot["task_id"]]
+    )
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    snapshot = sorted((work / "ledger").glob("ledger-*.json"))[-1]
+    report_dir = tmp_path / "reports"
+    pipeline._write_terminal_outcome_report(
+        report_dir,
+        {
+            "outcome": "incomplete_operational",
+            "execution_id": execution_id,
+            "supplemental_ledger_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+            "supplemental_resolution_sha256": pipeline._resolution_sha256(work),
+        },
+    )
+
+    resolved = pipeline._reconcile_v4_operational_gap(work, report_dir, plan, ledger, {})
+    row = resolved[slot["task_id"]]["row"]
+    assert row["reason"] == "author_validation_failure"
+    assert row["author_request_id"] == "request-1"
+    pipeline._require_settled_task_resolution(ledger, resolved)
+    assert pipeline._reconcile_v4_operational_gap(work, report_dir, plan, ledger, resolved) == (
+        resolved
+    )
+
+
+@pytest.mark.parametrize("failure", ["missing", "outcome", "execution", "ledger"])
+def test_v4_resume_rejects_unbound_operational_report(tmp_path: Path, failure: str) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    slot = plan["slots"][1600]
+    work = tmp_path / "work"
+    execution_id = pilot.ensure_research_execution_marker(work)
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    reservation = "reservation-" + "c" * 64
+    ledger.reserve_request("corpus_author", reservation, Decimal("0.01"))
+    ledger.settle_request(reservation, "request-2", Decimal("0.003"), "d" * 64)
+    ledger.record_provider_journal(
+        stage="corpus_author", reservation_id=reservation, task_ids=[slot["task_id"]]
+    )
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    snapshot = sorted((work / "ledger").glob("ledger-*.json"))[-1]
+    report_dir = tmp_path / "reports"
+    payload = {
+        "outcome": "incomplete_operational",
+        "execution_id": execution_id,
+        "supplemental_ledger_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+        "supplemental_resolution_sha256": pipeline._resolution_sha256(work),
+    }
+    if failure == "outcome":
+        payload["outcome"] = "sealed"
+    elif failure == "execution":
+        payload["execution_id"] = "0" * 32
+    elif failure == "ledger":
+        payload["supplemental_ledger_sha256"] = "0" * 64
+    if failure != "missing":
+        pipeline._write_terminal_outcome_report(report_dir, payload)
+
+    with pytest.raises(corpus.CorpusError, match="settled operational reconciliation"):
+        pipeline._reconcile_v4_operational_gap(work, report_dir, plan, ledger, {})
+    assert not (work / "resolved").exists()
+
+
+def test_v4_resume_reconciles_matching_author_reviewer_suffix(tmp_path: Path) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    slot = plan["slots"][1600]
+    work = tmp_path / "work"
+    execution_id = pilot.ensure_research_execution_marker(work)
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    for stage, marker in (("corpus_author", "e"), ("corpus_reviewer", "f")):
+        reservation = "reservation-" + marker * 64
+        ledger.reserve_request(stage, reservation, Decimal("0.01"))
+        ledger.settle_request(reservation, f"request-{marker}", Decimal("0.003"), marker * 64)
+        ledger.record_provider_journal(
+            stage=stage, reservation_id=reservation, task_ids=[slot["task_id"]]
+        )
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    snapshot = sorted((work / "ledger").glob("ledger-*.json"))[-1]
+    report_dir = tmp_path / "reports"
+    pipeline._write_terminal_outcome_report(
+        report_dir,
+        {
+            "outcome": "incomplete_operational",
+            "execution_id": execution_id,
+            "supplemental_ledger_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+            "supplemental_resolution_sha256": pipeline._resolution_sha256(work),
+        },
+    )
+
+    resolved = pipeline._reconcile_v4_operational_gap(work, report_dir, plan, ledger, {})
+    row = resolved[slot["task_id"]]["row"]
+    assert row["reason"] == "review_resolution_failure"
+    assert row["author_request_id"] == "request-e"
+    assert row["reviewer_request_id"] == "request-f"
+    pipeline._require_settled_task_resolution(ledger, resolved)
+
+
+def test_v4_resume_rejects_multiple_unresolved_task_sets(tmp_path: Path) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    slots = plan["slots"][1600:1602]
+    work = tmp_path / "work"
+    execution_id = pilot.ensure_research_execution_marker(work)
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    for index, slot in enumerate(slots):
+        marker = str(index + 1)
+        reservation = "reservation-" + marker * 64
+        ledger.reserve_request("corpus_author", reservation, Decimal("0.01"))
+        ledger.settle_request(reservation, f"request-{marker}", Decimal("0.003"), marker * 64)
+        ledger.record_provider_journal(
+            stage="corpus_author", reservation_id=reservation, task_ids=[slot["task_id"]]
+        )
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    snapshot = sorted((work / "ledger").glob("ledger-*.json"))[-1]
+    report_dir = tmp_path / "reports"
+    pipeline._write_terminal_outcome_report(
+        report_dir,
+        {
+            "outcome": "incomplete_operational",
+            "execution_id": execution_id,
+            "supplemental_ledger_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+            "supplemental_resolution_sha256": pipeline._resolution_sha256(work),
+        },
+    )
+
+    with pytest.raises(corpus.CorpusError, match="settled operational reconciliation"):
+        pipeline._reconcile_v4_operational_gap(work, report_dir, plan, ledger, {})
+    assert not (work / "resolved").exists()
+
+
 def test_transport_uncertainty_closes_exact_lineage_and_later_batch_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -791,6 +968,59 @@ def test_missing_credential_preflight_creates_no_work_or_report(
     assert not packet.exists()
     assert not report.exists()
     assert not root.exists()
+
+
+def test_v4_local_ml_preflight_fails_before_marker_or_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    supplement = plan["slots"][1600:1601]
+    plan = {
+        **plan,
+        "slots": [*plan["base_slots"], *supplement],
+        "supplemental_task_ids": [supplement[0]["task_id"]],
+        "supplemental_author_batch_order": [[supplement[0]["task_id"]]],
+    }
+    base_ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    monkeypatch.setattr(pipeline, "_v4_base_capsule", lambda *_args: tmp_path / "base")
+    monkeypatch.setattr(
+        pilot, "require_pilot_research_history", lambda *_args: (_Counter(), "a" * 64)
+    )
+    monkeypatch.setattr(pilot, "validate_research_capsule", lambda *_args: None)
+    monkeypatch.setattr(pipeline, "_load_v4_base_capsule", lambda *_args: ([], [], base_ledger))
+    monkeypatch.setattr(pipeline, "_resolution_sha256", lambda *_args: "a" * 64)
+    monkeypatch.setattr(
+        corpus.VerifiedMiniLMTokenizerReceipt,
+        "create",
+        classmethod(
+            lambda cls, snapshot: (_ for _ in ()).throw(RuntimeError("local ML unavailable"))
+        ),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    calls = 0
+
+    def transport(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("transport must not run")
+
+    work = tmp_path / "work"
+    packet = tmp_path / "packet"
+    report = tmp_path / "report"
+    with pytest.raises(RuntimeError, match="local ML unavailable"):
+        pipeline._run_post_pilot_recovery(
+            plan,
+            tmp_path / "snapshot",
+            work,
+            packet,
+            report,
+            tmp_path / "research",
+            transport=cast(corpus.Transport, transport),
+        )
+    assert calls == 0
+    assert not work.exists()
+    assert not packet.exists()
+    assert not report.exists()
 
 
 def test_public_v3_lane_rejects_private_artifacts_inside_checkout(tmp_path: Path) -> None:

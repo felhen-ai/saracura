@@ -1329,6 +1329,8 @@ def _run_post_pilot_batch(
     rejected: list[dict[str, Any]],
     diagnostics: dict[str, int],
     work_dir: Path,
+    *,
+    token_counter: corpus.TokenCounter | None = None,
 ) -> None:
     """Resolve one precommitted author call without replaying uncertain transport."""
 
@@ -1379,9 +1381,26 @@ def _run_post_pilot_batch(
         author_lineage = corpus.lineage_from_journal(client.last_journal("corpus_author"), "author")
         try:
             decoded = corpus.decode_author_response(_response_content(response), slots)
-            candidate_usable, candidate_rejected = corpus.validate_author_rows_with_verified_minilm(
-                decoded, slots, snapshot
+            counter = token_counter or corpus.VerifiedMiniLMTokenizerReceipt.create(snapshot)
+            candidate_usable, candidate_rejected = corpus.classify_author_rows(
+                decoded, slots, counter
             )
+        except RuntimeError:
+            diagnostics["author_response_failures"] += 1
+            rows = _store_settled_fallback_required(
+                work_dir,
+                slots,
+                reason="author_validation_failure",
+                author_lineage=author_lineage,
+                reviewer_lineages={},
+            )
+            _store_post_pilot_diagnostics(
+                work_dir,
+                slots,
+                {key: diagnostics[key] - before[key] for key in _POST_PILOT_DIAGNOSTIC_KEYS},
+            )
+            rejected.extend(rows)
+            raise
         except corpus.CorpusError:
             diagnostics["author_response_failures"] += 1
             if attempt + 1 < _POST_PILOT_MAXIMUM_ATTEMPTS:
@@ -1539,6 +1558,98 @@ def _v4_supplement_resolved(work_dir: Path, plan: Mapping[str, Any]) -> dict[str
     if not set(resolved) <= supplemental:
         raise corpus.CorpusError("post-pilot recovery supplemental resolution")
     return resolved
+
+
+def _reconcile_v4_operational_gap(
+    work_dir: Path,
+    report_dir: Path,
+    plan: Mapping[str, Any],
+    ledger: corpus.BudgetLedger,
+    resolved: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Close one report-bound trailing provider task set without replaying it."""
+
+    completed = set(resolved)
+    gaps: list[tuple[int, Mapping[str, Any], tuple[str, ...]]] = []
+    for index, journal in enumerate(ledger.provider_journal):
+        task_ids = journal.get("task_ids")
+        if not isinstance(task_ids, list) or not all(isinstance(item, str) for item in task_ids):
+            raise corpus.CorpusError("settled operational reconciliation")
+        ids = tuple(cast(list[str], task_ids))
+        missing = set(ids) - completed
+        if missing:
+            if missing != set(ids):
+                raise corpus.CorpusError("settled operational reconciliation")
+            gaps.append((index, journal, ids))
+    if not gaps:
+        return resolved
+    gap_ids = {frozenset(item[2]) for item in gaps}
+    first_index = gaps[0][0]
+    if (
+        len(gap_ids) != 1
+        or len(next(iter(gap_ids))) != 1
+        or [item[0] for item in gaps] != list(range(first_index, len(ledger.provider_journal)))
+    ):
+        raise corpus.CorpusError("settled operational reconciliation")
+    reports = pilot._numbered_files(report_dir, "report")
+    snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not reports or not snapshots:
+        raise corpus.CorpusError("settled operational reconciliation")
+    report = _read_json(reports[-1])
+    execution_id = cast(str, pilot._execution_marker_payload(work_dir)["execution_id"])
+    if (
+        report.get("outcome") != "incomplete_operational"
+        or report.get("execution_id") != execution_id
+        or report.get("supplemental_ledger_sha256")
+        != hashlib.sha256(snapshots[-1].read_bytes()).hexdigest()
+        or report.get("supplemental_resolution_sha256") != _resolution_sha256(work_dir)
+    ):
+        raise corpus.CorpusError("settled operational reconciliation")
+    reservations = {entry["reservation_id"]: entry for entry in ledger.entries}
+    if any(
+        journal.get("reservation_id") not in reservations
+        or reservations[cast(str, journal["reservation_id"])]["status"]
+        not in {"settled", "overspent"}
+        for _index, journal, _ids in gaps
+    ):
+        raise corpus.CorpusError("settled operational reconciliation")
+    ids = gaps[-1][2]
+    slots_by_id = {
+        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    supplemental = set(cast(list[str], plan["supplemental_task_ids"]))
+    if set(ids) - supplemental or any(task_id not in slots_by_id for task_id in ids):
+        raise corpus.CorpusError("settled operational reconciliation")
+    slots = [slots_by_id[task_id] for task_id in ids]
+    final_journal = gaps[-1][1]
+    stage = final_journal.get("stage")
+    diagnostics = _post_pilot_blank_diagnostics()
+    if stage == "corpus_author" and len(gaps) == 1:
+        rows = _store_settled_fallback_required(
+            work_dir,
+            slots,
+            reason="author_validation_failure",
+            author_lineage=corpus.lineage_from_journal(final_journal, "author"),
+            reviewer_lineages={},
+        )
+        diagnostics["author_response_failures"] = 1
+    elif stage == "corpus_reviewer" and len(gaps) == 2:
+        author_journal = gaps[0][1]
+        if author_journal.get("stage") != "corpus_author" or gaps[0][2] != ids:
+            raise corpus.CorpusError("settled operational reconciliation")
+        rows = _store_settled_fallback_required(
+            work_dir,
+            slots,
+            reason="review_resolution_failure",
+            author_lineage=corpus.lineage_from_journal(author_journal, "author"),
+            reviewer_lineages={ids[0]: corpus.lineage_from_journal(final_journal, "reviewer")},
+        )
+        diagnostics["reviewer_response_failures"] = 1
+    else:
+        raise corpus.CorpusError("settled operational reconciliation")
+    _store_post_pilot_diagnostics(work_dir, slots, diagnostics)
+    del rows
+    return _v4_supplement_resolved(work_dir, plan)
 
 
 def _v4_streak(entries: Sequence[Mapping[str, str]], start: int, streak: int) -> int:
@@ -1793,7 +1904,15 @@ def _run_post_pilot_recovery(
         ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
     elif ledger.policy.schema_version != corpus.POST_PILOT_CORPUS_LEDGER_POLICY.schema_version:
         raise corpus.CorpusError("ledger resume mismatch")
-    _require_settled_task_resolution(ledger, resolved)
+    token_counter: corpus.TokenCounter | None = None
+    try:
+        _require_settled_task_resolution(ledger, resolved)
+    except corpus.CorpusError as error:
+        if str(error) != "settled provider call lacks complete task resolution":
+            raise
+        token_counter = corpus.VerifiedMiniLMTokenizerReceipt.create(snapshot)
+        resolved = _reconcile_v4_operational_gap(work_dir, report_dir, plan, ledger, resolved)
+        _require_settled_task_resolution(ledger, resolved)
     diagnostics, complete_diagnostics = _load_post_pilot_diagnostics(work_dir, plan, set(resolved))
     if not complete_diagnostics:
         raise corpus.CorpusError("post-pilot diagnostics incomplete")
@@ -1812,6 +1931,8 @@ def _run_post_pilot_recovery(
         if item["status"] == "rejected"
     ]
     if set(resolved) != supplemental_ids:
+        if token_counter is None:
+            token_counter = corpus.VerifiedMiniLMTokenizerReceipt.create(snapshot)
         _aggregate_preflight(plan, resolved, ledger)
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
@@ -1854,6 +1975,7 @@ def _run_post_pilot_recovery(
                     rejected,
                     diagnostics,
                     work_dir,
+                    token_counter=token_counter,
                 )
                 # The author/reviewer resolver receives base rows for dedup, but only
                 # supplemental additions belong in this resume work directory.
