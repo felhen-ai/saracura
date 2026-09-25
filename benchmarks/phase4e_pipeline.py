@@ -1279,9 +1279,24 @@ def _write_terminal_outcome_report(report_dir: Path, payload: Mapping[str, Any])
 
     report_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     encoded = _canonical(payload) + b"\n"
-    for path in pilot._numbered_files(report_dir, "report"):
+    reports = pilot._numbered_files(report_dir, "report")
+    for path in reports:
         if path.read_bytes() == encoded:
             return path
+    # A sealed v4 packet is its report's terminal authority.  In particular a
+    # recovery/publication fallback must never append report-(n+1) after the
+    # exact sealed report has been observed.
+    for path in reports:
+        try:
+            existing = json.loads(path.read_bytes())
+        except (OSError, ValueError) as error:
+            raise corpus.CorpusError("terminal report") from error
+        if (
+            isinstance(existing, dict)
+            and existing.get("schema_version") == "phase4e-corpus-terminal-report.v2"
+            and existing.get("outcome") == "sealed"
+        ):
+            raise corpus.CorpusError("sealed terminal report")
     return pilot._append_numbered(report_dir, "report", payload)
 
 

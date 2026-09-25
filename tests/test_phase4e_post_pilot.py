@@ -1190,7 +1190,7 @@ def test_catalog_migration_marker_blocks_internal_research_root(
     assert pilot.canonical_research_ledger_root() == external
 
 
-def test_v4_packet_cannot_enter_legacy_training_before_phase_4e3b(
+def test_v4_packet_requires_canonical_private_layout_before_training(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plan = corpus.build_post_pilot_recovery_plan()
@@ -1214,9 +1214,9 @@ def test_v4_packet_cannot_enter_legacy_training_before_phase_4e3b(
     embedding_output = tmp_path / "embeddings"
     training_output = tmp_path / "models"
 
-    with pytest.raises(training.TrainingError, match=r"requires Phase 4E\.3B"):
+    with pytest.raises(training.TrainingError, match="private artifact root"):
         training.extract_and_seal_embeddings(packet, snapshot, "cpu", embedding_output)
-    with pytest.raises(training.TrainingError, match=r"requires Phase 4E\.3B"):
+    with pytest.raises(training.TrainingError, match="private artifact root"):
         training.train_and_seal(
             tmp_path / "missing-capsule",
             packet,
@@ -1235,7 +1235,7 @@ def test_v4_packet_cannot_enter_legacy_training_before_phase_4e3b(
         holdout_identities=(),
         identities=(),
     )
-    with pytest.raises(training.TrainingError, match=r"requires Phase 4E\.3B"):
+    with pytest.raises(training.TrainingError, match="holdout release binding"):
         training.verify_holdout_descriptor_bound_embeddings(
             cast(training.EmbeddingCapsule, object()),
             packet,

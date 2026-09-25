@@ -1114,6 +1114,19 @@ def test_verify_accepts_matching_embedding_and_training_lineage(
     pipeline.run_verify(tmp_path / "packet", tmp_path / "embeddings", tmp_path / "training")
 
 
+def test_terminal_report_refuses_append_after_v4_seal(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    sealed = {
+        "schema_version": "phase4e-corpus-terminal-report.v2",
+        "outcome": "sealed",
+    }
+    first = pipeline._write_terminal_outcome_report(report_dir, sealed)
+    assert pipeline._write_terminal_outcome_report(report_dir, sealed) == first
+    with pytest.raises(corpus.CorpusError, match="sealed terminal report"):
+        pipeline._write_terminal_outcome_report(report_dir, {**sealed, "outcome": "minimum_failed"})
+    assert [item.name for item in report_dir.glob("report-*.json")] == ["report-0000.json"]
+
+
 class _Counter:
     def __init__(self, count: int = 1) -> None:
         self._count = count

@@ -2917,6 +2917,48 @@ def validate_accepted_packet(packet: Path) -> None:
         raise CorpusError("accepted corpus minimum")
 
 
+def validate_accepted_packet_holdout_bytes(packet: Path, holdout_raw: bytes) -> None:
+    """Fully validate one caller-owned holdout read without reopening its file.
+
+    The Phase 4E.3B scorer must count a single post-claim holdout open.  This
+    preserves the historical full validator's checks while taking the exact
+    already-opened bytes as its only holdout input.
+    """
+
+    manifest, train_dev, holdout_identities = _validate_packet_pre_holdout(packet)
+    files = cast(dict[str, str], manifest["files"])
+    if _sha(holdout_raw) != files["accepted-holdout.jsonl"]:
+        raise CorpusError("packet digest")
+    try:
+        holdout = [
+            cast(dict[str, Any], json.loads(line)) for line in holdout_raw.splitlines() if line
+        ]
+    except ValueError as error:
+        raise CorpusError("invalid jsonl") from error
+    if any(row.get("split") != "synthetic_holdout" for row in holdout):
+        raise CorpusError("packet holdout split")
+    if _identity_rows(holdout) != holdout_identities:
+        raise CorpusError("holdout identity projection binding")
+    try:
+        plan = json.loads((packet / "plan.json").read_bytes())
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet plan") from error
+    rejected = _read_jsonl(packet / "rejected.jsonl")
+    _validate_packet_resolution([*train_dev, *holdout], rejected, plan)
+    try:
+        ledger = BudgetLedger.from_json(json.loads((packet / "ledger.json").read_bytes()))
+    except (OSError, ValueError) as error:
+        raise CorpusError("packet ledger") from error
+    _validate_provider_lineage(
+        ledger,
+        [*train_dev, *holdout],
+        rejected,
+        {cast(str, slot["task_id"]) for slot in cast(list[Mapping[str, Any]], plan["slots"])},
+    )
+    if _minimums([*train_dev, *holdout]):
+        raise CorpusError("accepted corpus minimum")
+
+
 def _publish_packet_create_if_absent(staged: Path, packet: Path) -> None:
     """Atomically publish a fully validated sibling directory without replacement."""
     if packet.exists():
