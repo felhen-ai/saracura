@@ -37,7 +37,7 @@ This is a research checkpoint, not a calibrated or production model. A passing r
 ## Verified inputs and current state
 
 - The Phase 4E.3A v4 recovery is merged on `main` through PR #22 and its post-merge CI passed all 14 jobs.
-- The latest sealed report records 1,552 accepted, 148 rejected and 0 unresolved rows. The accepted corpus contains 943 PT-BR rows and 609 English rows, placing PT-BR at 60.7603%.
+- The latest sealed report records 1,552 accepted, 148 rejected and 0 unresolved rows. Its `counts.locale` aggregate covers all 1,700 settled rows (1,060 PT-BR and 640 English), while the accepted packet identities separately prove 943 PT-BR rows and 609 English rows, placing PT-BR at 60.7603% of accepted data.
 - The execution record declares sealed packet manifest SHA-256 `3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239` and sealed report SHA-256 `4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c`. These private-state bindings remain preflight hypotheses until Phase D re-verifies the live files without opening holdout content.
 - The authoritative report binds recovery plan `a302b51d9eb9095de77b66f0da9ee0422e290687bd99e9b6abf1a5d2f3b551f1`, supplemental resolution `32a78f39a7f746f7b5d2f9fc2315ef2d9ef216a607c2337856017c3fadd1ab75`, supplemental ledger `b29b53f21ed4e3add28301bc16d15f1c1eb045cfa2c0df6c5019340a6b01a076` and final research inventory `5cd3c66ec9163867e7b5d4a715182496d3df6bde05348906b1c6d13229091a29`.
 - The accepted packet and raw evidence live only in the configured private external Phase 4E state root. No packet, row, ledger, embedding or weight is tracked by Git.
@@ -109,7 +109,7 @@ Run an independent read-only artifact/evidence review against the recorded sourc
 ## Acceptance criteria
 
 1. Packet v4 is enabled only by the central training validator and only with the exact pinned latest matching sealed report. A greater report index, wrong file digest or altered lineage blocks before snapshot/output access. Existing packet v2/v3 behavior remains unchanged.
-1. A valid v4 preflight proves the exact private logical paths, packet/report bindings, accepted counts, 943/609 locale composition, fixed source policy and complete lineage before snapshot access or output creation. Any other packet, embedding or training-capsule name fails closed.
+1. A valid v4 preflight proves the exact private logical paths, packet/report bindings, the report's 1,060/640 all-row locale aggregate, the accepted packet's independent 943/609 locale composition, fixed source policy and complete lineage before snapshot access or output creation. Any other packet, embedding or training-capsule name fails closed.
 1. Before claim, tests prove the code never opens or derives bytes from `accepted-holdout.jsonl`; extraction produces no holdout text, tokens, masks, embeddings or tensors.
 1. Holdout-claim, terminal and lock state remain at their canonical platform path regardless of `SARACURA_PRIVATE_STATE_ROOT`; no production CLI/API argument can redirect them. A second live invocation cannot acquire the packet lock and produces no state change.
 1. The embedding capsule binds the exact sealed-report digest, verified snapshot/tokenizer, packet receipt, ABI, rendering revision, train/dev rows and identity-only holdout descriptor and passes independent verification. Exact complete v4 extraction re-entry reuses it; partial or mismatched destinations fail.

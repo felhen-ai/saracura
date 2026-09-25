@@ -441,7 +441,7 @@ def test_v4_report_binding_requires_latest_sealed_matching_report(
         "accepted_count": 1552,
         "rejected_count": 148,
         "unresolved_count": 0,
-        "counts": {"locale": {"pt-BR": 943, "en": 609}},
+        "counts": {"locale": {"pt-BR": 1060, "en": 640}},
     }
     selected = reports / "report-0000.json"
     selected.write_bytes(training._canonical(payload) + b"\n")
@@ -458,6 +458,17 @@ def test_v4_report_binding_requires_latest_sealed_matching_report(
     )
     with pytest.raises(training.TrainingError, match="packet-v4 sealed report"):
         training._validate_v4_report_binding(packet, reports)
+
+
+def test_v4_accepted_locale_counts_are_independent_from_report_totals() -> None:
+    accepted = [
+        *({"locale": "pt-BR"} for _ in range(943)),
+        *({"locale": "en"} for _ in range(609)),
+    ]
+    training._require_v4_accepted_locale_counts(accepted)
+    accepted[-1] = {"locale": "pt-BR"}
+    with pytest.raises(training.TrainingError, match="packet-v4 accepted locale counts"):
+        training._require_v4_accepted_locale_counts(accepted)
 
 
 def test_v4_manifest_layout_precedes_every_nonmanifest_packet_read(

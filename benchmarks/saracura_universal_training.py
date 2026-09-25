@@ -91,6 +91,8 @@ _PRE_HOLDOUT_GATE_SCHEMA = "phase4e-pre-holdout-gate.v1"
 _HOLDOUT_RELEASE_SCHEMA = "phase4e-holdout-release.v4"
 _HOLDOUT_TERMINAL_SCHEMA = "phase4e-holdout-terminal.v1"
 _V4_SEALED_REPORT_SHA256 = "4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c"
+_V4_REPORT_LOCALE_COUNTS = {"en": 640, "pt-BR": 1060}
+_V4_ACCEPTED_LOCALE_COUNTS = {"en": 609, "pt-BR": 943}
 _V4_PACKET_MANIFEST_SHA256 = "3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239"
 _V4_RECOVERY_PLAN_SHA256 = "a302b51d9eb9095de77b66f0da9ee0422e290687bd99e9b6abf1a5d2f3b551f1"
 _V4_SUPPLEMENTAL_RESOLUTION_SHA256 = (
@@ -501,9 +503,23 @@ def _validate_v4_report_binding(packet_raw: bytes, report_dir: Path | None) -> V
         raise TrainingError("packet-v4 sealed report")
     counts = cast(dict[str, Any], value["counts"])
     locales = counts.get("locale")
-    if not isinstance(locales, dict) or locales != {"en": 609, "pt-BR": 943}:
+    # The terminal report aggregates every settled row (accepted + rejected).
+    # Accepted-only locale composition is proved separately from packet
+    # identities after the holdout-blind packet validation below.
+    if not isinstance(locales, dict) or locales != _V4_REPORT_LOCALE_COUNTS:
         raise TrainingError("packet-v4 sealed report")
     return V4ReportBinding(path=selected, sha256=_sha(raw))
+
+
+def _require_v4_accepted_locale_counts(rows: Sequence[Mapping[str, Any]]) -> None:
+    counts = {locale: 0 for locale in _V4_ACCEPTED_LOCALE_COUNTS}
+    for row in rows:
+        locale = row.get("locale")
+        if locale not in counts:
+            raise TrainingError("packet-v4 accepted locale counts")
+        counts[cast(str, locale)] += 1
+    if counts != _V4_ACCEPTED_LOCALE_COUNTS:
+        raise TrainingError("packet-v4 accepted locale counts")
 
 
 def validate_accepted_packet_binding(
@@ -560,6 +576,8 @@ def validate_accepted_packet_binding(
     identities = tuple(
         sorted((*train_dev_identities, *holdout_identities), key=lambda row: row["task_id"])
     )
+    if paths is not None:
+        _require_v4_accepted_locale_counts(identities)
     files = cast(dict[str, Any], manifest["files"])
     holdout_digest = files.get("accepted-holdout.jsonl")
     if not _is_sha(holdout_digest):
