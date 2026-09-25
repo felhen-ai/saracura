@@ -244,6 +244,69 @@ def test_transport_uncertainty_closes_exact_lineage_and_later_batch_continues(
         )
 
 
+def test_v4_transport_order_is_supplemental_only_and_keeps_post_pilot_contract() -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    base_ids = {slot["task_id"] for slot in plan["slots"][:1600]}
+    supplement_ids = set(plan["supplemental_task_ids"])
+    batches = pipeline._author_batches(plan)
+
+    assert len(batches) == 100
+    assert all(len(batch) == 1 for batch in batches)
+    assert {slot["task_id"] for batch in batches for slot in batch} == supplement_ids
+    assert not {slot["task_id"] for batch in batches for slot in batch} & base_ids
+    assert pipeline._post_pilot_config(plan) is not None
+    assert pipeline._call_task_sets(plan) == {frozenset([task_id]) for task_id in supplement_ids}
+    totals = pipeline._aggregate_preflight(
+        plan,
+        {},
+        corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY),
+    )
+    assert totals["corpus_author"] > 0
+    assert totals["corpus_reviewer"] > 0
+
+
+def test_v4_rejects_missing_base_capsule_and_never_enters_legacy_transport(
+    tmp_path: Path,
+) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    with pytest.raises(corpus.CorpusError):
+        pipeline._load_v4_base_capsule(tmp_path / "missing-capsule", plan)
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_bytes(corpus._canonical(plan) + b"\n")
+    with pytest.raises(corpus.CorpusError, match="transport is unavailable before Phase C"):
+        pipeline.run_corpus(
+            plan_path,
+            tmp_path / "snapshot",
+            tmp_path / "work",
+            tmp_path / "packet",
+            allow_network=True,
+            transport=lambda *_args: (_ for _ in ()).throw(AssertionError("transport attempted")),
+        )
+
+
+def test_ptbr_recovery_boundary_needs_sixty_six_accepted_rows() -> None:
+    """The unchanged locale gate reaches 60% only at the reviewed 66-row boundary."""
+
+    def rows(locale: str, amount: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "locale": locale,
+                "split": "synthetic_train",
+                "domain": "email_triage",
+                "axes": {"explicitness": "explicit", "negation": "absent"},
+                "option_count": 2,
+                "family_id": f"{locale}-{index}",
+                "pair_id": None,
+            }
+            for index in range(amount)
+        ]
+
+    base = [*rows("pt-BR", 848), *rows("en", 609)]
+    assert "locale_minimum" in corpus._minimums([*base, *rows("pt-BR", 65)])
+    assert "locale_minimum" not in corpus._minimums([*base, *rows("pt-BR", 66)])
+
+
 def test_catalog_scans_historical_and_new_ledger_schemas_with_open_reservation(
     tmp_path: Path,
 ) -> None:

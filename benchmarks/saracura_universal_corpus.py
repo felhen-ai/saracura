@@ -136,6 +136,11 @@ CRITERION_ROLE_CODEBOOK = (
 )
 SPLIT_SIZES = {"synthetic_train": 1120, "synthetic_dev": 240, "synthetic_holdout": 240}
 PAIR_COUNTS = {"synthetic_train": 210, "synthetic_dev": 45, "synthetic_holdout": 45}
+_V4_RECOVERY_SEED = "saracura-phase4e-ptbr-recovery-v1"
+_V4_BASE_FINAL_LEDGER_SHA256 = "a257032653e8078ab5d03c62f68a77c943d39912400dd2384fb4c09d1b4429d2"
+_V4_RECOVERY_POLICY_PATH = (
+    Path(__file__).parent / "manifests" / "phase4e-ptbr-transport-recovery.v1.json"
+)
 PRICES = {
     "corpus_author": (Decimal("0.30"), Decimal("2.50")),
     "corpus_reviewer": (Decimal("0.71"), Decimal("0.71")),
@@ -519,6 +524,136 @@ def build_post_pilot_plan() -> dict[str, Any]:
     }
 
 
+def _v4_supplement_slots() -> list[dict[str, Any]]:
+    """Build the immutable, PT-BR-only recovery suffix without touching v3."""
+
+    policy = validate_post_pilot_phase4e_policy()
+    mapping = cast(Mapping[str, list[str]], policy["domain_scenario_map"])
+    allocation = {"synthetic_train": 70, "synthetic_dev": 15, "synthetic_holdout": 15}
+    slots: list[dict[str, Any]] = []
+    serial = 1600
+    for split in SPLITS:
+        cardinalities: list[int] = []
+        for option_count in OPTION_COUNTS:
+            cardinalities.extend([option_count] * (10 if split == "synthetic_train" else 2))
+        if split != "synthetic_train":
+            cardinalities.extend(
+                sorted(OPTION_COUNTS, key=lambda item: _seeded(_V4_RECOVERY_SEED, split, item))[:1]
+            )
+        if len(cardinalities) != allocation[split]:
+            raise AssertionError("v4 supplement allocation")
+        domain_order = sorted(
+            DOMAINS,
+            key=lambda domain: _seeded(_V4_RECOVERY_SEED, "v4-domain", split, domain),
+        )
+        for within_split, option_count in enumerate(cardinalities):
+            task_id = "task-" + _sha(f"{_V4_RECOVERY_SEED}\0task\0{serial}".encode())
+            domain = domain_order[within_split % len(domain_order)]
+            target = _semantic_target(_V4_RECOVERY_SEED, task_id, option_count)
+            target["scenario"] = mapping[domain][
+                _seeded(_V4_RECOVERY_SEED, "scenario", task_id) % len(mapping[domain])
+            ]
+            slots.append(
+                {
+                    "slot": serial,
+                    "task_id": task_id,
+                    "family_id": "family-"
+                    + _sha(f"{_V4_RECOVERY_SEED}\0family\0{serial}".encode()),
+                    "pair_id": None,
+                    "split": split,
+                    "locale": "pt-BR",
+                    "domain": domain,
+                    "axes": {
+                        key: values[
+                            _seeded(_V4_RECOVERY_SEED, split, within_split, key) % len(values)
+                        ]
+                        for key, values in AXES.items()
+                    },
+                    "option_count": option_count,
+                    "gold_position": _seeded(_V4_RECOVERY_SEED, "gold", split, within_split)
+                    % option_count,
+                    "semantic_target": target,
+                }
+            )
+            serial += 1
+    return slots
+
+
+def _validate_v4_recovery_policy() -> None:
+    """Keep the small recovery-plan binding closed even though it carries no data."""
+
+    try:
+        payload = json.loads(_V4_RECOVERY_POLICY_PATH.read_bytes())
+    except (OSError, ValueError) as error:
+        raise CorpusError("post-pilot recovery policy") from error
+    if payload != {
+        "schema_version": 1,
+        "id": "phase4e-ptbr-transport-recovery",
+        "revision": "v1",
+        "language": "pt-BR",
+        "native_language": "pt-BR",
+        "source": "self-authored",
+        "license": "Apache-2.0",
+        "redistribution": "allowed",
+        "contains_external_data": False,
+        "contains_personal_data": False,
+        "purpose": "Immutable Phase 4E PT-BR supplemental corpus recovery plan.",
+        "quality_claims_allowed": False,
+    }:
+        raise CorpusError("post-pilot recovery policy")
+
+
+def _v4_supplement_author_batches(slots: Sequence[Mapping[str, Any]]) -> list[list[str]]:
+    """Round-robin singleton recovery calls across split, cardinality and domain."""
+
+    queues: dict[tuple[str, int, str], list[str]] = defaultdict(list)
+    for slot in slots:
+        queues[
+            (cast(str, slot["split"]), cast(int, slot["option_count"]), cast(str, slot["domain"]))
+        ].append(cast(str, slot["task_id"]))
+    for key, queue in queues.items():
+        queue.sort(key=lambda task_id: _seeded(_V4_RECOVERY_SEED, "v4-batch", *key, task_id))
+    cells = sorted(
+        queues,
+        key=lambda key: _seeded(_V4_RECOVERY_SEED, "v4-cell", *key),
+    )
+    batches: list[list[str]] = []
+    while any(queues.values()):
+        for key in cells:
+            if queues[key]:
+                batches.append([queues[key].pop(0)])
+    return batches
+
+
+def build_post_pilot_recovery_plan() -> dict[str, Any]:
+    """Return the additive v4 recovery plan: immutable v3 base plus 100 PT-BR slots."""
+
+    _validate_v4_recovery_policy()
+    base = build_post_pilot_plan()
+    supplement = _v4_supplement_slots()
+    return {
+        "schema_version": "phase4e-universal-plan.v4",
+        "workflow_revision": "phase4e-saracura-universal-synthetic.v3",
+        "seed": _V4_RECOVERY_SEED,
+        "base_plan_sha256": _sha(_canonical(base)),
+        "base_final_ledger_sha256": _V4_BASE_FINAL_LEDGER_SHA256,
+        "recovery_policy_sha256": hashlib.sha256(_V4_RECOVERY_POLICY_PATH.read_bytes()).hexdigest(),
+        "policy_sha256": base["policy_sha256"],
+        "source_policy_registry_sha256": base["source_policy_registry_sha256"],
+        "author_system_sha256": base["author_system_sha256"],
+        "reviewer_system_sha256": base["reviewer_system_sha256"],
+        "provider_policy_sha256": base["provider_policy_sha256"],
+        "domain_scenario_map_sha256": base["domain_scenario_map_sha256"],
+        "author_request": base["author_request"],
+        "reviewer_request": base["reviewer_request"],
+        "models": base["models"],
+        "base_slots": base["slots"],
+        "supplemental_task_ids": [slot["task_id"] for slot in supplement],
+        "supplemental_author_batch_order": _v4_supplement_author_batches(supplement),
+        "slots": [*base["slots"], *supplement],
+    }
+
+
 def _post_pilot_author_batches(slots: Sequence[Mapping[str, Any]], seed: str) -> list[list[str]]:
     """Round-robin immutable author units across split/locale/cardinality cells."""
 
@@ -653,6 +788,11 @@ def validate_plan(value: Mapping[str, Any]) -> None:
     """Fail closed on any mutation; no provider result can alter this plan."""
     from benchmarks.saracura_universal_pilot import PILOT_PLAN_SCHEMA, PILOT_SEED
 
+    if value.get("schema_version") == "phase4e-universal-plan.v4":
+        if _canonical(value) != _canonical(build_post_pilot_recovery_plan()):
+            raise CorpusError("immutable post-pilot recovery plan mismatch")
+        _validate_v4_plan_structure(value)
+        return
     if value.get("schema_version") == "phase4e-universal-plan.v3":
         if _canonical(value) != _canonical(build_post_pilot_plan()):
             raise CorpusError("immutable post-pilot plan mismatch")
@@ -663,6 +803,61 @@ def validate_plan(value: Mapping[str, Any]) -> None:
     if _canonical(value) != _canonical(build_plan()):
         raise CorpusError("immutable plan mismatch")
     _validate_plan_structure(value)
+
+
+def _validate_v4_plan_structure(value: Mapping[str, Any]) -> None:
+    slots = value.get("slots")
+    base_slots = value.get("base_slots")
+    supplement_ids = value.get("supplemental_task_ids")
+    batches = value.get("supplemental_author_batch_order")
+    if not isinstance(slots, list) or not isinstance(base_slots, list) or len(slots) != 1700:
+        raise CorpusError("v4 plan slot count")
+    base = build_post_pilot_plan()
+    if _canonical(base_slots) != _canonical(base["slots"]) or _canonical(
+        slots[:1600]
+    ) != _canonical(base["slots"]):
+        raise CorpusError("v4 base plan preservation")
+    _validate_plan_structure(base)
+    supplement = slots[1600:]
+    base_ids = {cast(str, slot["task_id"]) for slot in base["slots"]}
+    task_ids = [slot.get("task_id") for slot in slots]
+    base_families = {cast(str, slot["family_id"]) for slot in base["slots"]}
+    supplement_families = [slot.get("family_id") for slot in supplement]
+    if (
+        len(set(task_ids)) != 1700
+        or any(not isinstance(item, str) for item in task_ids)
+        or len(set(supplement_families)) != len(supplement_families)
+        or any(not isinstance(item, str) or item in base_families for item in supplement_families)
+        or any(cast(str, slot["task_id"]) in base_ids for slot in supplement)
+        or any(
+            slot.get("pair_id") is not None or slot.get("locale") != "pt-BR" for slot in supplement
+        )
+    ):
+        raise CorpusError("v4 supplemental identity")
+    counts = Counter(cast(str, slot["split"]) for slot in supplement)
+    if counts != {"synthetic_train": 70, "synthetic_dev": 15, "synthetic_holdout": 15}:
+        raise CorpusError("v4 supplemental split allocation")
+    for split in SPLITS:
+        rows = [slot for slot in supplement if slot["split"] == split]
+        if {slot["domain"] for slot in rows} != set(DOMAINS):
+            raise CorpusError("v4 supplemental domain allocation")
+        cardinalities = Counter(cast(int, slot["option_count"]) for slot in rows)
+        expected = {count: 10 for count in OPTION_COUNTS} if split == "synthetic_train" else None
+        if expected is not None and cardinalities != expected:
+            raise CorpusError("v4 supplemental cardinality allocation")
+        if expected is None and (
+            set(cardinalities) != set(OPTION_COUNTS)
+            or max(cardinalities.values()) - min(cardinalities.values()) > 1
+        ):
+            raise CorpusError("v4 supplemental cardinality allocation")
+    if (
+        not isinstance(supplement_ids, list)
+        or supplement_ids != [slot["task_id"] for slot in supplement]
+        or not isinstance(batches, list)
+        or set(task_id for batch in batches for task_id in batch) != set(supplement_ids)
+        or any(not isinstance(batch, list) or len(batch) != 1 for batch in batches)
+    ):
+        raise CorpusError("v4 supplemental author batch order")
 
 
 def _validate_plan_structure(value: Mapping[str, Any]) -> None:
@@ -2465,7 +2660,7 @@ def _validate_packet_resolution(
     _validate_accepted_packet_rows(
         accepted,
         slots,
-        v3=plan.get("schema_version") == "phase4e-universal-plan.v3",
+        v3=plan.get("schema_version") in {"phase4e-universal-plan.v3", "phase4e-universal-plan.v4"},
     )
     for rejected_row in rejected:
         _validate_rejected_row(rejected_row, slots)
@@ -2592,7 +2787,11 @@ def _packet_manifest(packet: Path) -> dict[str, Any]:
         not isinstance(manifest, dict)
         or set(manifest) != {"schema_version", "files", "sealed"}
         or manifest["schema_version"]
-        not in {"phase4e-accepted-packet.v2", "phase4e-accepted-packet.v3"}
+        not in {
+            "phase4e-accepted-packet.v2",
+            "phase4e-accepted-packet.v3",
+            "phase4e-accepted-packet.v4",
+        }
         or manifest["sealed"] is not True
         or not isinstance(manifest["files"], dict)
         or set(manifest["files"]) != expected - {"packet.json"}
@@ -2613,7 +2812,10 @@ def _validate_packet_pre_holdout(
     digest in ``packet.json`` is only precommitted metadata at this stage.
     """
     manifest = _packet_manifest(packet)
-    v3 = manifest["schema_version"] == "phase4e-accepted-packet.v3"
+    v3 = manifest["schema_version"] in {
+        "phase4e-accepted-packet.v3",
+        "phase4e-accepted-packet.v4",
+    }
     files = cast(dict[str, str], manifest["files"])
     for name in _PACKET_NON_HOLDOUT_FILES:
         if _sha((packet / name).read_bytes()) != files[name]:
@@ -2776,9 +2978,13 @@ def seal_packet(
             os.chmod(staged / name, 0o600)
         manifest = {
             "schema_version": (
-                "phase4e-accepted-packet.v3"
-                if plan.get("schema_version") == "phase4e-universal-plan.v3"
-                else "phase4e-accepted-packet.v2"
+                "phase4e-accepted-packet.v4"
+                if plan.get("schema_version") == "phase4e-universal-plan.v4"
+                else (
+                    "phase4e-accepted-packet.v3"
+                    if plan.get("schema_version") == "phase4e-universal-plan.v3"
+                    else "phase4e-accepted-packet.v2"
+                )
             ),
             "sealed": True,
             "files": {name: _sha(body) for name, body in files.items()},
@@ -2794,6 +3000,91 @@ def seal_packet(
             staged.rmdir()
         raise
     return packet / "packet.json"
+
+
+def compose_post_pilot_recovery_ledger(
+    base_ledger: Mapping[str, Any],
+    supplemental_ledger: Mapping[str, Any],
+    base_task_ids: set[str],
+    supplemental_task_ids: set[str],
+) -> dict[str, Any]:
+    """Compose two validated v3 ledgers only for the sealed v4 packet.
+
+    This is intentionally an in-memory value: callers pass it directly to
+    ``seal_packet`` and must never publish it beneath a resumable ledger root.
+    """
+
+    base = BudgetLedger.from_json(base_ledger)
+    supplemental = BudgetLedger.from_json(supplemental_ledger)
+    if (
+        base.policy.schema_version != POST_PILOT_CORPUS_LEDGER_POLICY.schema_version
+        or supplemental.policy.schema_version != base.policy.schema_version
+        or base_task_ids & supplemental_task_ids
+    ):
+        raise CorpusError("post-pilot recovery ledger binding")
+    base.require_complete_provider_journal()
+    supplemental.require_complete_provider_journal()
+    base_reservations = {entry["reservation_id"] for entry in base.entries}
+    supplement_reservations = {entry["reservation_id"] for entry in supplemental.entries}
+    base_journals = {entry["reservation_id"] for entry in base.provider_journal}
+    supplement_journals = {entry["reservation_id"] for entry in supplemental.provider_journal}
+    if base_reservations & supplement_reservations or base_journals & supplement_journals:
+        raise CorpusError("post-pilot recovery ledger reservation overlap")
+
+    def journal_task_ids(ledger: BudgetLedger) -> set[str]:
+        return {
+            task_id
+            for journal in ledger.provider_journal
+            for task_id in cast(list[str], journal["task_ids"])
+        }
+
+    if (
+        journal_task_ids(base) != base_task_ids
+        or journal_task_ids(supplemental) != supplemental_task_ids
+    ):
+        raise CorpusError("post-pilot recovery ledger task coverage")
+    combined = {
+        "schema_version": base.policy.schema_version,
+        "final": True,
+        "entries": [*base.entries, *supplemental.entries],
+        "provider_journal": [*base.provider_journal, *supplemental.provider_journal],
+        "stop_reason": None,
+    }
+    # Re-parse the combined payload so duplicate request/reservation and journal
+    # invariants remain enforced after concatenation.
+    BudgetLedger.from_json(combined)
+    return combined
+
+
+def seal_post_pilot_recovery_packet(
+    packet: Path,
+    plan: Mapping[str, Any],
+    base_accepted: Sequence[Mapping[str, Any]],
+    base_rejected: Sequence[Mapping[str, Any]],
+    base_ledger: Mapping[str, Any],
+    supplemental_accepted: Sequence[Mapping[str, Any]],
+    supplemental_rejected: Sequence[Mapping[str, Any]],
+    supplemental_ledger: Mapping[str, Any],
+) -> Path:
+    """Seal a v4 packet from disjoint verified base and supplemental evidence."""
+
+    validate_plan(plan)
+    if plan.get("schema_version") != "phase4e-universal-plan.v4":
+        raise CorpusError("post-pilot recovery plan")
+    base_slots = cast(list[Mapping[str, Any]], plan["base_slots"])
+    supplement_slots = cast(list[Mapping[str, Any]], plan["slots"])[1600:]
+    base_ids = {cast(str, slot["task_id"]) for slot in base_slots}
+    supplement_ids = {cast(str, slot["task_id"]) for slot in supplement_slots}
+    combined_ledger = compose_post_pilot_recovery_ledger(
+        base_ledger, supplemental_ledger, base_ids, supplement_ids
+    )
+    return seal_packet(
+        packet,
+        plan,
+        [*base_accepted, *supplemental_accepted],
+        [*base_rejected, *supplemental_rejected],
+        combined_ledger,
+    )
 
 
 def _jsonl(rows: Sequence[Mapping[str, Any]]) -> bytes:

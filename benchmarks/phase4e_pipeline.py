@@ -192,6 +192,38 @@ def _preflight_request(
 
 def _author_batches(plan: Mapping[str, Any]) -> list[list[Mapping[str, Any]]]:
     slots = cast(list[Mapping[str, Any]], plan["slots"])
+    if plan.get("schema_version") == "phase4e-universal-plan.v4":
+        order = plan.get("supplemental_author_batch_order")
+        supplemental_ids = plan.get("supplemental_task_ids")
+        base_slots = plan.get("base_slots")
+        if (
+            not isinstance(order, list)
+            or not isinstance(supplemental_ids, list)
+            or not isinstance(base_slots, list)
+        ):
+            raise corpus.CorpusError("post-pilot recovery author batch order")
+        by_id = {cast(str, slot["task_id"]): slot for slot in slots}
+        base_ids = {cast(str, slot["task_id"]) for slot in base_slots}
+        supplemental_batches: list[list[Mapping[str, Any]]] = []
+        for ids in order:
+            if not isinstance(ids, list) or len(ids) != 1:
+                raise corpus.CorpusError("post-pilot recovery author batch order")
+            batch = [
+                by_id[task_id] for task_id in ids if isinstance(task_id, str) and task_id in by_id
+            ]
+            if len(batch) != 1 or cast(str, batch[0]["task_id"]) in base_ids:
+                raise corpus.CorpusError("post-pilot recovery author batch order")
+            supplemental_batches.append(batch)
+        ordered_ids = [
+            cast(str, slot["task_id"]) for batch in supplemental_batches for slot in batch
+        ]
+        if (
+            len(ordered_ids) != len(supplemental_ids)
+            or set(ordered_ids) != set(supplemental_ids)
+            or set(ordered_ids) & base_ids
+        ):
+            raise corpus.CorpusError("post-pilot recovery author batch coverage")
+        return supplemental_batches
     if plan.get("schema_version") == "phase4e-universal-plan.v3":
         order = plan.get("author_batch_order")
         by_id = {cast(str, slot["task_id"]): slot for slot in slots}
@@ -234,7 +266,10 @@ def _author_max_output_tokens(slots: Sequence[Mapping[str, Any]]) -> int:
 
 
 def _post_pilot_config(plan: Mapping[str, Any]) -> dict[str, Any] | None:
-    if plan.get("schema_version") != "phase4e-universal-plan.v3":
+    if plan.get("schema_version") not in {
+        "phase4e-universal-plan.v3",
+        "phase4e-universal-plan.v4",
+    }:
         return None
     policy = validate_post_pilot_phase4e_policy()
     provider = cast(dict[str, Any], policy["provider"])
@@ -250,6 +285,58 @@ def _post_pilot_config(plan: Mapping[str, Any]) -> dict[str, Any] | None:
     if any(plan.get(key) != value for key, value in expected.items()):
         raise corpus.CorpusError("post-pilot plan request binding")
     return provider
+
+
+def _load_v4_base_capsule(
+    capsule: Path, plan: Mapping[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], corpus.BudgetLedger]:
+    """Reconstruct immutable v3 rows from the compact capsule, never raw work evidence."""
+
+    if plan.get("schema_version") != "phase4e-universal-plan.v4":
+        raise corpus.CorpusError("post-pilot recovery plan")
+    corpus.validate_plan(plan)
+    base = corpus.build_post_pilot_plan()
+    if (
+        plan.get("base_plan_sha256") != corpus._sha(corpus._canonical(base))
+        or plan.get("base_final_ledger_sha256") is None
+    ):
+        raise corpus.CorpusError("post-pilot recovery base binding")
+    pilot.validate_research_capsule(capsule)
+    manifest = _read_json(capsule / "research-capsule.json")
+    expected_ledger_sha = plan["base_final_ledger_sha256"]
+    if (
+        manifest.get("final_ledger_sha256") != expected_ledger_sha
+        or hashlib.sha256((capsule / "ledger" / "ledger-0000.json").read_bytes()).hexdigest()
+        != expected_ledger_sha
+    ):
+        raise corpus.CorpusError("post-pilot recovery base ledger")
+    resolved = _load_resolved(capsule, base)
+    all_base_ids = {
+        cast(str, slot["task_id"]) for slot in cast(list[Mapping[str, Any]], base["slots"])
+    }
+    if set(resolved) != all_base_ids:
+        raise corpus.CorpusError("post-pilot recovery base resolution")
+    ledger = _load_ledger_or_fail_closed(capsule)
+    if ledger.policy.schema_version != corpus.POST_PILOT_CORPUS_LEDGER_POLICY.schema_version:
+        raise corpus.CorpusError("post-pilot recovery base ledger")
+    _require_settled_task_resolution(ledger, resolved)
+    diagnostics, complete = _load_post_pilot_diagnostics(capsule, base, set(resolved))
+    if not complete:
+        raise corpus.CorpusError("post-pilot recovery base diagnostics")
+    _require_post_pilot_uncertain_resolutions(
+        ledger, resolved, diagnostics["transport_uncertain_calls"]
+    )
+    accepted = [
+        cast(dict[str, Any], item["row"])
+        for item in resolved.values()
+        if item["status"] == "accepted"
+    ]
+    rejected = [
+        cast(dict[str, Any], item["row"])
+        for item in resolved.values()
+        if item["status"] == "rejected"
+    ]
+    return accepted, rejected, ledger
 
 
 def _boundary_reviewer_row(slot: Mapping[str, Any]) -> corpus.ValidatedAuthorRow:
@@ -1589,6 +1676,11 @@ def run_corpus(
         # legacy plan; a v3 plan is selected only after its bytes are read.
         require_phase4e_authorization("synthetic_generation")
     plan = _read_plan(plan_path)
+    if plan.get("schema_version") == "phase4e-universal-plan.v4":
+        # Phase B deliberately seals plan/evidence composition only.  The
+        # supplemental transport runner (including its circuit breaker) is a
+        # separate Phase C contract, so v4 can never fall into the legacy lane.
+        raise corpus.CorpusError("post-pilot recovery transport is unavailable before Phase C")
     post_pilot = plan.get("schema_version") == "phase4e-universal-plan.v3"
     if post_pilot:
         if report_dir is None or artifact_root is None:

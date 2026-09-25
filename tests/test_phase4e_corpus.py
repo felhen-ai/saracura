@@ -250,6 +250,95 @@ def test_post_pilot_plan_and_observation_mode_are_additive() -> None:
     assert rejected == []
 
 
+def test_post_pilot_recovery_v4_preserves_v3_and_seals_a_1700_identity_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v4 is additive: its prefix is frozen v3 and its packet has its own schema."""
+
+    v2_before = corpus._canonical(corpus.build_plan())
+    base = corpus.build_post_pilot_plan()
+    plan = corpus.build_post_pilot_recovery_plan()
+    corpus.validate_plan(plan)
+    supplement = plan["slots"][1600:]
+
+    assert corpus._canonical(corpus.build_plan()) == v2_before
+    assert corpus._canonical(plan["slots"][:1600]) == corpus._canonical(base["slots"])
+    assert len(supplement) == 100
+    assert {slot["locale"] for slot in supplement} == {"pt-BR"}
+    assert all(slot["pair_id"] is None for slot in supplement)
+    assert {
+        split: sum(slot["split"] == split for slot in supplement) for split in corpus.SPLITS
+    } == {"synthetic_train": 70, "synthetic_dev": 15, "synthetic_holdout": 15}
+    assert all(
+        {slot["domain"] for slot in supplement if slot["split"] == split} == set(corpus.DOMAINS)
+        for split in corpus.SPLITS
+    )
+    assert {
+        count: sum(
+            slot["split"] == "synthetic_train" and slot["option_count"] == count
+            for slot in supplement
+        )
+        for count in corpus.OPTION_COUNTS
+    } == {count: 10 for count in corpus.OPTION_COUNTS}
+    for split in ("synthetic_dev", "synthetic_holdout"):
+        cardinalities = [
+            sum(slot["split"] == split and slot["option_count"] == count for slot in supplement)
+            for count in corpus.OPTION_COUNTS
+        ]
+        assert max(cardinalities) - min(cardinalities) <= 1
+
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
+    rejected = [
+        {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"}
+        for slot in plan["slots"]
+    ]
+    packet = tmp_path / "packet-v4"
+    corpus.seal_packet(
+        packet,
+        plan,
+        [],
+        rejected,
+        corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY).as_json(final=True),
+    )
+    assert json.loads((packet / "packet.json").read_bytes())["schema_version"] == (
+        "phase4e-accepted-packet.v4"
+    )
+    corpus.validate_accepted_packet_pre_holdout(packet)
+
+
+def test_post_pilot_recovery_ledger_requires_disjoint_task_and_reservation_sets() -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    base_task = plan["slots"][0]["task_id"]
+    supplemental_task = plan["slots"][1600]["task_id"]
+
+    def ledger_for(task_id: str, marker: str) -> corpus.BudgetLedger:
+        ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+        reservation = "reservation-" + corpus._sha(marker.encode())
+        ledger.reserve_request("corpus_author", reservation, Decimal("0"))
+        ledger.settle_request(reservation, f"request-{marker}", Decimal("0"), "a" * 64)
+        ledger.record_provider_journal(
+            stage="corpus_author", reservation_id=reservation, task_ids=[task_id]
+        )
+        return ledger
+
+    base = ledger_for(base_task, "base")
+    supplement = ledger_for(supplemental_task, "supplement")
+    combined = corpus.compose_post_pilot_recovery_ledger(
+        base.as_json(final=True),
+        supplement.as_json(final=True),
+        {base_task},
+        {supplemental_task},
+    )
+    assert [entry["reservation_id"] for entry in combined["entries"]] == [
+        base.entries[0]["reservation_id"],
+        supplement.entries[0]["reservation_id"],
+    ]
+    with pytest.raises(CorpusError, match="reservation overlap"):
+        corpus.compose_post_pilot_recovery_ledger(
+            base.as_json(final=True), base.as_json(final=True), {base_task}, {supplemental_task}
+        )
+
+
 def test_post_pilot_policy_rejects_a_valid_but_unreviewed_domain_map(tmp_path: Path) -> None:
     payload = json.loads(POST_PILOT_POLICY_PATH.read_text(encoding="utf-8"))
     domain = next(iter(payload["domain_scenario_map"]))
