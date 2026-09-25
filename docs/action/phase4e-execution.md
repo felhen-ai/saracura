@@ -13,12 +13,15 @@ lastReviewedAt: 2026-09-25
 sourceRefs:
   - docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
   - docs/action/specs/phase4e3a-v4-ptbr-transport-recovery.md
+  - docs/action/specs/phase4e3b-first-owned-checkpoint.md
+  - benchmarks/manifests/phase4e-saracura-universal-training-authorization.v1.json
   - benchmarks/manifests/training-data-source-policies.v1.json
   - benchmarks/manifests/training-data-source-policies.v2.json
   - benchmarks/manifests/phase4e-spend-baseline.v1.json
 related:
   - docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
   - docs/action/specs/phase4e3a-v4-ptbr-transport-recovery.md
+  - docs/action/specs/phase4e3b-first-owned-checkpoint.md
   - benchmarks/manifests/phase4e-spend-baseline.v1.json
 supersedes: []
 supersededBy: []
@@ -31,7 +34,9 @@ sensitivity: public
 
 Phase 4E.2 is complete with a `PASS`. V12 resolved all 140 precommitted tasks, accepted 134, met every global, locale and option-count gate, and recorded no operational or privacy failure. This result authorizes the Phase 4E.3 training/checkpoint increment; it does not by itself register the planned runtime backend or authorize automation.
 
-The first Phase 4E.3A corpus execution completed all 1,600 planned identities but ended `NO-GO` before packet sealing because its 848 accepted PT-BR rows represented only 58.2% of the accepted corpus. The separately reviewed v4 recovery then resolved 100 new disjoint PT-BR identities, accepted 95, rejected 5 and sealed a combined packet with 1,552 accepted rows, including 943 PT-BR rows (60.7603%). No identity attached to an uncertain or failed call was replayed. This closes Phase 4E.3A and authorizes only a separately reviewed Phase 4E.3B checkpoint increment; training, calibration, holdout evaluation and runtime registration have not started.
+The first Phase 4E.3A corpus execution completed all 1,600 planned identities but ended `NO-GO` before packet sealing because its 848 accepted PT-BR rows represented only 58.2% of the accepted corpus. The separately reviewed v4 recovery then resolved 100 new disjoint PT-BR identities, accepted 95, rejected 5 and sealed a combined packet with 1,552 accepted rows, including 943 PT-BR rows (60.7603%). No identity attached to an uncertain or failed call was replayed.
+
+Phase 4E.3B is complete with a sealed `passed` outcome. The deterministic CPU-only run produced the first Saracura-owned universal ranker checkpoint, passed both precommitted development-improvement gates and then passed every gate on the single one-time synthetic holdout evaluation. This authorizes only a separately reviewed Phase 4E.3C runtime-registration increment. The checkpoint remains research-only: it is not registered in the runtime, calibrated for confidence thresholds, published or authorized for automation.
 
 ## Cumulative spend through 2026-09-25
 
@@ -39,7 +44,7 @@ The local research history contains 46 `corpus-work*` directories and 2,117 char
 
 The former USD 17.00 cumulative authorization and per-run caps are historical v1 controls only. The operator removed the financial ceiling for subsequent research execution. V2 therefore records actual provider cost and conservative debit without using either value to authorize, block or stop work. The operator is informed whenever run-local provider-reported spend crosses another USD 10 and at run completion.
 
-The v1 pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The v2 pilot reported USD 0.10454764 and conservatively debited USD 0.96313398. Post-v2 cumulative totals are USD 0.92030516 provider-reported and USD 6.11642935 conservative. Corpus-v3 and its v4 recovery reported USD 6.57710960 and USD 0.4477648 respectively, for USD 7.02487440 in actual corpus-generation cost. No run crossed the USD 10 reporting milestone, and no training spend has been incurred.
+The v1 pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The v2 pilot reported USD 0.10454764 and conservatively debited USD 0.96313398. Post-v2 cumulative totals are USD 0.92030516 provider-reported and USD 6.11642935 conservative. Corpus-v3 and its v4 recovery reported USD 6.57710960 and USD 0.4477648 respectively, for USD 7.02487440 in actual corpus-generation cost. No run crossed the USD 10 reporting milestone. Phase 4E.3B ran locally and offline and added USD 0 in API spend.
 
 ## Registry digests
 
@@ -323,3 +328,41 @@ The packet passed the sealing gates without opening holdout content. Its public-
 | sealed packet manifest | `3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239` |
 
 Phase 4E.3A is complete. The sealed packet is eligible as input to a separately reviewed Phase 4E.3B training and checkpoint increment. It does not itself prove checkpoint quality, calibration, latency or runtime fitness, and it does not authorize automation or runtime registration.
+
+## Phase 4E.3B first owned checkpoint outcome
+
+The reviewed Phase 4E.3B implementation and exact-packet training grant were merged through PRs #23, #24 and #25. All 14 required checks passed both on PR #25 and again on its merge commit. The live run used the exact clean `origin/main` source commit `cbff1989c2c3f802f4b4186c65f339466310296c`, ran locally on CPU with network access disabled and added USD 0 in API spend.
+
+The run consumed the create-only grant once, trained the fixed projection-head architecture twice and produced byte-identical checkpoint output. Epoch 9 won the precommitted development selection rule. Its development results were:
+
+- accuracy `0.9585062241` and stratified macro accuracy `0.9551579373`;
+- untrained cosine baseline macro accuracy `0.8309095666`;
+- random-projection baseline macro accuracy `0.2017708482`;
+- both fixed `baseline + 0.03` improvement gates passed before the holdout claim.
+
+Only after those gates were frozen did the run create the one-time claim and open the synthetic holdout. The holdout was evaluated once, with the required deterministic repeat over the same in-memory tensors, and every precommitted gate passed:
+
+- overall accuracy `0.9677419355`;
+- stratified macro accuracy `0.9681701580`;
+- PT-BR accuracy `0.9675324675` and English accuracy `0.9680851064`;
+- option-count accuracy: `0.9729729730` for 2, `0.9729729730` for 3, `0.9444444444` for 4, `1.0` for 5, `0.9705882353` for 6, `0.9393939394` for 7 and `0.9714285714` for 8;
+- zero safety, shape, non-finite, overlap or deterministic-repeat failure.
+
+The public-safe evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| sealed packet manifest | `3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239` |
+| sealed Phase 4E.3A report | `4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c` |
+| embedding-capsule descriptor | `85cb3786a0a0ad447351a8f6b65f81d5e5f70ebd36a339cdc42200b0cf43a94c` |
+| training grant | `bf9e8654e6337e4f052f40a42ab5d93bac8df7e8c5aaca06262f05fd85ae1e14` |
+| grant-consumption record | `5d964e72c50a0e7c56c086bbdacdd0eafb0503dbfe20ec655853a4cb29ca021e` |
+| checkpoint | `6914195d5526fb7b629eedaac7f33ae04f77eccd8448c75fed9104ccc57b728c` |
+| pre-holdout gate descriptor | `c2300373a9f13603841ac5031d216a2cc0862808c2090992807df3862e2e4918` |
+| training-capsule descriptor | `44693fc40beb64c3c556b8f411c8f4f5e04088388ab24660b47340a09af03801` |
+| training-capsule manifest | `f1d72c34cc535ddefbf7e24cf45d1be6e0aee40ba881228b4edd092d78640d5e` |
+| terminal record | `6e38d4a6a520cc94334fb63eabfed06995edd93a222d4ee7e1b097a85713068f` |
+
+A separate read-only verifier returned success for the exact file set, private file modes, historical source ledger, capsule bindings, claim and sealed `passed` terminal. The capsule contains the Saracura projection checkpoint and public-safe evidence, not the frozen encoder weights, raw rows, holdout identities, provider payloads, local paths, optimizer state or secrets.
+
+Phase 4E.3B is therefore complete. This is evidence of checkpoint quality on the precommitted synthetic corpus and holdout, not a calibrated confidence claim or a production benchmark. Phase 4E.3C must separately review runtime artifact discovery, CPU/MPS inference parity, latency, packaging and research-only response semantics before the backend can be registered. Calibration, publication and automation remain out of scope and unauthorized.
