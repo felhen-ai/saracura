@@ -29,6 +29,7 @@ from benchmarks.saracura_universal_policy import (
     validate_phase4e_policy,
     validate_post_pilot_phase4e_policy,
 )
+from benchmarks.saracura_universal_training import validate_v4_training_grant_file
 from benchmarks.synthetic_research import validate_synthetic_policy
 from benchmarks.universal_bakeoff import load_candidate_registry, load_plan
 from benchmarks.universal_local.plan import load_plan as load_universal_local_plan
@@ -151,6 +152,9 @@ def validate_routed_manifest(path: Path) -> None:
         if raw != (Path(__file__).parent / "manifests/phase4c3c-resume-plan.v1.json").read_bytes():
             raise ValueError(f"{path}: recovery plan must be the canonical file")
         validate_resume_plan()
+        return
+    if schema_version == "phase4e-saracura-universal-training-authorization.v1":
+        validate_v4_training_grant_file(path)
         return
     if schema_version == 1:
         validate_manifest(path)

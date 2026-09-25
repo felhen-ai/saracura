@@ -1,0 +1,24 @@
+{
+  "schema_version": "phase4e-saracura-universal-training-authorization.v1",
+  "id": "phase4e-saracura-universal-training-authorization",
+  "task_id": "saracura-phase4e3b-first-checkpoint-v1",
+  "spec_path": "docs/action/specs/phase4e3b-first-owned-checkpoint.md",
+  "spec_sha256": "b7e92d0ccca8d59e57e42f63f3bd69a8ccab78155171362df929334814ce9599",
+  "workflow_revision": "phase4e-saracura-universal-synthetic.v2",
+  "packet_manifest_sha256": "3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239",
+  "sealed_report_sha256": "4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c",
+  "policy_v2_sha256": "c2d2ea75e61e04050d212771d1fa92595ec2c921d9b7e400b82b58103c4f3467",
+  "registry_v3_sha256": "93036f786a13c740af860ebfdd4c9c0240b6eeeb89d44f3409d562b52d05a697",
+  "authorizations": {
+    "synthetic_generation_authorized": false,
+    "synthetic_research_training_authorized": true,
+    "canonical_training_authorized": false,
+    "blind_test_authorized": false,
+    "real_checkpoint_present": false,
+    "runtime_registration_authorized": false,
+    "calibration_authorized": false,
+    "publication_authorized": false,
+    "quality_claims_allowed": false,
+    "automation_authorized": false
+  }
+}
