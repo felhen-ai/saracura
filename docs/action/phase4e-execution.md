@@ -29,6 +29,8 @@ sensitivity: public
 
 Phase 4E.2 is complete with a `PASS`. V12 resolved all 140 precommitted tasks, accepted 134, met every global, locale and option-count gate, and recorded no operational or privacy failure. This result authorizes the Phase 4E.3 training/checkpoint increment; it does not by itself register the planned runtime backend or authorize automation.
 
+The first Phase 4E.3A corpus execution completed all 1,600 planned identities but ended `NO-GO` before packet sealing. It accepted 1,457 rows and passed every split, domain, cardinality, family and complete-pair gate, but the 848 accepted PT-BR rows represented only 58.2% of the accepted corpus, below the fixed 60% locale minimum. No training packet, checkpoint or holdout report was created, and holdout content was not opened. Phase 4E.3 remains blocked pending a separately reviewed, disjoint PT-BR recovery increment.
+
 ## Cumulative spend through 2026-09-24
 
 The local research history contains 46 `corpus-work*` directories and 2,117 charged ledger entries: 2,099 settled and 18 open reservations. Provider-reported cost is USD 0.81263107. Conservative debit is USD 5.12153043, which already includes USD 0.01971612 from the 18 open reservations. These figures are fixed in `benchmarks/manifests/phase4e-spend-baseline.v1.json`.
@@ -274,3 +276,22 @@ The create-only evidence bindings are:
 | sealed ledger file | `db210edc536a3bfdbb891d09747f2bad48ad51ef169cc2e3f75f4905e0b671d9` |
 
 The durable work evidence is sealed create-only at `~/Library/Application Support/saracura/phase4e/research-ledgers/pilot-work-v12`. Phase 4E.3 may now build the owned training packet and checkpoint under a separately reviewed spec. Runtime registration remains fail-closed until that checkpoint passes its holdout, calibration, latency and artifact-integrity gates.
+
+## Phase 4E.3A corpus-v3 outcome
+
+The reviewed corpus-v3 plan resolved all 1,600 precommitted identities and accepted 1,457. The accepted rows otherwise met the packet topology: 996 train, 227 dev and 234 sealed holdout rows; all 42 split/locale/cardinality cells passed; all 12 domains were represented globally and in every split; the split family counts were 801 train, 185 dev and 189 holdout; and 282 complete PT-BR/English pairs exceeded the minimum of 120.
+
+The packet still failed its fixed locale gate. It accepted 848 PT-BR and 609 English rows, leaving PT-BR at 58.2% instead of the required 60%. The rejection distribution was:
+
+- PT-BR: 80 `author_transport_uncertain` and 32 `review_disagreement`;
+- English: 2 `author_transport_uncertain`, 16 `review_disagreement`, 12 `semantic_duplicate` and 1 `near_duplicate`.
+
+This concentration supports an operational transport diagnosis, not a general corpus-quality failure. The ledger contains 2,737 settled calls and 81 uncertain calls, all in the author stage. One uncertain call resulted from the interrupted foreground process and was recovered without replay through the deterministic reservation match. Two later provider-transport outage bursts produced the other 80 uncertain author calls. Every linked identity was conservatively rejected; no uncertain call was retried or reassigned.
+
+The run reported USD 6.57710960 in provider cost and did not cross the USD 10 reporting milestone. The immutable plan SHA-256 is `13ca8304cbf18c8bd5871b135b5c609740c952805d656003959155f13d7a3adc`. The final ledger snapshot is `ledger-8454.json`, SHA-256 `a257032653e8078ab5d03c62f68a77c943d39912400dd2384fb4c09d1b4429d2`. The implementation revision used for the run is `edc5af4`.
+
+Packet sealing failed closed on `locale_minimum`. Therefore no accepted packet and no corpus report were created at their planned paths, and holdout content remained unopened. Training, calibration, checkpoint creation and runtime registration were not attempted.
+
+The 11,055-file work tree occupies 8.9 GB and remains intact at `.artifacts/phase4e/corpus-work-v47` on the external development SSD. A create-only copy to the previous internal research root was byte/count verified, but filled the internal volume and was removed after verification; the source evidence was preserved. The existing catalog validator also loaded every cumulative ledger snapshot simultaneously and consumed approximately 15 GB of memory. Its chain validation now streams one transition at a time, but corpus-v3 is intentionally not cataloged until the recovery increment establishes a durable external or configurable private-artifact root and a compact retention policy.
+
+The recovery increment must keep corpus-v3 immutable, never replay the 81 uncertain calls, generate only new disjoint PT-BR identities, stop cleanly behind a consecutive-uncertainty circuit breaker, preserve balanced ordering, emit a failure report even when packet sealing fails, and combine only accepted v3 plus accepted supplemental rows into a new create-only packet. The estimated deficit is 66 net accepted PT-BR rows; the recovery plan should overprovision approximately 100 new PT-BR tasks while preserving all existing split, cardinality, domain, privacy and blindness gates.

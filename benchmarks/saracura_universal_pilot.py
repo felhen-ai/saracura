@@ -881,17 +881,19 @@ def _validate_ledger_chain(directory: Path) -> corpus.BudgetLedger:
     snapshots = _numbered_files(directory, "ledger")
     if not snapshots:
         raise corpus.CorpusError("research ledger")
-    ledgers: list[corpus.BudgetLedger] = []
     try:
-        for path in snapshots:
-            ledgers.append(corpus.BudgetLedger.from_json(json.loads(path.read_bytes())))
+        previous = corpus.BudgetLedger.from_json(json.loads(snapshots[0].read_bytes()))
     except (OSError, ValueError, corpus.CorpusError) as error:
         raise corpus.CorpusError("research ledger") from error
-    if any(
-        not _valid_ledger_transition(previous, current) for previous, current in pairwise(ledgers)
-    ):
-        raise corpus.CorpusError("research ledger chain")
-    return ledgers[-1]
+    for path in snapshots[1:]:
+        try:
+            current = corpus.BudgetLedger.from_json(json.loads(path.read_bytes()))
+        except (OSError, ValueError, corpus.CorpusError) as error:
+            raise corpus.CorpusError("research ledger") from error
+        if not _valid_ledger_transition(previous, current):
+            raise corpus.CorpusError("research ledger chain")
+        previous = current
+    return previous
 
 
 def _ledger_directories(root: Path) -> list[Path]:
