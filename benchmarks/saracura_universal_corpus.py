@@ -2941,6 +2941,36 @@ def _publish_packet_create_if_absent(staged: Path, packet: Path) -> None:
         raise OSError(error_number, os.strerror(error_number), packet)
 
 
+def _packet_payloads(
+    plan: Mapping[str, Any],
+    accepted: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+    ledger: Mapping[str, Any],
+) -> dict[str, bytes]:
+    """Build the canonical packet files without publishing or opening holdout state."""
+
+    accepted_train_dev = sorted(
+        (row for row in accepted if row.get("split") in {"synthetic_train", "synthetic_dev"}),
+        key=lambda row: cast(str, row.get("task_id")),
+    )
+    accepted_holdout = sorted(
+        (row for row in accepted if row.get("split") == "synthetic_holdout"),
+        key=lambda row: cast(str, row.get("task_id")),
+    )
+    identities = _identity_rows(accepted_holdout)
+    return {
+        "plan.json": _canonical(plan) + b"\n",
+        "accepted-train-dev.jsonl": _jsonl(accepted_train_dev),
+        "accepted-holdout.jsonl": _jsonl(accepted_holdout),
+        "holdout-identities.json": _canonical(
+            {"schema_version": "phase4e-holdout-identities.v1", "rows": identities}
+        )
+        + b"\n",
+        "rejected.jsonl": _jsonl(rejected),
+        "ledger.json": _canonical(ledger) + b"\n",
+    }
+
+
 def seal_packet(
     packet: Path,
     plan: Mapping[str, Any],
@@ -2952,26 +2982,7 @@ def seal_packet(
     packet.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(prefix=f".{packet.name}.", dir=packet.parent))
     os.chmod(staged, 0o700)
-    accepted_train_dev = sorted(
-        (row for row in accepted if row.get("split") in {"synthetic_train", "synthetic_dev"}),
-        key=lambda row: cast(str, row.get("task_id")),
-    )
-    accepted_holdout = sorted(
-        (row for row in accepted if row.get("split") == "synthetic_holdout"),
-        key=lambda row: cast(str, row.get("task_id")),
-    )
-    identities = _identity_rows(accepted_holdout)
-    files = {
-        "plan.json": _canonical(plan) + b"\n",
-        "accepted-train-dev.jsonl": _jsonl(accepted_train_dev),
-        "accepted-holdout.jsonl": _jsonl(accepted_holdout),
-        "holdout-identities.json": _canonical(
-            {"schema_version": "phase4e-holdout-identities.v1", "rows": identities}
-        )
-        + b"\n",
-        "rejected.jsonl": _jsonl(rejected),
-        "ledger.json": _canonical(ledger) + b"\n",
-    }
+    files = _packet_payloads(plan, accepted, rejected, ledger)
     try:
         for name, body in files.items():
             atomic_create(staged / name, body)
@@ -3085,6 +3096,43 @@ def seal_post_pilot_recovery_packet(
         [*base_rejected, *supplemental_rejected],
         combined_ledger,
     )
+
+
+def validate_post_pilot_recovery_packet_binding(
+    packet: Path,
+    plan: Mapping[str, Any],
+    base_accepted: Sequence[Mapping[str, Any]],
+    base_rejected: Sequence[Mapping[str, Any]],
+    base_ledger: Mapping[str, Any],
+    supplemental_accepted: Sequence[Mapping[str, Any]],
+    supplemental_rejected: Sequence[Mapping[str, Any]],
+    supplemental_ledger: Mapping[str, Any],
+) -> None:
+    """Prove an existing v4 packet matches current evidence without opening holdout bytes."""
+
+    validate_plan(plan)
+    if plan.get("schema_version") != "phase4e-universal-plan.v4":
+        raise CorpusError("post-pilot recovery plan")
+    base_slots = cast(list[Mapping[str, Any]], plan["base_slots"])
+    supplement_slots = cast(list[Mapping[str, Any]], plan["slots"])[1600:]
+    combined_ledger = compose_post_pilot_recovery_ledger(
+        base_ledger,
+        supplemental_ledger,
+        {cast(str, slot["task_id"]) for slot in base_slots},
+        {cast(str, slot["task_id"]) for slot in supplement_slots},
+    )
+    expected = _packet_payloads(
+        plan,
+        [*base_accepted, *supplemental_accepted],
+        [*base_rejected, *supplemental_rejected],
+        combined_ledger,
+    )
+    manifest = _packet_manifest(packet)
+    if manifest["schema_version"] != "phase4e-accepted-packet.v4" or manifest["files"] != {
+        name: _sha(payload) for name, payload in expected.items()
+    }:
+        raise CorpusError("post-pilot recovery packet binding")
+    validate_accepted_packet_pre_holdout(packet)
 
 
 def _jsonl(rows: Sequence[Mapping[str, Any]]) -> bytes:

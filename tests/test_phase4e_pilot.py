@@ -1021,7 +1021,7 @@ def test_fake_transport_passes_with_diagnostic_semantic_disagreement(
     assert report["local_privacy_violations"] == 0
     assert report["reviewer_privacy_flags"] == 0
     assert Decimal(report["cumulative_conservative_debit_usd"]) > Decimal("5.12153043")
-    assert report["artifact_root"] == str(root.resolve())
+    assert "artifact_root" not in report
     assert report["inventory_sha256"] == pilot.verify_inventory(root)
     assert "packet" not in pilot.run_pilot.__code__.co_varnames
 
@@ -1564,9 +1564,66 @@ def test_research_capsule_is_counted_once_and_tampering_fails_closed(tmp_path: P
     assert scan.directory_count == 1
     assert scan.entry_count == 1
 
+    manifest_path = capsule / "research-capsule.json"
+    manifest_raw = manifest_path.read_bytes()
+    manifest = json.loads(manifest_raw)
+    manifest["first_ledger_sha256"] = "f" * 64
+    manifest_path.write_bytes(corpus._canonical(manifest) + b"\n")
+    with pytest.raises(corpus.CorpusError, match="raw inventory"):
+        pilot.validate_research_capsule(capsule, raw_copy)
+    manifest_path.write_bytes(manifest_raw)
+
     (capsule / "resolved" / "call-0000.json").write_bytes(b'{"status":"rejected"}\n')
     with pytest.raises(corpus.CorpusError, match="research capsule digest"):
         pilot.scan_research_ledgers(root)
+
+
+def test_resumable_capsule_revisions_count_latest_and_marker_blocks_raw_import(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "supplement-work"
+    root = tmp_path / "research"
+    execution_id = pilot.ensure_research_execution_marker(work)
+    assert len(execution_id) == 32
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    (work / "resolved").mkdir(mode=0o700)
+    (work / "resolved" / "call-first.json").write_bytes(b"{}\n")
+    pilot.create_resumable_research_capsule(work, root / "revision-first")
+
+    ledger.reserve_request("corpus_author", "reservation-" + "1" * 64, Decimal("0.01"))
+    corpus.write_ledger_snapshot(work / "ledger", ledger)
+    (work / "diagnostics").mkdir(mode=0o700)
+    (work / "diagnostics" / "call-next.json").write_bytes(b"{}\n")
+    pilot.create_resumable_research_capsule(work, root / "revision-second")
+
+    _inventory, scan = pilot.record_research_catalog(root)
+    assert scan.directory_count == 1
+    assert scan.entry_count == 1
+    assert pilot.scan_research_ledgers(root) == scan
+    pilot.import_research_artifacts(work, root / "imported-work")
+    with pytest.raises(corpus.CorpusError, match="duplicates full ledger"):
+        pilot.scan_research_ledgers(root)
+
+
+def test_resumable_capsules_count_independent_executions_with_identical_ledgers(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "research"
+    execution_ids: set[str] = set()
+    for index in range(2):
+        work = tmp_path / f"supplement-work-{index}"
+        execution_ids.add(pilot.ensure_research_execution_marker(work))
+        corpus.write_ledger_snapshot(
+            work / "ledger",
+            corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY),
+        )
+        pilot.create_resumable_research_capsule(work, root / f"execution-{index}")
+
+    assert len(execution_ids) == 2
+    scan = pilot.scan_research_ledgers(root)
+    assert scan.directory_count == 2
+    assert scan.entry_count == 0
 
 
 def test_interrupted_capsule_publication_never_becomes_a_catalog_ledger(

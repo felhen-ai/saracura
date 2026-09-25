@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -265,7 +265,7 @@ def test_v4_transport_order_is_supplemental_only_and_keeps_post_pilot_contract()
     assert totals["corpus_reviewer"] > 0
 
 
-def test_v4_rejects_missing_base_capsule_and_never_enters_legacy_transport(
+def test_v4_rejects_missing_base_capsule_and_requires_private_recovery_paths(
     tmp_path: Path,
 ) -> None:
     plan = corpus.build_post_pilot_recovery_plan()
@@ -274,7 +274,7 @@ def test_v4_rejects_missing_base_capsule_and_never_enters_legacy_transport(
 
     plan_path = tmp_path / "plan.json"
     plan_path.write_bytes(corpus._canonical(plan) + b"\n")
-    with pytest.raises(corpus.CorpusError, match="transport is unavailable before Phase C"):
+    with pytest.raises(corpus.CorpusError, match="requires report and durable research root"):
         pipeline.run_corpus(
             plan_path,
             tmp_path / "snapshot",
@@ -283,6 +283,346 @@ def test_v4_rejects_missing_base_capsule_and_never_enters_legacy_transport(
             allow_network=True,
             transport=lambda *_args: (_ for _ in ()).throw(AssertionError("transport attempted")),
         )
+
+
+def test_v4_circuit_stops_after_three_uncertain_calls_and_resume_skips_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The resumable v4 lane never repeats an uncertain singleton after a circuit stop."""
+
+    assert (
+        pipeline._v4_streak(
+            [
+                {"status": "uncertain"},
+                {"status": "uncertain"},
+                {"status": "settled"},
+                {"status": "uncertain"},
+            ],
+            0,
+            0,
+        )
+        == 1
+    )
+    assert (
+        pipeline._v4_streak(
+            [{"status": "uncertain"}, {"status": "overspent"}, {"status": "uncertain"}],
+            0,
+            0,
+        )
+        == 1
+    )
+
+    monkeypatch.setattr(
+        corpus.VerifiedMiniLMTokenizerReceipt,
+        "create",
+        classmethod(lambda cls, snapshot: _Counter()),
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    plan = corpus.build_post_pilot_recovery_plan()
+    suffix = plan["slots"][1600:1604]
+    plan = {
+        **plan,
+        "slots": [*plan["base_slots"], *suffix],
+        "supplemental_task_ids": [slot["task_id"] for slot in suffix],
+        "supplemental_author_batch_order": [[slot["task_id"]] for slot in suffix],
+    }
+    base_ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    monkeypatch.setattr(pipeline, "_v4_base_capsule", lambda *_args: tmp_path / "base")
+    monkeypatch.setattr(
+        pilot, "require_pilot_research_history", lambda *_args: (_Counter(), "a" * 64)
+    )
+    monkeypatch.setattr(pilot, "validate_research_capsule", lambda *_args: None)
+    monkeypatch.setattr(
+        pipeline,
+        "_load_v4_base_capsule",
+        lambda *_args: ([], [], base_ledger),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_resolution_sha256",
+        lambda path: (
+            "a" * 64
+            if path.name == "base"
+            else pipeline.hashlib.sha256(pipeline._canonical([])).hexdigest()
+        ),
+    )
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
+
+    work = tmp_path / "work"
+    report = tmp_path / "report"
+    root = tmp_path / "research"
+    packet = tmp_path / "packet"
+    calls: list[str] = []
+
+    def failing_transport(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers
+        calls.append(body.decode())
+        raise OSError("unknown")
+
+    with pytest.raises(corpus.CorpusError, match="transport circuit open"):
+        pipeline._run_post_pilot_recovery(
+            plan, tmp_path / "snapshot", work, packet, report, root, transport=failing_transport
+        )
+    assert len(calls) == 3
+    assert (
+        json.loads(sorted((work / "ledger").glob("ledger-*.json"))[-1].read_bytes())["stop_reason"]
+        == "transport_circuit_open"
+    )
+    assert (
+        json.loads((report / "report-0000.json").read_bytes())["outcome"]
+        == "incomplete_transport_circuit"
+    )
+
+    completed: list[str] = []
+
+    def succeeding_transport(
+        method: str, url: str, headers: object, body: bytes
+    ) -> tuple[int, dict[str, str], bytes]:
+        del method, url, headers
+        stage = "reviews" if '"reviews"' in body.decode() else "records"
+        task = suffix[3]
+        completed.append(stage)
+        if stage == "records":
+            return _completion({"records": [_record(task)]}, "author")
+        return _completion(
+            {
+                "reviews": [
+                    {
+                        "task_id": task["task_id"],
+                        "status": "accepted",
+                        "selected_criterion_id": f"criterion-{task['gold_position']}",
+                        "reason_codes": [],
+                        "natural_language": True,
+                        "generic_or_invented": True,
+                        "exclusive_options": True,
+                        "private_or_sensitive": False,
+                        "semantic_equivalence_attestation": _record(task)[
+                            "semantic_equivalence_attestation"
+                        ],
+                    }
+                ]
+            },
+            "reviewer",
+        )
+
+    def conflicting_seal(*_args: object, **_kwargs: object) -> Path:
+        raise FileExistsError("simulated create-only publication race")
+
+    original_diagnostics = pipeline._load_post_pilot_diagnostics
+
+    def incomplete_after_network(*args: object, **kwargs: object) -> tuple[dict[str, int], bool]:
+        diagnostics, complete = original_diagnostics(*args, **kwargs)
+        resolved_ids = args[2]
+        return diagnostics, complete and len(resolved_ids) < 4  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline, "_load_post_pilot_diagnostics", incomplete_after_network)
+    with pytest.raises(corpus.CorpusError, match="diagnostics incomplete"):
+        pipeline._run_post_pilot_recovery(
+            plan, tmp_path / "snapshot", work, packet, report, root, transport=succeeding_transport
+        )
+    assert completed == ["records", "reviews"]
+    assert json.loads((report / "report-0001.json").read_bytes())["outcome"] == (
+        "incomplete_operational"
+    )
+
+    original_publish = pipeline._publish_v4_revision
+    original_seal = corpus.seal_post_pilot_recovery_packet
+
+    def failing_publish(*_args: object, **_kwargs: object) -> tuple[Path, str, pilot.SpendScan]:
+        raise OSError("simulated catalog failure")
+
+    monkeypatch.setattr(pipeline, "_load_post_pilot_diagnostics", original_diagnostics)
+    monkeypatch.setattr(
+        corpus,
+        "seal_post_pilot_recovery_packet",
+        lambda *_args, **_kwargs: packet / "packet.json",
+    )
+    monkeypatch.setattr(pipeline, "_publish_v4_revision", failing_publish)
+    with pytest.raises(OSError, match="catalog failure"):
+        pipeline._run_post_pilot_recovery(
+            plan, tmp_path / "snapshot", work, packet, report, root, transport=succeeding_transport
+        )
+    publication_report = json.loads((report / "report-0002.json").read_bytes())
+    assert publication_report["outcome"] == "incomplete_operational"
+    assert publication_report["errors"] == ["research_publication_failed"]
+    assert publication_report["research_inventory_sha256"] == "0" * 64
+
+    monkeypatch.setattr(pipeline, "_publish_v4_revision", original_publish)
+    monkeypatch.setattr(corpus, "seal_post_pilot_recovery_packet", original_seal)
+    monkeypatch.setattr(corpus, "seal_post_pilot_recovery_packet", conflicting_seal)
+    with pytest.raises(FileExistsError, match="publication race"):
+        pipeline._run_post_pilot_recovery(
+            plan, tmp_path / "snapshot", work, packet, report, root, transport=succeeding_transport
+        )
+    assert completed == ["records", "reviews"]
+    assert json.loads((report / "report-0003.json").read_bytes())["outcome"] == (
+        "seal_validation_failed"
+    )
+
+    def fake_seal(target: Path, *_args: object, **_kwargs: object) -> Path:
+        target.mkdir()
+        (target / "packet.json").write_bytes(b'{"sealed":true}\n')
+        return target / "packet.json"
+
+    monkeypatch.setattr(corpus, "seal_post_pilot_recovery_packet", fake_seal)
+    monkeypatch.setattr(
+        corpus, "validate_post_pilot_recovery_packet_binding", lambda *_args, **_kwargs: None
+    )
+    pipeline._run_post_pilot_recovery(
+        plan, tmp_path / "snapshot", work, packet, report, root, transport=succeeding_transport
+    )
+    assert completed == ["records", "reviews"]
+    assert [path.name for path in sorted(report.glob("report-*.json"))] == [
+        "report-0000.json",
+        "report-0001.json",
+        "report-0002.json",
+        "report-0003.json",
+        "report-0004.json",
+    ]
+
+
+@pytest.mark.parametrize("failure", ["history", "raw"])
+def test_v4_recovery_preflight_rejects_incomplete_base_migration_without_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    root = tmp_path / "research-ledgers"
+    base = root / "base-capsule"
+    calls = 0
+
+    def transport(*_args: object) -> tuple[int, dict[str, str], bytes]:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("transport attempted")
+
+    monkeypatch.setattr(pipeline, "_v4_base_capsule", lambda *_args: base)
+    if failure == "history":
+        monkeypatch.setattr(
+            pilot,
+            "require_pilot_research_history",
+            lambda *_args: (_ for _ in ()).throw(corpus.CorpusError("cumulative spend baseline")),
+        )
+        monkeypatch.setattr(
+            pilot,
+            "validate_research_capsule",
+            lambda *_args: (_ for _ in ()).throw(AssertionError("raw validation attempted")),
+        )
+        expected = "cumulative spend baseline"
+    else:
+        monkeypatch.setattr(
+            pilot, "require_pilot_research_history", lambda *_args: (_Counter(), "a" * 64)
+        )
+        monkeypatch.setattr(
+            pilot,
+            "validate_research_capsule",
+            lambda *_args: (_ for _ in ()).throw(
+                corpus.CorpusError("research capsule raw inventory")
+            ),
+        )
+        expected = "research capsule raw inventory"
+
+    with pytest.raises(corpus.CorpusError, match=expected):
+        pipeline._run_post_pilot_recovery(
+            plan,
+            tmp_path / "snapshot",
+            tmp_path / "supplement-work",
+            tmp_path / "packet",
+            tmp_path / "report",
+            root,
+            transport=transport,
+        )
+    assert calls == 0
+
+
+def test_recovery_prepare_migrates_validates_and_writes_v4_plan_create_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phase = tmp_path / "external" / "phase4e"
+    paths = {
+        "phase_root": phase,
+        "research_ledgers": phase / "research-ledgers",
+        "raw_evidence": phase / "raw-evidence",
+        "model_artifacts": phase / "model-artifacts",
+        "recovery_plan": phase / "recovery-plan-v4" / "plan.json",
+    }
+    internal = tmp_path / "internal" / "phase4e"
+    calls: list[str] = []
+    monkeypatch.setattr(pilot, "require_live_private_phase4e_root", lambda: phase)
+    monkeypatch.setattr(pilot, "private_phase4e_paths", lambda: paths)
+    monkeypatch.setattr(pilot, "_platform_phase4e_root", lambda: internal)
+    monkeypatch.setattr(pipeline, "_POST_PILOT_WORK_DIR", tmp_path / "corpus-work-v47")
+
+    def require_history(root: Path) -> tuple[_Counter, str]:
+        calls.append(f"history:{root.name}")
+        if root == paths["research_ledgers"] and "copy-catalog" not in calls:
+            raise corpus.CorpusError("research inventory missing")
+        return _Counter(), "a" * 64
+
+    monkeypatch.setattr(pilot, "require_pilot_research_history", require_history)
+    monkeypatch.setattr(
+        pilot,
+        "copy_research_catalog",
+        lambda *_args: (calls.append("copy-catalog"), (_Counter(), "a" * 64))[1],
+    )
+    monkeypatch.setattr(
+        pilot,
+        "copy_raw_research_evidence",
+        lambda *_args: calls.append("copy-raw") or "b" * 64,
+    )
+    monkeypatch.setattr(
+        pilot,
+        "create_research_capsule",
+        lambda *_args: calls.append("create-capsule") or tmp_path / "capsule.json",
+    )
+    monkeypatch.setattr(
+        pilot, "validate_research_capsule", lambda *_args: calls.append("validate-capsule")
+    )
+    monkeypatch.setattr(
+        pilot,
+        "record_research_catalog",
+        lambda *_args: (calls.append("record-catalog") or "c" * 64, _Counter()),
+    )
+    monkeypatch.setattr(
+        pilot,
+        "write_research_catalog_migration_marker",
+        lambda *_args: calls.append("write-marker") or tmp_path / "marker.json",
+    )
+
+    output = pipeline.run_prepare_recovery()
+    assert output == paths["recovery_plan"]
+    assert json.loads(output.read_bytes())["schema_version"] == "phase4e-universal-plan.v4"
+    assert calls == [
+        "history:research-ledgers",
+        "history:research-ledgers",
+        "copy-catalog",
+        "copy-raw",
+        "create-capsule",
+        "validate-capsule",
+        "record-catalog",
+        "history:research-ledgers",
+        "write-marker",
+    ]
+    assert pipeline.run_prepare_recovery() == output
+
+
+def test_resolution_hash_uses_global_posix_path_order(tmp_path: Path) -> None:
+    diagnostics = tmp_path / "diagnostics" / "call-z.json"
+    resolved = tmp_path / "resolved" / "call-a.json"
+    diagnostics.parent.mkdir()
+    resolved.parent.mkdir()
+    diagnostics.write_bytes(b'{"kind":"diagnostic"}\n')
+    resolved.write_bytes(b'{"kind":"resolution"}\n')
+    entries = [
+        {
+            "path": path.relative_to(tmp_path).as_posix(),
+            "sha256": pipeline.hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+        for path in (diagnostics, resolved)
+    ]
+    expected = pipeline.hashlib.sha256(pipeline._canonical(entries)).hexdigest()
+    assert pipeline._resolution_sha256(tmp_path) == expected
 
 
 def test_ptbr_recovery_boundary_needs_sixty_six_accepted_rows() -> None:
@@ -520,6 +860,26 @@ def test_private_state_root_moves_research_not_the_holdout_claim_registry(
     assert training._holdout_release_registry_directory() == baseline_claim_root
 
 
+def test_live_private_state_root_requires_external_unsynchronized_volume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = tmp_path / "external-volume"
+    volume.mkdir(mode=0o700)
+    private = volume / "private-state"
+    private.mkdir(mode=0o700)
+    monkeypatch.setattr(pilot, "_LIVE_PRIVATE_VOLUME_ROOT", volume)
+    monkeypatch.setattr(pilot, "_SYNCED_FELHEN_ROOT", tmp_path / "felhencloud")
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(private))
+    assert pilot.require_live_private_phase4e_root() == private / "phase4e"
+
+    synced = tmp_path / "felhencloud" / "private-state"
+    synced.mkdir(mode=0o700, parents=True)
+    monkeypatch.setattr(pilot, "_LIVE_PRIVATE_VOLUME_ROOT", tmp_path)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(synced))
+    with pytest.raises(corpus.CorpusError, match="private state volume"):
+        pilot.require_live_private_phase4e_root()
+
+
 @pytest.mark.parametrize("value", ["relative-state", "missing-state"])
 def test_private_state_root_rejects_nonprivate_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
@@ -588,9 +948,71 @@ def test_catalog_migration_marker_blocks_internal_research_root(
     monkeypatch.delenv("SARACURA_PRIVATE_STATE_ROOT", raising=False)
     with pytest.raises(corpus.CorpusError, match="private state root required"):
         pilot.canonical_research_ledger_root()
+    internal = tmp_path / "platform-state" / "phase4e" / "research-ledgers"
+    with pytest.raises(corpus.CorpusError, match="private state root required"):
+        pilot.require_research_catalog_write_root(internal)
+    with pytest.raises(corpus.CorpusError, match="private state root required"):
+        pilot.record_research_catalog(internal)
 
     monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(configured))
     assert pilot.canonical_research_ledger_root() == external
+
+
+def test_v4_packet_cannot_enter_legacy_training_before_phase_4e3b(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    packet = tmp_path / "packet"
+    rejected = [
+        {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"}
+        for slot in plan["slots"]
+    ]
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
+    corpus.seal_packet(
+        packet,
+        plan,
+        [],
+        rejected,
+        corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY).as_json(final=True),
+    )
+    monkeypatch.setattr(training, "require_phase4e_authorization", lambda _action: {})
+    registry = tmp_path / "holdout-releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: registry)
+    snapshot = tmp_path / "missing-snapshot"
+    embedding_output = tmp_path / "embeddings"
+    training_output = tmp_path / "models"
+
+    with pytest.raises(training.TrainingError, match=r"requires Phase 4E\.3B"):
+        training.extract_and_seal_embeddings(packet, snapshot, "cpu", embedding_output)
+    with pytest.raises(training.TrainingError, match=r"requires Phase 4E\.3B"):
+        training.train_and_seal(
+            tmp_path / "missing-capsule",
+            packet,
+            snapshot,
+            "cpu",
+            training_output,
+            "run",
+        )
+    binding = training.AcceptedPacketBinding(
+        *("0" * 64 for _ in range(5)),
+        train_dev_identities=(),
+        holdout_identities=(),
+        identities=(),
+    )
+    with pytest.raises(training.TrainingError, match=r"requires Phase 4E\.3B"):
+        training.verify_holdout_descriptor_bound_embeddings(
+            cast(training.EmbeddingCapsule, object()),
+            packet,
+            binding,
+            snapshot,
+            "cpu",
+            "0" * 64,
+            "0" * 64,
+        )
+    assert not snapshot.exists()
+    assert not embedding_output.exists()
+    assert not training_output.exists()
+    assert not registry.exists()
 
 
 def test_minimum_failure_writes_a_numbered_report_before_sealing(

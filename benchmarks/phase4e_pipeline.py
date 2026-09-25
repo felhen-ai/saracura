@@ -123,6 +123,40 @@ def write_post_pilot_plan(output: Path) -> Path:
     return output
 
 
+def run_prepare_recovery() -> Path:
+    """Prepare the reviewed external v4 state create-only before any provider call."""
+
+    pilot.require_live_private_phase4e_root()
+    paths = pilot.private_phase4e_paths()
+    internal_catalog = pilot._platform_phase4e_root() / "research-ledgers"
+    external_catalog = paths["research_ledgers"]
+    raw_destination = paths["raw_evidence"] / _POST_PILOT_WORK_DIR.name
+    capsule = external_catalog / f"{_POST_PILOT_WORK_DIR.name}-capsule"
+
+    pilot.require_pilot_research_history(internal_catalog)
+    try:
+        pilot.require_pilot_research_history(external_catalog)
+    except corpus.CorpusError:
+        pilot.copy_research_catalog(internal_catalog, external_catalog)
+    pilot.copy_raw_research_evidence(_POST_PILOT_WORK_DIR, raw_destination)
+    pilot.create_research_capsule(raw_destination, capsule)
+    pilot.validate_research_capsule(capsule, raw_destination)
+    inventory_sha256, _scan = pilot.record_research_catalog(external_catalog)
+    pilot.require_pilot_research_history(external_catalog)
+    pilot.write_research_catalog_migration_marker(external_catalog, inventory_sha256)
+
+    output = paths["recovery_plan"]
+    encoded = _canonical(corpus.build_post_pilot_recovery_plan()) + b"\n"
+    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if output.exists():
+        if output.is_symlink() or output.read_bytes() != encoded:
+            raise FileExistsError(f"benchmark artifact already exists: {output.name}")
+    else:
+        atomic_create(output, encoded)
+        os.chmod(output, 0o600)
+    return output
+
+
 def _require_post_pilot_artifact_paths(
     plan_path: Path,
     work_dir: Path,
@@ -1166,7 +1200,7 @@ def _resolution_sha256(work_dir: Path) -> str:
                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 }
             )
-    return hashlib.sha256(_canonical(files)).hexdigest()
+    return hashlib.sha256(_canonical(sorted(files, key=lambda item: item["path"]))).hexdigest()
 
 
 def _terminal_outcome_report(
@@ -1483,6 +1517,572 @@ def _run_post_pilot_batch(
     rejected.extend([*author_rejected, *reviewer_failures, *newly_rejected])
 
 
+def _v4_base_capsule(artifact_root: Path, plan: Mapping[str, Any]) -> Path:
+    candidates: list[Path] = []
+    for manifest in sorted(artifact_root.rglob("research-capsule.json")):
+        try:
+            payload = _read_json(manifest)
+        except corpus.CorpusError:
+            continue
+        if payload.get("schema_version") == "research-capsule.v1" and payload.get(
+            "final_ledger_sha256"
+        ) == plan.get("base_final_ledger_sha256"):
+            candidates.append(manifest.parent)
+    if len(candidates) != 1:
+        raise corpus.CorpusError("post-pilot recovery base capsule")
+    return candidates[0]
+
+
+def _v4_supplement_resolved(work_dir: Path, plan: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    resolved = _load_resolved(work_dir, plan)
+    supplemental = set(cast(list[str], plan["supplemental_task_ids"]))
+    if not set(resolved) <= supplemental:
+        raise corpus.CorpusError("post-pilot recovery supplemental resolution")
+    return resolved
+
+
+def _v4_streak(entries: Sequence[Mapping[str, str]], start: int, streak: int) -> int:
+    """Advance only from durably closed provider outcomes in call order."""
+
+    for entry in entries[start:]:
+        status = entry.get("status")
+        if status == "uncertain":
+            streak += 1
+        elif status in {"settled", "overspent"}:
+            streak = 0
+        elif status != "reserved":
+            raise corpus.CorpusError("transport circuit ledger status")
+    return streak
+
+
+def _v4_capsule_path(work_dir: Path, artifact_root: Path) -> Path:
+    ledger_paths = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not ledger_paths:
+        raise corpus.CorpusError("post-pilot ledger missing")
+    execution_id = pilot.ensure_research_execution_marker(work_dir)
+    return artifact_root / (
+        f"supplement-{execution_id}-s{len(ledger_paths):04d}-"
+        f"{hashlib.sha256(ledger_paths[-1].read_bytes()).hexdigest()}-"
+        f"{_resolution_sha256(work_dir)}"
+    )
+
+
+def _publish_v4_revision(work_dir: Path, artifact_root: Path) -> tuple[Path, str, pilot.SpendScan]:
+    capsule = pilot.create_resumable_research_capsule(
+        work_dir, _v4_capsule_path(work_dir, artifact_root)
+    )
+    inventory_sha, scan = pilot.record_research_catalog(artifact_root)
+    return capsule, inventory_sha, scan
+
+
+def _v4_terminal_report(
+    *,
+    plan: Mapping[str, Any],
+    base_accepted: Sequence[Mapping[str, Any]],
+    base_rejected: Sequence[Mapping[str, Any]],
+    supplemental_accepted: Sequence[Mapping[str, Any]],
+    supplemental_rejected: Sequence[Mapping[str, Any]],
+    base_ledger: corpus.BudgetLedger,
+    supplemental_ledger: corpus.BudgetLedger,
+    work_dir: Path,
+    outcome: Literal[
+        "incomplete_transport_circuit",
+        "incomplete_operational",
+        "minimum_failed",
+        "seal_validation_failed",
+        "sealed",
+    ],
+    errors: Sequence[str],
+    inventory_sha256: str,
+    base_resolution_sha256: str,
+    packet: Path | None = None,
+    streak: int = 0,
+) -> dict[str, Any]:
+    slots = {
+        cast(str, slot["task_id"]): slot for slot in cast(list[Mapping[str, Any]], plan["slots"])
+    }
+    counts: dict[str, dict[str, int]] = {
+        key: {} for key in ("split", "locale", "domain", "option_count", "reason")
+    }
+    for row in [
+        *base_accepted,
+        *base_rejected,
+        *supplemental_accepted,
+        *supplemental_rejected,
+    ]:
+        task_id = row.get("task_id")
+        if not isinstance(task_id, str) or task_id not in slots:
+            raise corpus.CorpusError("report task identity")
+        slot = slots[task_id]
+        for key, value in (
+            ("split", slot["split"]),
+            ("locale", slot["locale"]),
+            ("domain", slot["domain"]),
+            ("option_count", str(slot["option_count"])),
+        ):
+            bucket = counts[key]
+            text = str(value)
+            bucket[text] = bucket.get(text, 0) + 1
+    for row in [*base_rejected, *supplemental_rejected]:
+        if isinstance(row.get("reason"), str):
+            reason = cast(str, row["reason"])
+            counts["reason"][reason] = counts["reason"].get(reason, 0) + 1
+    supplemental_ids = set(cast(list[str], plan["supplemental_task_ids"]))
+    settled = {
+        cast(str, row["task_id"]) for row in [*supplemental_accepted, *supplemental_rejected]
+    }
+    snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not snapshots:
+        raise corpus.CorpusError("post-pilot ledger missing")
+    base_cost = sum(
+        (Decimal(entry["provider_cost_usd"]) for entry in base_ledger.entries), Decimal()
+    )
+    supplemental_cost = sum(
+        (Decimal(entry["provider_cost_usd"]) for entry in supplemental_ledger.entries), Decimal()
+    )
+    supplemental_debit = sum(
+        (Decimal(entry["debit_usd"]) for entry in supplemental_ledger.entries), Decimal()
+    )
+    result: dict[str, Any] = {
+        "schema_version": "phase4e-corpus-terminal-report.v2",
+        "outcome": outcome,
+        "accepted_count": len(base_accepted) + len(supplemental_accepted),
+        "rejected_count": len(base_rejected) + len(supplemental_rejected),
+        "unresolved_count": len(supplemental_ids - settled),
+        "counts": {key: dict(sorted(value.items())) for key, value in counts.items()},
+        "errors": sorted(set(errors)),
+        "transport_uncertain_calls": sum(
+            entry["status"] == "uncertain" for entry in supplemental_ledger.entries
+        ),
+        "consecutive_uncertainty_streak": streak,
+        "base_plan_sha256": plan["base_plan_sha256"],
+        "recovery_plan_sha256": corpus._sha(_canonical(plan)),
+        "base_ledger_sha256": plan["base_final_ledger_sha256"],
+        "base_resolution_sha256": base_resolution_sha256,
+        "supplemental_ledger_sha256": hashlib.sha256(snapshots[-1].read_bytes()).hexdigest(),
+        "supplemental_resolution_sha256": _resolution_sha256(work_dir),
+        "base_provider_reported_cost_usd": str(base_cost),
+        "supplemental_provider_reported_cost_usd": str(supplemental_cost),
+        "supplemental_conservative_debit_usd": str(supplemental_debit),
+        "research_inventory_sha256": inventory_sha256,
+        "execution_id": pilot.ensure_research_execution_marker(work_dir),
+    }
+    if packet is not None:
+        result["packet_manifest_sha256"] = hashlib.sha256(
+            (packet / "packet.json").read_bytes()
+        ).hexdigest()
+    return result
+
+
+def _persist_v4_terminal_report(
+    *,
+    plan: Mapping[str, Any],
+    base_accepted: Sequence[Mapping[str, Any]],
+    base_rejected: Sequence[Mapping[str, Any]],
+    supplemental_accepted: Sequence[Mapping[str, Any]],
+    supplemental_rejected: Sequence[Mapping[str, Any]],
+    base_ledger: corpus.BudgetLedger,
+    supplemental_ledger: corpus.BudgetLedger,
+    work_dir: Path,
+    report_dir: Path,
+    artifact_root: Path,
+    outcome: Literal[
+        "incomplete_transport_circuit",
+        "incomplete_operational",
+        "minimum_failed",
+        "seal_validation_failed",
+        "sealed",
+    ],
+    errors: Sequence[str],
+    base_resolution_sha256: str,
+    packet: Path | None = None,
+    streak: int = 0,
+) -> Path:
+    """Publish a revision before its report, with a fail-closed report on publication failure."""
+
+    try:
+        _capsule, inventory, _scan = _publish_v4_revision(work_dir, artifact_root)
+    except Exception as publication_error:
+        try:
+            _write_terminal_outcome_report(
+                report_dir,
+                _v4_terminal_report(
+                    plan=plan,
+                    base_accepted=base_accepted,
+                    base_rejected=base_rejected,
+                    supplemental_accepted=supplemental_accepted,
+                    supplemental_rejected=supplemental_rejected,
+                    base_ledger=base_ledger,
+                    supplemental_ledger=supplemental_ledger,
+                    work_dir=work_dir,
+                    outcome="incomplete_operational",
+                    errors=["research_publication_failed"],
+                    inventory_sha256="0" * 64,
+                    base_resolution_sha256=base_resolution_sha256,
+                    streak=streak,
+                ),
+            )
+        except Exception as report_error:
+            raise publication_error from report_error
+        raise
+    return _write_terminal_outcome_report(
+        report_dir,
+        _v4_terminal_report(
+            plan=plan,
+            base_accepted=base_accepted,
+            base_rejected=base_rejected,
+            supplemental_accepted=supplemental_accepted,
+            supplemental_rejected=supplemental_rejected,
+            base_ledger=base_ledger,
+            supplemental_ledger=supplemental_ledger,
+            work_dir=work_dir,
+            outcome=outcome,
+            errors=errors,
+            inventory_sha256=inventory,
+            base_resolution_sha256=base_resolution_sha256,
+            packet=packet,
+            streak=streak,
+        ),
+    )
+
+
+def _require_v4_artifact_paths(
+    work_dir: Path, packet: Path, report_dir: Path, artifact_root: Path
+) -> None:
+    pilot.require_live_private_phase4e_root()
+    paths = pilot.private_phase4e_paths()
+    if (
+        artifact_root.resolve() != paths["research_ledgers"].resolve()
+        or paths["raw_evidence"].resolve() not in work_dir.resolve().parents
+        or paths["model_artifacts"].resolve() not in packet.resolve().parents
+        or paths["phase_root"].resolve() not in report_dir.resolve().parents
+    ):
+        raise corpus.CorpusError("post-pilot recovery artifact path")
+    pilot._outside(work_dir, artifact_root)
+    pilot._outside(packet, artifact_root)
+    pilot._outside(report_dir, artifact_root)
+
+
+def _run_post_pilot_recovery(
+    plan: Mapping[str, Any],
+    snapshot: Path,
+    work_dir: Path,
+    packet: Path,
+    report_dir: Path,
+    artifact_root: Path,
+    *,
+    transport: Transport | None,
+) -> Path:
+    """Run only the v4 supplemental order; base evidence is capsule-only and read-only."""
+
+    require_post_pilot_phase4e_authorization("synthetic_generation")
+    _post_pilot_config(plan)
+    pilot.require_pilot_research_history(artifact_root)
+    base_capsule = _v4_base_capsule(artifact_root, plan)
+    base_raw = artifact_root.parent / "raw-evidence" / _POST_PILOT_WORK_DIR.name
+    pilot.validate_research_capsule(base_capsule, base_raw)
+    base_accepted, _base_rejected, base_ledger = _load_v4_base_capsule(base_capsule, plan)
+    base_resolution = _resolution_sha256(base_capsule)
+    resolved = _v4_supplement_resolved(work_dir, plan)
+    ledger = _load_ledger_or_fail_closed(work_dir)
+    if (work_dir / "ledger").exists():
+        # Resume only from the complete append-only chain, including the
+        # circuit-open snapshot that deliberately leaves later tasks unresolved.
+        ledger = pilot._validate_ledger_chain(work_dir / "ledger")
+    if not ledger.entries:
+        ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY)
+    elif ledger.policy.schema_version != corpus.POST_PILOT_CORPUS_LEDGER_POLICY.schema_version:
+        raise corpus.CorpusError("ledger resume mismatch")
+    _require_settled_task_resolution(ledger, resolved)
+    diagnostics, complete_diagnostics = _load_post_pilot_diagnostics(work_dir, plan, set(resolved))
+    if not complete_diagnostics:
+        raise corpus.CorpusError("post-pilot diagnostics incomplete")
+    _require_post_pilot_uncertain_resolutions(
+        ledger, resolved, diagnostics["transport_uncertain_calls"]
+    )
+    supplemental_ids = set(cast(list[str], plan["supplemental_task_ids"]))
+    accepted = [
+        cast(dict[str, Any], item["row"])
+        for item in resolved.values()
+        if item["status"] == "accepted"
+    ]
+    rejected = [
+        cast(dict[str, Any], item["row"])
+        for item in resolved.values()
+        if item["status"] == "rejected"
+    ]
+    if set(resolved) != supplemental_ids:
+        _aggregate_preflight(plan, resolved, ledger)
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise corpus.CorpusError("missing provider credential")
+        execution_id = pilot.ensure_research_execution_marker(work_dir)
+        del execution_id
+        config = cast(dict[str, Any], _post_pilot_config(plan))
+        client = corpus.OpenRouterCorpusClient(
+            transport=cast(corpus.Transport, transport or _openrouter_transport(120)),
+            allow_network=True,
+            ledger=ledger,
+            ledger_directory=work_dir / "ledger",
+            policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY,
+            author_model=POST_PILOT_AUTHOR_MODEL,
+            reviewer_model=POST_PILOT_REVIEWER_MODEL,
+            provider_preferences_by_stage={
+                "corpus_author": config["provider_policy"],
+                "corpus_reviewer": config["provider_policy"],
+            },
+            author_reasoning_effort=None,
+            reviewer_temperature=0,
+        )
+        completed = set(resolved)
+        streak = 0
+        next_cost = Decimal("10.00")
+        try:
+            for slots in _author_batches(plan):
+                ids = {cast(str, slot["task_id"]) for slot in slots}
+                if ids <= completed:
+                    continue
+                if ids & completed:
+                    raise corpus.CorpusError("partial author family resume")
+                before = len(client.ledger.entries)
+                _run_post_pilot_batch(
+                    client,
+                    slots,
+                    snapshot,
+                    api_key,
+                    [*base_accepted, *accepted],
+                    rejected,
+                    diagnostics,
+                    work_dir,
+                )
+                # The author/reviewer resolver receives base rows for dedup, but only
+                # supplemental additions belong in this resume work directory.
+                current = _v4_supplement_resolved(work_dir, plan)
+                accepted = [
+                    cast(dict[str, Any], item["row"])
+                    for item in current.values()
+                    if item["status"] == "accepted"
+                ]
+                rejected = [
+                    cast(dict[str, Any], item["row"])
+                    for item in current.values()
+                    if item["status"] == "rejected"
+                ]
+                completed = set(current)
+                streak = _v4_streak(client.ledger.entries, before, streak)
+                spend = sum(
+                    (Decimal(entry["provider_cost_usd"]) for entry in client.ledger.entries),
+                    Decimal(),
+                )
+                while spend >= next_cost:
+                    print(f"phase4e recovery provider spend crossed USD {next_cost}", flush=True)
+                    next_cost += Decimal("10.00")
+                if streak >= 3:
+                    corpus.write_ledger_snapshot(
+                        work_dir / "ledger", client.ledger, stop_reason="transport_circuit_open"
+                    )
+                    _persist_v4_terminal_report(
+                        plan=plan,
+                        base_accepted=base_accepted,
+                        base_rejected=_base_rejected,
+                        supplemental_accepted=accepted,
+                        supplemental_rejected=rejected,
+                        base_ledger=base_ledger,
+                        supplemental_ledger=client.ledger,
+                        work_dir=work_dir,
+                        report_dir=report_dir,
+                        artifact_root=artifact_root,
+                        outcome="incomplete_transport_circuit",
+                        errors=["transport_circuit_open"],
+                        base_resolution_sha256=base_resolution,
+                        streak=streak,
+                    )
+                    print(f"phase4e recovery final provider spend USD {spend}", flush=True)
+                    raise corpus.CorpusError("transport circuit open")
+        except Exception as error:
+            if isinstance(error, corpus.CorpusError) and str(error) == "transport circuit open":
+                raise
+            if client.ledger.entries:
+                try:
+                    durable = _v4_supplement_resolved(work_dir, plan)
+                    accepted = [
+                        cast(dict[str, Any], item["row"])
+                        for item in durable.values()
+                        if item["status"] == "accepted"
+                    ]
+                    rejected = [
+                        cast(dict[str, Any], item["row"])
+                        for item in durable.values()
+                        if item["status"] == "rejected"
+                    ]
+                    _persist_v4_terminal_report(
+                        plan=plan,
+                        base_accepted=base_accepted,
+                        base_rejected=_base_rejected,
+                        supplemental_accepted=accepted,
+                        supplemental_rejected=rejected,
+                        base_ledger=base_ledger,
+                        supplemental_ledger=client.ledger,
+                        work_dir=work_dir,
+                        report_dir=report_dir,
+                        artifact_root=artifact_root,
+                        outcome="incomplete_operational",
+                        errors=["operational_failure"],
+                        base_resolution_sha256=base_resolution,
+                        streak=streak,
+                    )
+                    spend = sum(
+                        (Decimal(entry["provider_cost_usd"]) for entry in client.ledger.entries),
+                        Decimal(),
+                    )
+                    print(f"phase4e recovery final provider spend USD {spend}", flush=True)
+                except Exception as report_error:
+                    raise error from report_error
+            raise
+        ledger = client.ledger
+    final_spend = sum((Decimal(entry["provider_cost_usd"]) for entry in ledger.entries), Decimal())
+    try:
+        resolved = _v4_supplement_resolved(work_dir, plan)
+        if set(resolved) != supplemental_ids:
+            raise corpus.CorpusError("incomplete corpus resolution")
+        diagnostics, complete_diagnostics = _load_post_pilot_diagnostics(
+            work_dir, plan, set(resolved)
+        )
+        if not complete_diagnostics:
+            raise corpus.CorpusError("post-pilot diagnostics incomplete")
+        _require_post_pilot_uncertain_resolutions(
+            ledger, resolved, diagnostics["transport_uncertain_calls"]
+        )
+        _require_settled_task_resolution(ledger, resolved)
+        accepted = [
+            cast(dict[str, Any], item["row"])
+            for item in resolved.values()
+            if item["status"] == "accepted"
+        ]
+        rejected = [
+            cast(dict[str, Any], item["row"])
+            for item in resolved.values()
+            if item["status"] == "rejected"
+        ]
+    except Exception as error:
+        if ledger.entries:
+            try:
+                durable = _v4_supplement_resolved(work_dir, plan)
+                accepted = [
+                    cast(dict[str, Any], item["row"])
+                    for item in durable.values()
+                    if item["status"] == "accepted"
+                ]
+                rejected = [
+                    cast(dict[str, Any], item["row"])
+                    for item in durable.values()
+                    if item["status"] == "rejected"
+                ]
+                _persist_v4_terminal_report(
+                    plan=plan,
+                    base_accepted=base_accepted,
+                    base_rejected=_base_rejected,
+                    supplemental_accepted=accepted,
+                    supplemental_rejected=rejected,
+                    base_ledger=base_ledger,
+                    supplemental_ledger=ledger,
+                    work_dir=work_dir,
+                    report_dir=report_dir,
+                    artifact_root=artifact_root,
+                    outcome="incomplete_operational",
+                    errors=["operational_failure"],
+                    base_resolution_sha256=base_resolution,
+                )
+                print(f"phase4e recovery final provider spend USD {final_spend}", flush=True)
+            except Exception as report_error:
+                raise error from report_error
+        raise
+    snapshots = sorted((work_dir / "ledger").glob("ledger-*.json"))
+    if not snapshots or _read_json(snapshots[-1]).get("stop_reason") != "complete":
+        corpus.write_ledger_snapshot(work_dir / "ledger", ledger, stop_reason="complete")
+    minimum_errors = corpus._minimums([*base_accepted, *accepted])
+    if minimum_errors:
+        _persist_v4_terminal_report(
+            plan=plan,
+            base_accepted=base_accepted,
+            base_rejected=_base_rejected,
+            supplemental_accepted=accepted,
+            supplemental_rejected=rejected,
+            base_ledger=base_ledger,
+            supplemental_ledger=ledger,
+            work_dir=work_dir,
+            report_dir=report_dir,
+            artifact_root=artifact_root,
+            outcome="minimum_failed",
+            errors=minimum_errors,
+            base_resolution_sha256=base_resolution,
+        )
+        print(f"phase4e recovery final provider spend USD {final_spend}", flush=True)
+        raise corpus.CorpusError("minimum_failed")
+    try:
+        if not packet.exists():
+            corpus.seal_post_pilot_recovery_packet(
+                packet,
+                plan,
+                base_accepted,
+                _base_rejected,
+                base_ledger.as_json(final=True),
+                accepted,
+                rejected,
+                ledger.as_json(final=True),
+            )
+        else:
+            corpus.validate_post_pilot_recovery_packet_binding(
+                packet,
+                plan,
+                base_accepted,
+                _base_rejected,
+                base_ledger.as_json(final=True),
+                accepted,
+                rejected,
+                ledger.as_json(final=True),
+            )
+    except (corpus.CorpusError, FileExistsError) as error:
+        try:
+            _persist_v4_terminal_report(
+                plan=plan,
+                base_accepted=base_accepted,
+                base_rejected=_base_rejected,
+                supplemental_accepted=accepted,
+                supplemental_rejected=rejected,
+                base_ledger=base_ledger,
+                supplemental_ledger=ledger,
+                work_dir=work_dir,
+                report_dir=report_dir,
+                artifact_root=artifact_root,
+                outcome="seal_validation_failed",
+                errors=["seal_validation_failed"],
+                base_resolution_sha256=base_resolution,
+            )
+        except Exception as report_error:
+            raise error from report_error
+        print(f"phase4e recovery final provider spend USD {final_spend}", flush=True)
+        raise
+    _persist_v4_terminal_report(
+        plan=plan,
+        base_accepted=base_accepted,
+        base_rejected=_base_rejected,
+        supplemental_accepted=accepted,
+        supplemental_rejected=rejected,
+        base_ledger=base_ledger,
+        supplemental_ledger=ledger,
+        work_dir=work_dir,
+        report_dir=report_dir,
+        artifact_root=artifact_root,
+        outcome="sealed",
+        errors=[],
+        base_resolution_sha256=base_resolution,
+        packet=packet,
+    )
+    print(f"phase4e recovery final provider spend USD {final_spend}", flush=True)
+    return packet / "packet.json"
+
+
 def _run_post_pilot_corpus(
     plan: Mapping[str, Any],
     snapshot: Path,
@@ -1677,10 +2277,20 @@ def run_corpus(
         require_phase4e_authorization("synthetic_generation")
     plan = _read_plan(plan_path)
     if plan.get("schema_version") == "phase4e-universal-plan.v4":
-        # Phase B deliberately seals plan/evidence composition only.  The
-        # supplemental transport runner (including its circuit breaker) is a
-        # separate Phase C contract, so v4 can never fall into the legacy lane.
-        raise corpus.CorpusError("post-pilot recovery transport is unavailable before Phase C")
+        if report_dir is None or artifact_root is None:
+            raise corpus.CorpusError(
+                "post-pilot recovery requires report and durable research root"
+            )
+        _require_v4_artifact_paths(work_dir, packet, report_dir, artifact_root)
+        return _run_post_pilot_recovery(
+            plan,
+            snapshot,
+            work_dir,
+            packet,
+            report_dir,
+            artifact_root,
+            transport=transport,
+        )
     post_pilot = plan.get("schema_version") == "phase4e-universal-plan.v3"
     if post_pilot:
         if report_dir is None or artifact_root is None:
@@ -1970,6 +2580,7 @@ def _parser() -> argparse.ArgumentParser:
     import_ledgers = commands.add_parser("import-ledgers")
     import_ledgers.add_argument("--source", type=Path, required=True)
     import_ledgers.add_argument("--artifact-root", type=Path, required=True)
+    commands.add_parser("recovery-prepare")
     return parser
 
 
@@ -2014,6 +2625,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "import-ledgers":
             pilot.import_research_artifacts(args.source, args.artifact_root)
+        elif args.command == "recovery-prepare":
+            run_prepare_recovery()
         else:  # argparse makes this unreachable; keep it fail-closed.
             raise ValueError("unknown pipeline command")
     except (

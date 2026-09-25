@@ -339,6 +339,54 @@ def test_post_pilot_recovery_ledger_requires_disjoint_task_and_reservation_sets(
         )
 
 
+def test_existing_v4_packet_must_bind_current_recovery_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = corpus.build_post_pilot_recovery_plan()
+    base_slots = plan["slots"][:1600]
+    supplemental_slots = plan["slots"][1600:]
+    base_rejected = [
+        {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"}
+        for slot in base_slots
+    ]
+    supplemental_rejected = [
+        {"task_id": slot["task_id"], "split": slot["split"], "reason": "capacity"}
+        for slot in supplemental_slots
+    ]
+    ledger = corpus.BudgetLedger(policy=corpus.POST_PILOT_CORPUS_LEDGER_POLICY).as_json(final=True)
+    monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
+    packet = tmp_path / "packet"
+    corpus.seal_packet(packet, plan, [], [*base_rejected, *supplemental_rejected], ledger)
+    monkeypatch.setattr(
+        corpus,
+        "compose_post_pilot_recovery_ledger",
+        lambda *_args, **_kwargs: ledger,
+    )
+    corpus.validate_post_pilot_recovery_packet_binding(
+        packet,
+        plan,
+        [],
+        base_rejected,
+        ledger,
+        [],
+        supplemental_rejected,
+        ledger,
+    )
+    changed = [dict(row) for row in supplemental_rejected]
+    changed[0]["reason"] = "review_disagreement"
+    with pytest.raises(CorpusError, match="packet binding"):
+        corpus.validate_post_pilot_recovery_packet_binding(
+            packet,
+            plan,
+            [],
+            base_rejected,
+            ledger,
+            [],
+            changed,
+            ledger,
+        )
+
+
 def test_post_pilot_policy_rejects_a_valid_but_unreviewed_domain_map(tmp_path: Path) -> None:
     payload = json.loads(POST_PILOT_POLICY_PATH.read_text(encoding="utf-8"))
     domain = next(iter(payload["domain_scenario_map"]))

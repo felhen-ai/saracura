@@ -288,6 +288,13 @@ def validate_accepted_packet_binding(packet: Path) -> AcceptedPacketBinding:
     try:
         packet_raw = (packet / "packet.json").read_bytes()
         manifest = json.loads(packet_raw)
+    except (OSError, TypeError, ValueError) as error:
+        raise TrainingError("accepted packet binding") from error
+    if isinstance(manifest, dict) and manifest.get("schema_version") == (
+        "phase4e-accepted-packet.v4"
+    ):
+        raise TrainingError("post-pilot recovery training requires Phase 4E.3B")
+    try:
         train_dev_raw = (packet / "accepted-train-dev.jsonl").read_bytes()
         train_dev = [
             cast(dict[str, Any], json.loads(line)) for line in train_dev_raw.splitlines() if line
@@ -333,6 +340,9 @@ def validate_full_accepted_packet_binding(
 ) -> AcceptedPacketBinding:
     """Open and bind accepted holdout content only after its release claim."""
 
+    actual = validate_accepted_packet_binding(packet)
+    if actual != expected:
+        raise TrainingError("full accepted packet binding")
     _validate_holdout_release_claim(
         expected,
         capsule,
@@ -347,7 +357,6 @@ def validate_full_accepted_packet_binding(
         ]
     except (CorpusError, OSError, TypeError, ValueError) as error:
         raise TrainingError("full accepted packet validation") from error
-    actual = validate_accepted_packet_binding(packet)
     holdout_identities = _identity_rows(holdout)
     if (
         _sha(holdout_raw) != expected.accepted_holdout_jsonl_sha256
