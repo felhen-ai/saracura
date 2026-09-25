@@ -947,12 +947,12 @@ def _raw_inventory(source: Path) -> dict[str, Any]:
         relative = path.relative_to(source)
         if ".." in relative.parts:
             raise corpus.CorpusError("raw research evidence path")
-        payload = path.read_bytes()
-        bytes_count += len(payload)
+        raw = path.read_bytes()
+        bytes_count += len(raw)
         files.append(
             {
                 "path": relative.as_posix(),
-                "sha256": hashlib.sha256(payload).hexdigest(),
+                "sha256": hashlib.sha256(raw).hexdigest(),
             }
         )
     if not files:
@@ -1055,7 +1055,7 @@ def ensure_research_execution_marker(work_dir: Path) -> str:
     }
     atomic_create(marker, _canonical(payload) + b"\n")
     os.chmod(marker, 0o600)
-    return cast(str, payload["execution_id"])
+    return payload["execution_id"]
 
 
 def _validated_research_capsule(capsule: Path) -> tuple[dict[str, Any], tuple[str, ...]]:
@@ -1099,9 +1099,9 @@ def _validated_research_capsule(capsule: Path) -> tuple[dict[str, Any], tuple[st
         or type(payload["raw_file_count"]) is not int
         or type(payload["raw_byte_count"]) is not int
         or type(payload["ledger_snapshot_count"]) is not int
-        or cast(int, payload["raw_file_count"]) <= 0
-        or cast(int, payload["raw_byte_count"]) <= 0
-        or cast(int, payload["ledger_snapshot_count"]) <= 0
+        or payload["raw_file_count"] <= 0
+        or payload["raw_byte_count"] <= 0
+        or payload["ledger_snapshot_count"] <= 0
         or payload["chain_validator_revision"] != _LEDGER_CHAIN_VALIDATOR_REVISION
         or not isinstance(payload["files"], list)
     ):
@@ -1132,7 +1132,7 @@ def _validated_research_capsule(capsule: Path) -> tuple[dict[str, Any], tuple[st
         raise corpus.CorpusError("research capsule digest")
     if (
         schema == _RESEARCH_CAPSULE_SCHEMA
-        and cast(int, payload["raw_byte_count"])
+        and payload["raw_byte_count"]
         < sum(path.stat().st_size for path in _capsule_files(capsule)) * 10
     ):
         raise corpus.CorpusError("research capsule is not compact")
@@ -1406,7 +1406,7 @@ def _catalog_capsules(root: Path) -> tuple[set[Path], set[Path], set[tuple[str, 
             exact_source_keys.add(exact_key)
             active.add(capsule / "ledger")
             continue
-        execution_id = cast(str, source_key[0])
+        execution_id = source_key[0]
         if any(
             cast(str, item[1]["first_ledger_sha256"]) == exact_key[0]
             and cast(str, item[1]["final_ledger_sha256"]) == exact_key[1]

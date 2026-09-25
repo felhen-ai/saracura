@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from decimal import Decimal
@@ -341,9 +342,7 @@ def test_v4_circuit_stops_after_three_uncertain_calls_and_resume_skips_them(
         pipeline,
         "_resolution_sha256",
         lambda path: (
-            "a" * 64
-            if path.name == "base"
-            else pipeline.hashlib.sha256(pipeline._canonical([])).hexdigest()
+            "a" * 64 if path.name == "base" else hashlib.sha256(pipeline._canonical([])).hexdigest()
         ),
     )
     monkeypatch.setattr(corpus, "_minimums", lambda _rows: [])
@@ -412,10 +411,11 @@ def test_v4_circuit_stops_after_three_uncertain_calls_and_resume_skips_them(
 
     original_diagnostics = pipeline._load_post_pilot_diagnostics
 
-    def incomplete_after_network(*args: object, **kwargs: object) -> tuple[dict[str, int], bool]:
-        diagnostics, complete = original_diagnostics(*args, **kwargs)
-        resolved_ids = args[2]
-        return diagnostics, complete and len(resolved_ids) < 4  # type: ignore[arg-type]
+    def incomplete_after_network(
+        work_dir: Path, received_plan: Mapping[str, Any], resolved_ids: set[str]
+    ) -> tuple[dict[str, int], bool]:
+        diagnostics, complete = original_diagnostics(work_dir, received_plan, resolved_ids)
+        return diagnostics, complete and len(resolved_ids) < 4
 
     monkeypatch.setattr(pipeline, "_load_post_pilot_diagnostics", incomplete_after_network)
     with pytest.raises(corpus.CorpusError, match="diagnostics incomplete"):
@@ -561,34 +561,36 @@ def test_recovery_prepare_migrates_validates_and_writes_v4_plan_create_only(
         return _Counter(), "a" * 64
 
     monkeypatch.setattr(pilot, "require_pilot_research_history", require_history)
-    monkeypatch.setattr(
-        pilot,
-        "copy_research_catalog",
-        lambda *_args: (calls.append("copy-catalog"), (_Counter(), "a" * 64))[1],
-    )
-    monkeypatch.setattr(
-        pilot,
-        "copy_raw_research_evidence",
-        lambda *_args: calls.append("copy-raw") or "b" * 64,
-    )
-    monkeypatch.setattr(
-        pilot,
-        "create_research_capsule",
-        lambda *_args: calls.append("create-capsule") or tmp_path / "capsule.json",
-    )
-    monkeypatch.setattr(
-        pilot, "validate_research_capsule", lambda *_args: calls.append("validate-capsule")
-    )
-    monkeypatch.setattr(
-        pilot,
-        "record_research_catalog",
-        lambda *_args: (calls.append("record-catalog") or "c" * 64, _Counter()),
-    )
-    monkeypatch.setattr(
-        pilot,
-        "write_research_catalog_migration_marker",
-        lambda *_args: calls.append("write-marker") or tmp_path / "marker.json",
-    )
+
+    def copy_catalog(*_args: object) -> tuple[_Counter, str]:
+        calls.append("copy-catalog")
+        return _Counter(), "a" * 64
+
+    def copy_raw(*_args: object) -> str:
+        calls.append("copy-raw")
+        return "b" * 64
+
+    def create_capsule(*_args: object) -> Path:
+        calls.append("create-capsule")
+        return tmp_path / "capsule.json"
+
+    def validate_capsule(*_args: object) -> None:
+        calls.append("validate-capsule")
+
+    def record_catalog(*_args: object) -> tuple[str, _Counter]:
+        calls.append("record-catalog")
+        return "c" * 64, _Counter()
+
+    def write_marker(*_args: object) -> Path:
+        calls.append("write-marker")
+        return tmp_path / "marker.json"
+
+    monkeypatch.setattr(pilot, "copy_research_catalog", copy_catalog)
+    monkeypatch.setattr(pilot, "copy_raw_research_evidence", copy_raw)
+    monkeypatch.setattr(pilot, "create_research_capsule", create_capsule)
+    monkeypatch.setattr(pilot, "validate_research_capsule", validate_capsule)
+    monkeypatch.setattr(pilot, "record_research_catalog", record_catalog)
+    monkeypatch.setattr(pilot, "write_research_catalog_migration_marker", write_marker)
 
     output = pipeline.run_prepare_recovery()
     assert output == paths["recovery_plan"]
@@ -617,11 +619,11 @@ def test_resolution_hash_uses_global_posix_path_order(tmp_path: Path) -> None:
     entries = [
         {
             "path": path.relative_to(tmp_path).as_posix(),
-            "sha256": pipeline.hashlib.sha256(path.read_bytes()).hexdigest(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
         for path in (diagnostics, resolved)
     ]
-    expected = pipeline.hashlib.sha256(pipeline._canonical(entries)).hexdigest()
+    expected = hashlib.sha256(pipeline._canonical(entries)).hexdigest()
     assert pipeline._resolution_sha256(tmp_path) == expected
 
 
@@ -994,7 +996,11 @@ def test_v4_packet_cannot_enter_legacy_training_before_phase_4e3b(
             "run",
         )
     binding = training.AcceptedPacketBinding(
-        *("0" * 64 for _ in range(5)),
+        packet_json_sha256="0" * 64,
+        accepted_train_dev_jsonl_sha256="0" * 64,
+        accepted_holdout_jsonl_sha256="0" * 64,
+        holdout_identities_json_sha256="0" * 64,
+        accepted_rows_sha256="0" * 64,
         train_dev_identities=(),
         holdout_identities=(),
         identities=(),
