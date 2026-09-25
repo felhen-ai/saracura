@@ -18,7 +18,7 @@ import stat
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -111,6 +111,16 @@ _ZERO_INVALID_INVARIANTS = {
     "family_overlaps": 0,
     "deterministic_repeat_mismatches": 0,
 }
+_GRANT_MANIFEST_PATH = (
+    Path(__file__).parents[1]
+    / "benchmarks/manifests/phase4e-saracura-universal-training-authorization.v1.json"
+)
+_GRANT_MANIFEST_NAME = (
+    "benchmarks/manifests/phase4e-saracura-universal-training-authorization.v1.json"
+)
+_GRANT_SPEC_NAME = "docs/action/specs/phase4e3b-first-owned-checkpoint.md"
+_POST_PILOT_POLICY_NAME = "benchmarks/manifests/phase4e-saracura-universal-policy.v2.json"
+_SOURCE_POLICY_V3_NAME = "benchmarks/manifests/training-data-source-policies.v3.json"
 
 
 class TrainingError(ValueError):
@@ -133,6 +143,218 @@ class V4ArtifactPaths:
     embeddings: Path
     training: Path
     reports: Path
+
+
+def _training_grant_consumptions_directory() -> Path:
+    return _holdout_release_registry_directory().parent / "training-grant-consumptions"
+
+
+def validate_v4_training_grant_bytes(raw: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise TrainingError("v4 training grant JSON") from error
+    if not isinstance(value, dict):
+        raise TrainingError("v4 training grant shape")
+    expected = {
+        "schema_version",
+        "id",
+        "task_id",
+        "spec_path",
+        "spec_sha256",
+        "workflow_revision",
+        "packet_manifest_sha256",
+        "sealed_report_sha256",
+        "policy_v2_sha256",
+        "registry_v3_sha256",
+        "authorizations",
+    }
+    if set(value) != expected:
+        raise TrainingError("v4 training grant shape")
+    auth = value["authorizations"]
+    expected_auth = {
+        "synthetic_generation_authorized",
+        "synthetic_research_training_authorized",
+        "canonical_training_authorized",
+        "blind_test_authorized",
+        "real_checkpoint_present",
+        "runtime_registration_authorized",
+        "calibration_authorized",
+        "publication_authorized",
+        "quality_claims_allowed",
+        "automation_authorized",
+    }
+    if (
+        not isinstance(auth, dict)
+        or set(auth) != expected_auth
+        or auth.get("synthetic_research_training_authorized") is not True
+        or any(
+            auth.get(key) is not False
+            for key in expected_auth - {"synthetic_research_training_authorized"}
+        )
+    ):
+        raise TrainingError("v4 training grant authorizations")
+    if (
+        value["schema_version"] != "phase4e-saracura-universal-training-authorization.v1"
+        or value["id"] != "phase4e-saracura-universal-training-authorization"
+        or value["task_id"] != "saracura-phase4e3b-first-checkpoint-v1"
+        or value["spec_path"] != _GRANT_SPEC_NAME
+        or value["workflow_revision"] != "phase4e-saracura-universal-synthetic.v2"
+    ):
+        raise TrainingError("v4 training grant identity")
+    for key in (
+        "spec_sha256",
+        "packet_manifest_sha256",
+        "sealed_report_sha256",
+        "policy_v2_sha256",
+        "registry_v3_sha256",
+    ):
+        if not _is_sha(value.get(key)):
+            raise TrainingError("v4 training grant digest")
+    return cast(dict[str, Any], value)
+
+
+def _validate_v4_training_grant_public_bytes(
+    grant_raw: bytes,
+    spec_raw: bytes,
+    policy_raw: bytes,
+    registry_raw: bytes,
+) -> dict[str, Any]:
+    grant = validate_v4_training_grant_bytes(grant_raw)
+    if _sha(spec_raw) != grant["spec_sha256"]:
+        raise TrainingError("v4 training grant spec digest")
+    if _sha(policy_raw) != grant["policy_v2_sha256"]:
+        raise TrainingError("v4 training grant policy binding")
+    if _sha(registry_raw) != grant["registry_v3_sha256"]:
+        raise TrainingError("v4 training grant registry binding")
+    if grant["packet_manifest_sha256"] != _V4_PACKET_MANIFEST_SHA256:
+        raise TrainingError("v4 training grant packet binding")
+    if grant["sealed_report_sha256"] != _V4_SEALED_REPORT_SHA256:
+        raise TrainingError("v4 training grant report binding")
+    return grant
+
+
+def validate_v4_training_grant_file(path: Path = _GRANT_MANIFEST_PATH) -> dict[str, Any]:
+    """Validate the checked-in grant against the current public source bytes."""
+
+    root = Path(__file__).parents[1]
+    try:
+        return _validate_v4_training_grant_public_bytes(
+            path.read_bytes(),
+            (root / _GRANT_SPEC_NAME).read_bytes(),
+            (root / _POST_PILOT_POLICY_NAME).read_bytes(),
+            (root / _SOURCE_POLICY_V3_NAME).read_bytes(),
+        )
+    except OSError as error:
+        raise TrainingError("v4 training grant") from error
+
+
+def _historical_v4_training_grant(source_commit: str) -> tuple[dict[str, Any], bytes]:
+    """Validate the grant entirely from immutable bytes at one reviewed commit."""
+
+    grant_raw = _git_show_bytes(source_commit, _GRANT_MANIFEST_NAME)
+    grant = _validate_v4_training_grant_public_bytes(
+        grant_raw,
+        _git_show_bytes(source_commit, _GRANT_SPEC_NAME),
+        _git_show_bytes(source_commit, _POST_PILOT_POLICY_NAME),
+        _git_show_bytes(source_commit, _SOURCE_POLICY_V3_NAME),
+    )
+    return grant, grant_raw
+
+
+def _validate_v4_training_grant(source_commit: str) -> tuple[dict[str, Any], str]:
+    """Validate current grant parity with the reviewed commit.
+
+    The grant's spec digest and policy/registry digests are checked against the
+    bytes recorded at the clean reviewed source commit.  The grant JSON itself
+    must also match the canonical file at that commit.
+    """
+
+    try:
+        grant_raw = _GRANT_MANIFEST_PATH.read_bytes()
+    except OSError as error:
+        raise TrainingError("v4 training grant") from error
+    grant, historical_raw = _historical_v4_training_grant(source_commit)
+    if historical_raw != grant_raw:
+        raise TrainingError("v4 training grant source parity")
+    return grant, _sha(historical_raw)
+
+
+def _validate_v4_grant_packet_binding(
+    grant: Mapping[str, Any], packet: Path, binding: AcceptedPacketBinding
+) -> None:
+    try:
+        plan = json.loads((packet / "plan.json").read_bytes())
+    except (OSError, ValueError) as error:
+        raise TrainingError("v4 training grant packet plan") from error
+    if (
+        not isinstance(plan, dict)
+        or plan.get("policy_sha256") != grant.get("policy_v2_sha256")
+        or plan.get("source_policy_registry_sha256") != grant.get("registry_v3_sha256")
+        or binding.packet_json_sha256 != grant.get("packet_manifest_sha256")
+        or binding.sealed_report_sha256 != grant.get("sealed_report_sha256")
+    ):
+        raise TrainingError("v4 training grant packet binding")
+
+
+def _grant_consumption_payload(
+    packet_json_sha256: str,
+    grant_digest: str,
+    source_commit: str,
+    code_ledger_digest: str,
+    architecture_revision: str,
+) -> bytes:
+    if not (
+        _is_sha(packet_json_sha256)
+        and _is_sha(grant_digest)
+        and _is_sha(code_ledger_digest)
+        and len(source_commit) == 40
+        and all(char in _HEX for char in source_commit)
+        and architecture_revision == CHECKPOINT_ARCHITECTURE_REVISION
+    ):
+        raise TrainingError("grant consumption record binding")
+    value: dict[str, str] = {
+        "schema_version": "phase4e-training-grant-consumption.v1",
+        "packet_json_sha256": packet_json_sha256,
+        "grant_digest": grant_digest,
+        "source_commit": source_commit,
+        "code_ledger_sha256": code_ledger_digest,
+        "architecture_revision": architecture_revision,
+        "consumption_sha256": "",
+    }
+    value["consumption_sha256"] = _sha(
+        _canonical({key: item for key, item in value.items() if key != "consumption_sha256"})
+    )
+    return _canonical(value) + b"\n"
+
+
+def _require_grant_consumption(
+    packet_json_sha256: str,
+    grant_digest: str,
+    source_commit: str,
+    code_ledger_digest: str,
+    architecture_revision: str,
+) -> None:
+    """Create or validate the one-revision grant consumption record.
+
+    Byte-identical re-entry under the same tuple is permitted.  Any other
+    tuple fails closed before embedding access.
+    """
+
+    payload = _grant_consumption_payload(
+        packet_json_sha256, grant_digest, source_commit, code_ledger_digest, architecture_revision
+    )
+    root = _training_grant_consumptions_directory()
+    target = root / f"{packet_json_sha256}.json"
+    try:
+        _create_secure_registry_file(target, payload, "training grant consumption")
+    except FileExistsError:
+        try:
+            existing = _read_secure_registry_file(target, "training grant consumption")
+        except (OSError, TrainingError) as error:
+            raise TrainingError("training grant consumption record") from error
+        if existing != payload:
+            raise TrainingError("different grant consumption record exists") from None
 
 
 def _canonical(value: object) -> bytes:
@@ -1200,7 +1422,13 @@ def extract_and_seal_embeddings(
         # Packet-v4 extraction is an artifact-creating operation.  Prove the
         # reviewed commit and the entire closed ledger before touching a
         # snapshot or deciding whether an existing capsule is reusable.
-        _source_commit, _source_ledger, source_receipt = _prepare_v4_source_ledger()
+        (
+            _source_commit,
+            _source_ledger,
+            source_receipt,
+            _grant,
+            _grant_digest,
+        ) = _prepare_v4_source_ledger()
     binding = validate_accepted_packet_binding(packet, report_dir=effective_report_dir)
     if paths is not None and output.exists():
         # A v4 extraction is reusable only when its complete immutable capsule
@@ -1790,32 +2018,55 @@ def _success_thresholds(policy: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+_BASE_TRAINING_CODE_SOURCE_NAMES = (
+    "benchmarks/saracura_universal_training.py",
+    "benchmarks/saracura_universal_corpus.py",
+    "benchmarks/phase4e_pipeline.py",
+    "benchmarks/saracura_universal_pilot.py",
+    "benchmarks/saracura_universal_policy.py",
+    "benchmarks/encoder_loader.py",
+    "benchmarks/encoder_registry.py",
+    "benchmarks/io.py",
+    "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json",
+    "benchmarks/manifests/phase4e-saracura-universal-policy.v2.json",
+    "benchmarks/manifests/encoder-candidates.v1.json",
+    "src/saracura/serialization.py",
+    "src/saracura/universal/checkpoint.py",
+    "src/saracura/universal/rendering.py",
+    "src/saracura/universal/tasks.py",
+    "uv.lock",
+)
+_V4_TRAINING_CODE_SOURCE_NAMES = (
+    *_BASE_TRAINING_CODE_SOURCE_NAMES,
+    _GRANT_MANIFEST_NAME,
+    _SOURCE_POLICY_V3_NAME,
+    "benchmarks/data_policy_registry.py",
+    _GRANT_SPEC_NAME,
+)
+
+
 def _training_code_sources() -> dict[str, str]:
     """Return the closed, deterministic dependency ledger for a training run."""
 
     root = Path(__file__).parents[1]
-    names = (
-        "benchmarks/saracura_universal_training.py",
-        "benchmarks/saracura_universal_corpus.py",
-        "benchmarks/phase4e_pipeline.py",
-        "benchmarks/saracura_universal_pilot.py",
-        "benchmarks/saracura_universal_policy.py",
-        "benchmarks/encoder_loader.py",
-        "benchmarks/encoder_registry.py",
-        "benchmarks/io.py",
-        "benchmarks/manifests/phase4e-saracura-universal-policy.v1.json",
-        "benchmarks/manifests/phase4e-saracura-universal-policy.v2.json",
-        "benchmarks/manifests/encoder-candidates.v1.json",
-        "src/saracura/serialization.py",
-        "src/saracura/universal/checkpoint.py",
-        "src/saracura/universal/rendering.py",
-        "src/saracura/universal/tasks.py",
-        "uv.lock",
-    )
     try:
-        return {name: _sha((root / name).read_bytes()) for name in names}
+        return {name: _sha((root / name).read_bytes()) for name in _BASE_TRAINING_CODE_SOURCE_NAMES}
     except OSError as error:
         raise TrainingError("training code source") from error
+
+
+def _v4_training_code_sources() -> dict[str, str]:
+    """Return the v4-specific closed ledger, preserving the base v2/v3 source set."""
+
+    base = _training_code_sources()
+    root = Path(__file__).parents[1]
+    extended = dict(base)
+    try:
+        for name in _V4_TRAINING_CODE_SOURCE_NAMES[len(_BASE_TRAINING_CODE_SOURCE_NAMES) :]:
+            extended[name] = _sha((root / name).read_bytes())
+    except OSError as error:
+        raise TrainingError("v4 training code source") from error
+    return extended
 
 
 def _training_code_digest() -> str:
@@ -1956,20 +2207,23 @@ def _clean_reviewed_source_commit() -> str:
     return head
 
 
-def _prepare_v4_source_ledger() -> tuple[str, dict[str, str], dict[str, Any]]:
+def _prepare_v4_source_ledger() -> tuple[str, dict[str, str], dict[str, Any], dict[str, Any], str]:
     """Bind a v4 operation to the clean reviewed commit, never mutable HEAD.
 
     ``code_sources`` is first read from the working tree and then compared to
     bytes returned by ``git show`` at the exact reviewed ``origin/main``
     commit.  This makes an independently verified capsule durable after HEAD
     moves, while still rejecting any local divergence before extraction and
-    again before training.
+    again before training.  The v4 ledger adds the grant, spec, and registry-v3
+    to the base source set.  Returns the grant digest as the fourth element.
     """
 
     source_commit = _clean_reviewed_source_commit()
-    code_sources = _training_code_sources()
+    code_sources = _v4_training_code_sources()
     verify_historical_code_sources(source_commit, code_sources)
-    return source_commit, code_sources, _validate_v4_source_receipts(source_commit)
+    source_receipt = _validate_v4_source_receipts(source_commit)
+    grant, grant_digest = _validate_v4_training_grant(source_commit)
+    return source_commit, code_sources, source_receipt, grant, grant_digest
 
 
 def verify_historical_code_sources(source_commit: str, code_sources: Mapping[str, object]) -> None:
@@ -1982,10 +2236,18 @@ def verify_historical_code_sources(source_commit: str, code_sources: Mapping[str
 
     if not source_commit or any(char not in "0123456789abcdef" for char in source_commit):
         raise TrainingError("historical source commit")
-    expected_names = set(_training_code_sources())
-    if set(code_sources) != expected_names or not all(
-        _is_sha(value) for value in code_sources.values()
-    ):
+    # Expected names are constants so historical verification never depends on
+    # current working-tree files merely to determine the closed schema.
+    base_names = set(_BASE_TRAINING_CODE_SOURCE_NAMES)
+    v4_names = set(_V4_TRAINING_CODE_SOURCE_NAMES)
+    actual_names = set(code_sources)
+    if actual_names == base_names:
+        expected_names = base_names
+    elif actual_names == v4_names:
+        expected_names = v4_names
+    else:
+        raise TrainingError("historical code sources")
+    if not all(_is_sha(value) for value in code_sources.values()):
         raise TrainingError("historical code sources")
     root = Path(__file__).parents[1]
     for name in sorted(expected_names):
@@ -3111,28 +3373,99 @@ def train_and_seal(
     *,
     report_dir: Path | None = None,
 ) -> Path:
-    """Train only from packet text re-derived on an explicit verified device."""
+    """Dispatch v4 through its exact grant while preserving the legacy gate."""
 
-    require_phase4e_authorization("synthetic_research_training")
+    _packet_raw, packet_manifest = _packet_manifest(accepted_packet_path)
+    schema = packet_manifest.get("schema_version")
+    if schema != "phase4e-accepted-packet.v4":
+        # Legacy behavior remains governed by its original reviewed NO-GO.
+        # Only packet.json was opened to select this branch.
+        require_phase4e_authorization("synthetic_research_training")
+        accepted_packet = validate_accepted_packet_binding(
+            accepted_packet_path, report_dir=report_dir
+        )
+        return _train_and_seal_impl(
+            capsule_path,
+            accepted_packet_path,
+            snapshot_path,
+            device,
+            output_parent,
+            output_name,
+            report_dir=report_dir,
+            paths=None,
+            accepted_packet=accepted_packet,
+            source_commit=None,
+            source_ledger=None,
+            source_receipt=None,
+            grant_digest=None,
+            registry_lock_held=False,
+        )
+
     paths = _require_v4_layout(
         accepted_packet_path,
+        packet_schema=cast(str, schema),
         embeddings=capsule_path,
         output_parent=output_parent,
         output_name=output_name,
         report_dir=report_dir,
     )
-    effective_report_dir = paths.reports if paths is not None else report_dir
-    source_commit: str | None = None
-    source_ledger: dict[str, str] | None = None
-    if paths is not None:
-        source_commit, source_ledger, source_receipt = _prepare_v4_source_ledger()
-    else:
-        source_receipt = None
-    # This must precede every embedding read.  A receipt inside the capsule is
-    # only a copied binding; it is never an authority to train.
+    if paths is None:  # pragma: no cover - guarded by schema dispatch
+        raise AssertionError("v4 layout dispatch")
+    source_commit, source_ledger, source_receipt, grant, grant_digest = _prepare_v4_source_ledger()
     accepted_packet = validate_accepted_packet_binding(
-        accepted_packet_path, report_dir=effective_report_dir
+        accepted_packet_path, report_dir=paths.reports
     )
+    _validate_v4_grant_packet_binding(grant, accepted_packet_path, accepted_packet)
+    code_ledger_digest = _sha(_canonical(source_ledger))
+    # The one packet lock begins before grant consumption or embedding access
+    # and remains held through pre-holdout publication or terminal sealing.
+    with _holdout_registry_lock(accepted_packet.packet_json_sha256):
+        _require_grant_consumption(
+            accepted_packet.packet_json_sha256,
+            grant_digest,
+            source_commit,
+            code_ledger_digest,
+            CHECKPOINT_ARCHITECTURE_REVISION,
+        )
+        return _train_and_seal_impl(
+            capsule_path,
+            accepted_packet_path,
+            snapshot_path,
+            device,
+            output_parent,
+            output_name,
+            report_dir=paths.reports,
+            paths=paths,
+            accepted_packet=accepted_packet,
+            source_commit=source_commit,
+            source_ledger=source_ledger,
+            source_receipt=source_receipt,
+            grant_digest=grant_digest,
+            registry_lock_held=True,
+        )
+
+
+def _train_and_seal_impl(
+    capsule_path: Path,
+    accepted_packet_path: Path,
+    snapshot_path: Path,
+    device: str,
+    output_parent: Path,
+    output_name: str,
+    *,
+    report_dir: Path | None,
+    paths: V4ArtifactPaths | None,
+    accepted_packet: AcceptedPacketBinding,
+    source_commit: str | None,
+    source_ledger: dict[str, str] | None,
+    source_receipt: Mapping[str, object] | None,
+    grant_digest: str | None,
+    registry_lock_held: bool,
+) -> Path:
+    """Train from a pre-authorized binding; v4 callers already hold its lock."""
+
+    # This is the first embedding read.  V4 reaches it only after the canonical
+    # grant-consumption record has been created under the packet lock.
     capsule = validate_embedding_capsule(
         capsule_path,
         accepted_packet,
@@ -3172,9 +3505,17 @@ def train_and_seal(
         # Repeat the proof immediately before deterministic training.  No
         # source change or branch movement may appear between extraction
         # verification and the irreversible training lane.
-        repeated_commit, repeated_ledger, _repeated_receipt = _prepare_v4_source_ledger()
+        (
+            repeated_commit,
+            repeated_ledger,
+            _repeated_receipt,
+            _repeated_grant,
+            repeated_grant_digest,
+        ) = _prepare_v4_source_ledger()
         if repeated_commit != source_commit or repeated_ledger != source_ledger:
             raise TrainingError("packet-v4 reviewed source commit")
+        if repeated_grant_digest != grant_digest:
+            raise TrainingError("packet-v4 grant digest")
     first, ledger, selected = _run_once(train, dev, policy)
     second, second_ledger, second_selected = _run_once(train, dev, policy)
     if (
@@ -3229,6 +3570,10 @@ def train_and_seal(
         "outcome": "",
         "manifest_sha256": "",
     }
+    if paths is not None:
+        if grant_digest is None:
+            raise TrainingError("packet-v4 grant binding")
+        common_manifest["grant_digest"] = grant_digest
     base_files = {
         "checkpoint.safetensors": first,
         "epoch-ledger.json": _canonical(ledger) + b"\n",
@@ -3274,7 +3619,12 @@ def train_and_seal(
         if set(files) != _PRE_HOLDOUT_FAILED_OUTPUT_FILES:
             raise AssertionError("pre-holdout output file set")
         return _write_capsule(output_parent, output_name, files)
-    with _holdout_registry_lock(accepted_packet.packet_json_sha256):
+    holdout_lock = (
+        nullcontext()
+        if registry_lock_held
+        else _holdout_registry_lock(accepted_packet.packet_json_sha256)
+    )
+    with holdout_lock:
         _reconcile_or_refuse_prior_claim(accepted_packet, output_parent, output_name)
         _claim_holdout_once(accepted_packet, capsule, checkpoint_sha256, gate_descriptor_sha256)
         try:
@@ -3401,8 +3751,10 @@ def verify_training_capsule(path: Path) -> dict[str, Any]:
         "dev_gates",
         "manifest_sha256",
     }
+    source_commit = manifest.get("source_commit")
+    expected_manifest_fields = required | ({"grant_digest"} if source_commit is not None else set())
     if (
-        set(manifest) != required
+        set(manifest) != expected_manifest_fields
         or manifest["schema_version"] != "phase4e-training-manifest.v2"
         or manifest["synthetic_only"] is not True
         or manifest["outcome"] not in {"pre_holdout_failed", "holdout_failed", "passed"}
@@ -3447,6 +3799,7 @@ def verify_training_capsule(path: Path) -> dict[str, Any]:
             manifest["sealed_report_sha256"] is not None
             and not _is_sha(manifest["sealed_report_sha256"])
         )
+        or (source_commit is not None and not _is_sha(manifest.get("grant_digest")))
     ):
         raise TrainingError("training manifest binding")
     if manifest["source_commit"] is None:
@@ -3463,6 +3816,13 @@ def verify_training_capsule(path: Path) -> dict[str, Any]:
         if manifest["code_sha256"] != _sha(_canonical(manifest["code_sources"])):
             raise TrainingError("training manifest binding")
         _verify_v4_training_capsule_receipt(manifest, _json(path / "accepted-packet-receipt.json"))
+        # A rehashed capsule cannot substitute a different grant or spec:
+        # independent verification derives both from the recorded commit.
+        _historical_grant, historical_grant_raw = _historical_v4_training_grant(
+            manifest["source_commit"]
+        )
+        if manifest["grant_digest"] != _sha(historical_grant_raw):
+            raise TrainingError("v4 training grant digest binding")
     gate_raw = (path / "pre-holdout-gate.json").read_bytes()
     gate = _validate_pre_holdout_gate_descriptor(gate_raw)
     if (

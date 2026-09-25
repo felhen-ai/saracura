@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import socket
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -15,6 +16,10 @@ import pytest
 from benchmarks import saracura_universal_training as training
 from benchmarks.encoder_loader import LoadedEncoder
 from benchmarks.encoder_registry import get_candidate
+from benchmarks.saracura_universal_policy import Phase4EPolicyError
+from benchmarks.saracura_universal_policy import (
+    require_phase4e_authorization as real_require_phase4e_authorization,
+)
 
 pytestmark = pytest.mark.skipif(
     not all(importlib.util.find_spec(name) is not None for name in ("torch", "safetensors")),
@@ -614,10 +619,16 @@ def test_verify_v4_training_capsule_rejects_rehashed_receipt_tampering(
         "uv_lock_sha256": "b" * 64,
     }
     source_commit = "d" * 40
+    grant_raw = training._GRANT_MANIFEST_PATH.read_bytes()
     monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", sealed_report)
     monkeypatch.setattr(training, "verify_historical_code_sources", lambda *_args: None)
     monkeypatch.setattr(
         training, "_historical_v4_encoder_receipt", lambda commit: historical_receipt
+    )
+    monkeypatch.setattr(
+        training,
+        "_historical_v4_training_grant",
+        lambda _commit: (json.loads(grant_raw), grant_raw),
     )
     receipt = json.loads((output / "accepted-packet-receipt.json").read_bytes())
     receipt["sealed_report_sha256"] = sealed_report
@@ -626,6 +637,7 @@ def test_verify_v4_training_capsule_rejects_rehashed_receipt_tampering(
     manifest = json.loads((output / "training-manifest.json").read_bytes())
     manifest["source_commit"] = source_commit
     manifest["sealed_report_sha256"] = sealed_report
+    manifest["grant_digest"] = training._sha(grant_raw)
     (output / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
     _reseal_training_capsule(output)
     assert training.verify_training_capsule(output)["source_commit"] == source_commit
@@ -650,6 +662,7 @@ def test_verify_v4_training_capsule_requires_pinned_report_in_receipt_and_manife
     )
     output = training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
     sealed_report = "c" * 64
+    grant_raw = training._GRANT_MANIFEST_PATH.read_bytes()
     historical_receipt = {
         "registry_sha256": "a" * 64,
         "candidate": get_candidate("multilingual-minilm-l12").model_dump(mode="json"),
@@ -660,11 +673,20 @@ def test_verify_v4_training_capsule_requires_pinned_report_in_receipt_and_manife
     monkeypatch.setattr(
         training, "_historical_v4_encoder_receipt", lambda _commit: historical_receipt
     )
+    monkeypatch.setattr(
+        training,
+        "_historical_v4_training_grant",
+        lambda _commit: (json.loads(grant_raw), grant_raw),
+    )
     receipt = json.loads((output / "accepted-packet-receipt.json").read_bytes())
     receipt.update(sealed_report_sha256="e" * 64, encoder_receipt=historical_receipt)
     (output / "accepted-packet-receipt.json").write_bytes(training._canonical(receipt) + b"\n")
     manifest = json.loads((output / "training-manifest.json").read_bytes())
-    manifest.update(source_commit="d" * 40, sealed_report_sha256=sealed_report)
+    manifest.update(
+        source_commit="d" * 40,
+        sealed_report_sha256=sealed_report,
+        grant_digest=training._sha(grant_raw),
+    )
     (output / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
     _reseal_training_capsule(output)
     with pytest.raises(training.TrainingError, match="accepted packet receipt"):
@@ -769,22 +791,39 @@ def test_registry_lanes_reject_symlinked_existing_ancestors(
                 pass
 
 
+def _record_validate_training_grant(calls: list[str]) -> Any:
+    def _validate(source_commit: str) -> tuple[dict[str, object], str]:
+        calls.append(source_commit)
+        return {"id": "grant"}, training._sha(b"grant-bytes")
+
+    return _validate
+
+
 def test_v4_source_ledger_is_bound_to_reviewed_commit_not_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = "a" * 40
     ledger = {"benchmarks/saracura_universal_training.py": "b" * 64}
+    grant_digest = training._sha(b"grant-bytes")
     calls: list[object] = []
+    source_calls: list[str] = []
     monkeypatch.setattr(training, "_clean_reviewed_source_commit", lambda: source)
-    monkeypatch.setattr(training, "_training_code_sources", lambda: ledger)
+    monkeypatch.setattr(training, "_v4_training_code_sources", lambda: ledger)
     monkeypatch.setattr(
         training,
         "verify_historical_code_sources",
         lambda commit, sources: calls.append((commit, sources)),
     )
     monkeypatch.setattr(training, "_validate_v4_source_receipts", lambda commit: {"commit": commit})
-    assert training._prepare_v4_source_ledger() == (source, ledger, {"commit": source})
+    monkeypatch.setattr(
+        training,
+        "_validate_v4_training_grant",
+        _record_validate_training_grant(source_calls),
+    )
+    result = training._prepare_v4_source_ledger()
+    assert result == (source, ledger, {"commit": source}, {"id": "grant"}, grant_digest)
     assert calls == [(source, ledger)]
+    assert source_calls == [source]
 
 
 def test_differing_gate_for_same_v4_revision_is_refused(
@@ -987,3 +1026,245 @@ def test_postclaim_failure_seals_invalid_terminal(
         training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
     terminal = training._read_holdout_terminal(binding.packet_json_sha256)
     assert terminal is not None and terminal["outcome"] == "holdout_invalid"
+
+
+def test_grant_manifest_rejects_missing_or_tampered_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grant = json.loads(training._GRANT_MANIFEST_PATH.read_bytes())
+    training.validate_v4_training_grant_bytes(training._GRANT_MANIFEST_PATH.read_bytes())
+    tampered = json.loads(json.dumps(grant))
+    tampered["authorizations"]["synthetic_research_training_authorized"] = False
+    with pytest.raises(training.TrainingError, match="v4 training grant authorizations"):
+        training.validate_v4_training_grant_bytes(json.dumps(tampered).encode())
+    tampered = json.loads(json.dumps(grant))
+    tampered["authorizations"]["runtime_registration_authorized"] = True
+    with pytest.raises(training.TrainingError, match="v4 training grant authorizations"):
+        training.validate_v4_training_grant_bytes(json.dumps(tampered).encode())
+    tampered = json.loads(json.dumps(grant))
+    del tampered["authorizations"]
+    with pytest.raises(training.TrainingError, match="v4 training grant shape"):
+        training.validate_v4_training_grant_bytes(json.dumps(tampered).encode())
+    tampered = json.loads(json.dumps(grant))
+    tampered["packet_manifest_sha256"] = None
+    with pytest.raises(training.TrainingError, match="v4 training grant digest"):
+        training.validate_v4_training_grant_bytes(json.dumps(tampered).encode())
+
+
+def test_legacy_training_dispatch_still_reaches_real_historical_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packet = tmp_path / "packet"
+    packet.mkdir()
+    (packet / "packet.json").write_bytes(
+        training._canonical({"schema_version": "phase4e-accepted-packet.v3"})
+    )
+    monkeypatch.setattr(
+        training, "require_phase4e_authorization", real_require_phase4e_authorization
+    )
+    with pytest.raises(Phase4EPolicyError, match="not authorized before a reviewed pilot PASS"):
+        training.train_and_seal(
+            tmp_path / "capsule",
+            packet,
+            tmp_path / "snapshot",
+            "cpu",
+            tmp_path / "out",
+            "run",
+        )
+
+
+def test_v4_consumes_grant_under_one_lock_before_training_impl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packet = tmp_path / "packet"
+    packet.mkdir()
+    (packet / "packet.json").write_bytes(
+        training._canonical({"schema_version": "phase4e-accepted-packet.v4"})
+    )
+    paths = training.V4ArtifactPaths(
+        packet,
+        tmp_path / "embedding-capsule-v1",
+        tmp_path / "training-capsule-v1",
+        tmp_path / "reports" / "ptbr-recovery-v1",
+    )
+    binding = training.AcceptedPacketBinding(
+        packet_json_sha256="a" * 64,
+        accepted_train_dev_jsonl_sha256="b" * 64,
+        accepted_holdout_jsonl_sha256="c" * 64,
+        holdout_identities_json_sha256="d" * 64,
+        accepted_rows_sha256="e" * 64,
+        train_dev_identities=(),
+        holdout_identities=(),
+        identities=(),
+        sealed_report_sha256="f" * 64,
+    )
+    source_commit = "1" * 40
+    source_ledger = {"source": "2" * 64}
+    grant = {
+        "packet_manifest_sha256": binding.packet_json_sha256,
+        "sealed_report_sha256": binding.sealed_report_sha256,
+    }
+    grant_digest = "3" * 64
+    calls: list[str] = []
+
+    monkeypatch.setattr(training, "_require_v4_layout", lambda *_args, **_kwargs: paths)
+    monkeypatch.setattr(
+        training,
+        "_prepare_v4_source_ledger",
+        lambda: (source_commit, source_ledger, {"encoder": "receipt"}, grant, grant_digest),
+    )
+    monkeypatch.setattr(
+        training, "validate_accepted_packet_binding", lambda *_args, **_kwargs: binding
+    )
+    monkeypatch.setattr(
+        training,
+        "_validate_v4_grant_packet_binding",
+        lambda *_args: calls.append("grant-binding"),
+    )
+
+    @contextmanager
+    def one_lock(_digest: str) -> Any:
+        calls.append("lock-enter")
+        try:
+            yield
+        finally:
+            calls.append("lock-exit")
+
+    monkeypatch.setattr(training, "_holdout_registry_lock", one_lock)
+    monkeypatch.setattr(
+        training,
+        "_require_grant_consumption",
+        lambda *_args: calls.append("grant-consumption"),
+    )
+
+    def run_impl(*_args: object, **kwargs: object) -> Path:
+        assert kwargs["registry_lock_held"] is True
+        calls.append("training-impl")
+        return paths.training
+
+    monkeypatch.setattr(training, "_train_and_seal_impl", run_impl)
+    result = training.train_and_seal(
+        paths.embeddings,
+        packet,
+        tmp_path / "snapshot",
+        "cpu",
+        paths.training.parent,
+        paths.training.name,
+    )
+    assert result == paths.training
+    assert calls == [
+        "grant-binding",
+        "lock-enter",
+        "grant-consumption",
+        "training-impl",
+        "lock-exit",
+    ]
+
+
+def test_grant_consumption_record_is_create_only_and_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    releases = tmp_path / "releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: releases)
+    grant_dir = releases.parent / "training-grant-consumptions"
+    packet_digest = "a" * 64
+    grant_digest = "b" * 64
+    source_commit = "c" * 40
+    code_ledger = "d" * 64
+    training._require_grant_consumption(
+        packet_digest, grant_digest, source_commit, code_ledger, "saracura-universal-ranker.v0"
+    )
+    target = grant_dir / (packet_digest + ".json")
+    assert training._read_secure_registry_file(target, "training grant consumption")
+    payload = json.loads(target.read_bytes())
+    assert payload["grant_digest"] == grant_digest
+    # Byte-identical re-entry is allowed
+    training._require_grant_consumption(
+        packet_digest, grant_digest, source_commit, code_ledger, "saracura-universal-ranker.v0"
+    )
+    # Different grant digest fails
+    with pytest.raises(training.TrainingError, match="different grant consumption record exists"):
+        training._require_grant_consumption(
+            packet_digest, "e" * 64, source_commit, code_ledger, "saracura-universal-ranker.v0"
+        )
+    # Different source commit fails
+    with pytest.raises(training.TrainingError, match="different grant consumption record exists"):
+        training._require_grant_consumption(
+            packet_digest, grant_digest, "f" * 40, code_ledger, "saracura-universal-ranker.v0"
+        )
+    # Different code ledger fails
+    with pytest.raises(training.TrainingError, match="different grant consumption record exists"):
+        training._require_grant_consumption(
+            packet_digest, grant_digest, source_commit, "1" * 64, "saracura-universal-ranker.v0"
+        )
+    # Different architecture revision fails
+    with pytest.raises(training.TrainingError, match="grant consumption record binding"):
+        training._require_grant_consumption(
+            packet_digest, grant_digest, source_commit, code_ledger, "different-revision.v1"
+        )
+    # Symlinked directory fails
+    other_releases = tmp_path / "other" / "releases"
+    monkeypatch.setattr(training, "_holdout_release_registry_directory", lambda: other_releases)
+    registry_dir = other_releases.parent
+    registry_dir.mkdir(parents=True)
+    symlink_target = tmp_path / "safe-target"
+    symlink_target.mkdir()
+    target_symlink = registry_dir / "training-grant-consumptions"
+    target_symlink.symlink_to(symlink_target, target_is_directory=True)
+    with pytest.raises(training.TrainingError, match="training grant consumption"):
+        training._require_grant_consumption(
+            "2" * 64, grant_digest, source_commit, code_ledger, "saracura-universal-ranker.v0"
+        )
+
+
+def test_v4_training_manifest_rejects_rehashed_grant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capsule, packet, snapshot, _binding = _fixture(tmp_path, monkeypatch)
+    _extract(capsule, packet, snapshot)
+    _passing_run(monkeypatch)
+    monkeypatch.setattr(
+        training, "_holdout_release_registry_directory", lambda: tmp_path / "releases"
+    )
+    output = training.train_and_seal(capsule, packet, snapshot, "cpu", tmp_path / "out", "run")
+    sealed_report = "c" * 64
+    monkeypatch.setattr(training, "_V4_SEALED_REPORT_SHA256", sealed_report)
+    monkeypatch.setattr(training, "verify_historical_code_sources", lambda *_args: None)
+    historical_receipt = {
+        "registry_sha256": "a" * 64,
+        "candidate": get_candidate("multilingual-minilm-l12").model_dump(mode="json"),
+        "uv_lock_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(
+        training, "_historical_v4_encoder_receipt", lambda _commit: historical_receipt
+    )
+    grant_path = (
+        training._GRANT_MANIFEST_PATH.parents[0]
+        / "phase4e-saracura-universal-training-authorization.v1.json"
+    )
+    grant_digest = training._sha(grant_path.read_bytes())
+
+    receipt = json.loads((output / "accepted-packet-receipt.json").read_bytes())
+    receipt["sealed_report_sha256"] = sealed_report
+    receipt["encoder_receipt"] = json.loads(json.dumps(historical_receipt))
+    (output / "accepted-packet-receipt.json").write_bytes(training._canonical(receipt) + b"\n")
+    manifest = json.loads((output / "training-manifest.json").read_bytes())
+    manifest["source_commit"] = "d" * 40
+    manifest["sealed_report_sha256"] = sealed_report
+    manifest["grant_digest"] = grant_digest
+    (output / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
+    _reseal_training_capsule(output)
+    # Correct grant digest passes
+    monkeypatch.setattr(
+        training,
+        "_historical_v4_training_grant",
+        lambda _commit: (json.loads(grant_path.read_bytes()), grant_path.read_bytes()),
+    )
+    assert training.verify_training_capsule(output)["source_commit"] == "d" * 40
+
+    # A wrong grant digest fails historical verification
+    manifest["grant_digest"] = "e" * 64
+    (output / "training-manifest.json").write_bytes(training._canonical(manifest) + b"\n")
+    _reseal_training_capsule(output)
+    with pytest.raises(training.TrainingError, match="v4 training grant digest binding"):
+        training.verify_training_capsule(output)
