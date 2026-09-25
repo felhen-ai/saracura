@@ -9,14 +9,16 @@ status: current
 canonical: docs/action/phase4e-execution.md
 globalRef: qmd://saracura/docs/action/phase4e-execution.md
 reviewCadenceDays: 14
-lastReviewedAt: 2026-09-24
+lastReviewedAt: 2026-09-25
 sourceRefs:
   - docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
+  - docs/action/specs/phase4e3a-v4-ptbr-transport-recovery.md
   - benchmarks/manifests/training-data-source-policies.v1.json
   - benchmarks/manifests/training-data-source-policies.v2.json
   - benchmarks/manifests/phase4e-spend-baseline.v1.json
 related:
   - docs/action/specs/phase4e-saracura-owned-universal-checkpoint.md
+  - docs/action/specs/phase4e3a-v4-ptbr-transport-recovery.md
   - benchmarks/manifests/phase4e-spend-baseline.v1.json
 supersedes: []
 supersededBy: []
@@ -29,15 +31,15 @@ sensitivity: public
 
 Phase 4E.2 is complete with a `PASS`. V12 resolved all 140 precommitted tasks, accepted 134, met every global, locale and option-count gate, and recorded no operational or privacy failure. This result authorizes the Phase 4E.3 training/checkpoint increment; it does not by itself register the planned runtime backend or authorize automation.
 
-The first Phase 4E.3A corpus execution completed all 1,600 planned identities but ended `NO-GO` before packet sealing. It accepted 1,457 rows and passed every split, domain, cardinality, family and complete-pair gate, but the 848 accepted PT-BR rows represented only 58.2% of the accepted corpus, below the fixed 60% locale minimum. No training packet, checkpoint or holdout report was created, and holdout content was not opened. Phase 4E.3 remains blocked pending a separately reviewed, disjoint PT-BR recovery increment.
+The first Phase 4E.3A corpus execution completed all 1,600 planned identities but ended `NO-GO` before packet sealing because its 848 accepted PT-BR rows represented only 58.2% of the accepted corpus. The separately reviewed v4 recovery then resolved 100 new disjoint PT-BR identities, accepted 95, rejected 5 and sealed a combined packet with 1,552 accepted rows, including 943 PT-BR rows (60.7603%). No identity attached to an uncertain or failed call was replayed. This closes Phase 4E.3A and authorizes only a separately reviewed Phase 4E.3B checkpoint increment; training, calibration, holdout evaluation and runtime registration have not started.
 
-## Cumulative spend through 2026-09-24
+## Cumulative spend through 2026-09-25
 
 The local research history contains 46 `corpus-work*` directories and 2,117 charged ledger entries: 2,099 settled and 18 open reservations. Provider-reported cost is USD 0.81263107. Conservative debit is USD 5.12153043, which already includes USD 0.01971612 from the 18 open reservations. These figures are fixed in `benchmarks/manifests/phase4e-spend-baseline.v1.json`.
 
 The former USD 17.00 cumulative authorization and per-run caps are historical v1 controls only. The operator removed the financial ceiling for subsequent research execution. V2 therefore records actual provider cost and conservative debit without using either value to authorize, block or stop work. The operator is informed whenever run-local provider-reported spend crosses another USD 10 and at run completion.
 
-The v1 pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The v2 pilot reported USD 0.10454764 and conservatively debited USD 0.96313398. Post-v2 cumulative totals are USD 0.92030516 provider-reported and USD 6.11642935 conservative. No corpus or training spend was incurred.
+The v1 pilot reported USD 0.00312645 and conservatively debited USD 0.03176494. The v2 pilot reported USD 0.10454764 and conservatively debited USD 0.96313398. Post-v2 cumulative totals are USD 0.92030516 provider-reported and USD 6.11642935 conservative. Corpus-v3 and its v4 recovery reported USD 6.57710960 and USD 0.4477648 respectively, for USD 7.02487440 in actual corpus-generation cost. No run crossed the USD 10 reporting milestone, and no training spend has been incurred.
 
 ## Registry digests
 
@@ -295,3 +297,29 @@ Packet sealing failed closed on `locale_minimum`. Therefore no accepted packet a
 The 11,055-file work tree occupies 8.9 GB and remains intact at `.artifacts/phase4e/corpus-work-v47` on the external development SSD. A create-only copy to the previous internal research root was byte/count verified, but filled the internal volume and was removed after verification; the source evidence was preserved. The existing catalog validator also loaded every cumulative ledger snapshot simultaneously and consumed approximately 15 GB of memory. Its chain validation now streams one transition at a time, but corpus-v3 is intentionally not cataloged until the recovery increment establishes a durable external or configurable private-artifact root and a compact retention policy.
 
 The recovery increment must keep corpus-v3 immutable, never replay the 81 uncertain calls, generate only new disjoint PT-BR identities, stop cleanly behind a consecutive-uncertainty circuit breaker, preserve balanced ordering, emit a failure report even when packet sealing fails, and combine only accepted v3 plus accepted supplemental rows into a new create-only packet. The estimated deficit is 66 net accepted PT-BR rows; the recovery plan should overprovision approximately 100 new PT-BR tasks while preserving all existing split, cardinality, domain, privacy and blindness gates.
+
+## Phase 4E.3A v4 PT-BR recovery outcome
+
+The reviewed v4 recovery migrated the immutable corpus-v3 evidence into a configured private external state root, retained a compact research capsule and generated exactly 100 new disjoint PT-BR identities. The live execution accepted 95 supplemental rows and rejected 5, producing the combined sealed result:
+
+- 1,552 accepted, 148 rejected and 0 unresolved rows;
+- 943 accepted PT-BR and 609 accepted English rows, placing PT-BR at 60.7603%;
+- 95 supplemental acceptances and 5 supplemental rejections;
+- USD 0.4477648 supplemental provider-reported cost and USD 2.1465188 supplemental conservative debit;
+- 0 transport-uncertain supplemental calls and no open recovery error.
+
+The first paid author response settled before a missing local ML dependency caused local validation to fail. Recovery recorded that identity as `author_validation_failure`, did not replay it and continued only after the implementation added a complete tokenizer preflight and reusable verified receipt. The remaining four supplemental rejections were ordinary content-quality or deduplication outcomes. Existing corpus-v3 identities, including all 81 identities linked to uncertain calls, remained immutable and were never retried.
+
+The packet passed the sealing gates without opening holdout content. Its public-safe evidence bindings are:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| recovery plan file | `f78cff36f9d9818022feefc4a8c508f1267223bdd2cd641c65fafa9a3500412b` |
+| report-bound recovery plan | `a302b51d9eb9095de77b66f0da9ee0422e290687bd99e9b6abf1a5d2f3b551f1` |
+| supplemental resolution | `32a78f39a7f746f7b5d2f9fc2315ef2d9ef216a607c2337856017c3fadd1ab75` |
+| supplemental ledger | `b29b53f21ed4e3add28301bc16d15f1c1eb045cfa2c0df6c5019340a6b01a076` |
+| final research inventory | `5cd3c66ec9163867e7b5d4a715182496d3df6bde05348906b1c6d13229091a29` |
+| sealed report file | `4f20120c5bd3f74fbc014cf85a9aef0cc1b2dcec1dcdd66fe804ae50ff03973c` |
+| sealed packet manifest | `3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239` |
+
+Phase 4E.3A is complete. The sealed packet is eligible as input to a separately reviewed Phase 4E.3B training and checkpoint increment. It does not itself prove checkpoint quality, calibration, latency or runtime fitness, and it does not authorize automation or runtime registration.
