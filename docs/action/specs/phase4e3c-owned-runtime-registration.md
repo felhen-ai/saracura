@@ -91,6 +91,8 @@ The intended execution sequence is: parse request bytes; validate API/schema/wor
 
 Add one closed package resource for the approved Saracura universal candidate. Its parser rejects duplicate JSON keys, unknown fields, aliases, alternate revisions, uppercase or malformed hashes and any candidate count other than one. It pins the table above plus the exact expected training-capsule filename set. The registry contains metadata only and is included byte-for-byte in wheel/sdist inspection.
 
+The exact 14-file runtime capsule set is `accepted-packet-receipt.json`, `architecture.json`, `capsule-descriptor.json`, `checkpoint.safetensors`, `conformance-manifest.json`, `conformance-vectors.safetensors`, `dependency-versions.json`, `dev-selection.json`, `embedding-descriptor.json`, `epoch-ledger.json`, `holdout-release.json`, `holdout-report.json`, `pre-holdout-gate.json` and `training-manifest.json`. The descriptor ledger contains the other 13 names in sorted order. No `.npy`, split conformance file, renamed manifest or synthesized runtime capsule format is compatible.
+
 The full request revision uses the internal canonical training-manifest digest, not the raw file digest: `phase4e-saracura-ranker.v1.<manifest_sha256>`. No `latest`, branch, tag, shortened digest or caller-defined model identity is accepted.
 
 ### 2. Installed capsule verifier
@@ -108,6 +110,8 @@ Add an installed, ML-free verifier for the explicit sealed training-capsule dire
 - retain only immutable in-memory bytes and public metadata after the verified descriptor closes, so later model construction never reopens a caller path.
 
 The installed verifier must not run Git, inspect the working tree, read the Phase 4E private-root configuration, discover caches, import `benchmarks`, access holdout registries or require a source checkout. Exact approved hashes replace those training-time provenance dependencies at the installed boundary. Errors map to one public `BACKEND_UNAVAILABLE` envelope without paths, filenames, tensor values or private metadata.
+
+The conformance artifact is exactly one safetensors mapping with `context_embeddings:[14,384]` FP32, `criterion_embeddings:[14,8,384]` FP32, `option_masks:[14,8]` uint8, `option_counts:[14]` int64 and `expected_logits:[14,8]` FP32. Its manifest schema is `phase4e-conformance-manifest.v1`; the ordered cells are `pt-BR:2` through `pt-BR:8`, then `en:2` through `en:8`. Runtime verification must match the training-time contract in `benchmarks/saracura_universal_training.py:3883-3963` rather than define a new wire format.
 
 ### 3. Explicit `saracura-universal` backend
 
