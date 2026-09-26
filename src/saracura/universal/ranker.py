@@ -1,7 +1,7 @@
 """Pure-Python variable-option ranker math used by Phase 4E fake-encoder tests.
 
-This is deliberately not a backend.  It loads no model and registers no CLI;
-Phase 4E.3 will bind verified MiniLM embeddings and checkpoint tensors.
+This is deliberately not a backend.  The installed runtime uses the torch
+implementation in :mod:`saracura.universal.runtime_ranker` after verification.
 """
 
 from __future__ import annotations

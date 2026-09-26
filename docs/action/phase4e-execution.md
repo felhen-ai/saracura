@@ -366,3 +366,46 @@ The public-safe evidence bindings are:
 A separate read-only verifier returned success for the exact file set, private file modes, historical source ledger, capsule bindings, claim and sealed `passed` terminal. The capsule contains the Saracura projection checkpoint and public-safe evidence, not the frozen encoder weights, raw rows, holdout identities, provider payloads, local paths, optimizer state or secrets.
 
 Phase 4E.3B is therefore complete. This is evidence of checkpoint quality on the precommitted synthetic corpus and holdout, not a calibrated confidence claim or a production benchmark. Phase 4E.3C must separately review runtime artifact discovery, CPU/MPS inference parity, latency, packaging and research-only response semantics before the backend can be registered. Calibration, publication and automation remain out of scope and unauthorized.
+
+## Phase 4E.3C owned runtime registration
+
+Phase 4E.3C registers the sealed Phase 4E.3B result as the opt-in local
+`saracura-universal` backend for exactly
+`universal-choice@phase4e-saracura-ranker.v1`. The installed package carries
+only the closed candidate registry: it requires explicit verified MiniLM and
+training-capsule locations, makes no download or network request, and never
+bundles a checkpoint, conformance vector, raw row, holdout identity or private
+path. Responses remain uncalibrated abstained ranking weights with
+`automation_allowed=false`.
+
+Read-only live QA ran the historical training-time capsule verifier once, then
+independently re-read the exact 14-file sealed capsule through the installed
+verifier, confirmed every registry binding and the recorded source-commit
+object, and passed CPU projection conformance. It compared the two committed public smoke
+requests against the historical training encoder/projection path: unpadded
+token IDs and attention-mask extents matched, embeddings and logits passed
+`rtol=1e-5, atol=1e-6`, and ordered rankings matched. Separate CPU lifecycles
+were deterministic. Separate MPS lifecycles were available, deterministic,
+preserved the ordered choice IDs, and passed cross-device logits at
+`rtol=1e-4, atol=1e-5`; no fallback was enabled.
+
+The offline QA command was
+`uv run --extra universal-local python -m benchmarks.saracura_universal_runtime_qa --encoder-snapshot <verified-minilm-snapshot> --training-capsule <sealed-saracura-capsule> --device both`.
+It ran three warmups and twenty
+measured single-question decisions per available device. The observed CPU/MPS
+cold preparation, warm p50/p95, throughput and peak RSS were recorded for this
+environment only; they establish no speed claim or acceptance threshold.
+The Python 3.14.5 environment measured the following aggregate results for the
+two public four-choice requests; no input text, tensor, score, private path or
+private artifact content was retained in this record:
+
+| Device | Cold prepare (ms) | Warm p50/p95 (ms) | Decisions/s | Peak RSS (bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| CPU | 7983.463 | 28.570 / 29.665 | 17.447 | 2516533248 |
+| MPS | 3366.741 | 11.410 / 18.200 | 41.961 | 2288484352 |
+
+`describe-backend` performs the same full preparation and conformance work and
+therefore has the same class of cold-start cost. The checked local package
+versions were torch 2.14.0, safetensors 0.8.0, transformers 4.57.6 and
+tokenizers 0.22.2. Calibration, public publication and automation remain out
+of scope and unauthorized.

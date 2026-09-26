@@ -8,14 +8,22 @@ import sys
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, Never, cast
+from typing import TYPE_CHECKING, Any, Literal, Never, cast
 
 from saracura.backends import (
     DeterministicFixtureBackend,
-    LayaUniversalBackend,
     MiniLMRoutingBackend,
+    SaracuraUniversalBackend,
 )
 from saracura.backends.base import BackendCapabilities
+from saracura.backends.saracura_universal import (
+    SaracuraBackendError,
+    VerifiedSaracuraCapsule,
+    load_saracura_candidate,
+    validate_saracura_model_identity,
+    validate_saracura_request_structure,
+    verify_training_capsule,
+)
 from saracura.calibration import (
     ResearchCalibrationArtifact,
     create_identity_calibration,
@@ -23,7 +31,6 @@ from saracura.calibration import (
     validate_calibration_compatibility,
 )
 from saracura.contracts import ErrorCode, SaracuraError, parse_request_json
-from saracura.laya_snapshot import load_laya_candidate
 from saracura.runtime import (
     MINILM_ROUTING_WORKFLOW_ID,
     MINILM_ROUTING_WORKFLOW_REVISION,
@@ -33,11 +40,15 @@ from saracura.runtime import (
 )
 from saracura.runtime.engine import MAX_STATE_PAYLOAD_BYTES, calibration_context
 from saracura.runtime.workflows import (
+    SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION,
     UNIVERSAL_CHOICE_WORKFLOW_ID,
     UNIVERSAL_CHOICE_WORKFLOW_REVISION,
 )
 from saracura.serialization import serialize_state
 from saracura.verified_bytes import read_public_external_file
+
+if TYPE_CHECKING:
+    from saracura.backends.laya import LayaUniversalBackend
 
 MAX_REQUEST_BYTES = 1_000_000
 _LAYA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
@@ -52,10 +63,38 @@ _LAYA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
         {(UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION)}
     ),
 )
+_SARACURA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
+    execution_tier="universal",
+    decision_types=frozenset({"choice"}),
+    max_questions=10,
+    max_criteria=8,
+    execution_boundary="preconstruction-saracura-universal",
+    cold_warm_semantics="not-loaded",
+    quality_claims=False,
+    dynamic_workflows=frozenset(
+        {(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)}
+    ),
+)
 
 
 class _ArgumentFailure(ValueError):
     """A parser failure rendered through the normal JSON error envelope."""
+
+
+def _load_laya_backend() -> type[LayaUniversalBackend]:
+    """Load the opt-in Laya implementation only for a Laya command."""
+
+    from saracura.backends.laya import LayaUniversalBackend
+
+    return LayaUniversalBackend
+
+
+def load_laya_candidate() -> Any:
+    """Load Laya metadata only when the Phase 4D command is selected."""
+
+    from saracura.laya_snapshot import load_laya_candidate as load_candidate
+
+    return load_candidate()
 
 
 class _NonExitingArgumentParser(argparse.ArgumentParser):
@@ -90,7 +129,9 @@ def _parser() -> argparse.ArgumentParser:
 
     decide = commands.add_parser("decide", help="run a local research-only backend")
     decide.add_argument(
-        "--backend", choices=("fixture", "minilm-routing", "laya-universal"), default="fixture"
+        "--backend",
+        choices=("fixture", "minilm-routing", "laya-universal", "saracura-universal"),
+        default="fixture",
     )
     decide.add_argument("--request", type=Path, required=True)
     decide.add_argument("--calibration", type=Path)
@@ -102,7 +143,11 @@ def _parser() -> argparse.ArgumentParser:
         "describe-backend",
         help="load a local backend and emit its public immutable reference",
     )
-    describe.add_argument("--backend", choices=("minilm-routing", "laya-universal"), required=True)
+    describe.add_argument(
+        "--backend",
+        choices=("minilm-routing", "laya-universal", "saracura-universal"),
+        required=True,
+    )
     _add_minilm_arguments(describe)
     _add_laya_arguments(describe)
 
@@ -154,19 +199,73 @@ def _require_laya_arguments(values: argparse.Namespace) -> LayaUniversalBackend:
         )
     if getattr(values, "calibration", None) is not None or any(
         getattr(values, name, None) is not None
-        for name in ("encoder_snapshot", "training_manifest", "checkpoint", "training_capsule")
+        for name in (
+            "encoder_snapshot",
+            "training_manifest",
+            "checkpoint",
+            "training_capsule",
+        )
     ):
         raise SaracuraError(
             ErrorCode.REQUEST_INVALID,
-            "Laya universal commands reject calibration and MiniLM-only arguments.",
+            "Laya universal commands reject calibration and MiniLM/Saracura arguments.",
             "/backend",
         )
-    return LayaUniversalBackend(model_snapshot=values.model_snapshot, device=values.device)
+    return _load_laya_backend()(model_snapshot=values.model_snapshot, device=values.device)
+
+
+def _saracura_artifact_paths(
+    values: argparse.Namespace,
+) -> tuple[Path, Path, Literal["cpu", "mps"]]:
+    if any(
+        getattr(values, name, None) is None
+        for name in ("encoder_snapshot", "training_capsule", "device")
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            (
+                "Saracura universal commands require"
+                " explicit encoder-snapshot, training-capsule, and device."
+            ),
+            "/",
+        )
+    if getattr(values, "calibration", None) is not None or any(
+        getattr(values, name, None) is not None
+        for name in ("model_snapshot", "training_manifest", "checkpoint")
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "Saracura universal commands reject calibration, Laya, and MiniLM-only arguments.",
+            "/backend",
+        )
+    return values.encoder_snapshot, values.training_capsule, values.device
+
+
+def _require_saracura_arguments(
+    values: argparse.Namespace, *, verified_capsule: VerifiedSaracuraCapsule | None = None
+) -> SaracuraUniversalBackend:
+    encoder_snapshot, training_capsule, device = _saracura_artifact_paths(values)
+    if verified_capsule is not None:
+        return SaracuraUniversalBackend._from_verified_capsule(
+            encoder_snapshot=encoder_snapshot,
+            verified_capsule=verified_capsule,
+            device=device,
+        )
+    return SaracuraUniversalBackend(
+        encoder_snapshot=encoder_snapshot,
+        training_capsule=training_capsule,
+        device=device,
+    )
 
 
 def _backend_for_decide(
     values: argparse.Namespace,
-) -> DeterministicFixtureBackend | MiniLMRoutingBackend | LayaUniversalBackend:
+) -> (
+    DeterministicFixtureBackend
+    | MiniLMRoutingBackend
+    | LayaUniversalBackend
+    | SaracuraUniversalBackend
+):
     if values.backend == "fixture":
         if values.calibration is None:
             raise SaracuraError(
@@ -193,6 +292,8 @@ def _backend_for_decide(
         return DeterministicFixtureBackend()
     if values.backend == "laya-universal":
         return _require_laya_arguments(values)
+    if values.backend == "saracura-universal":
+        return _require_saracura_arguments(values)
     if values.calibration is None:
         raise SaracuraError(
             ErrorCode.REQUEST_INVALID,
@@ -209,9 +310,12 @@ def _backend_for_decide(
 
 
 def _prevalidate_request(
-    request_path: Path, *, execution_tier: Literal["compiled", "universal"]
+    request_path: Path,
+    *,
+    execution_tier: Literal["compiled", "universal"],
+    capabilities: BackendCapabilities | None = None,
 ) -> tuple[Any, bytes]:
-    """Validate every request-only Laya gate before optional backend construction."""
+    """Validate every request-only gate before optional backend construction."""
 
     request = parse_request_json(read_public_external_file(request_path, maximum=MAX_REQUEST_BYTES))
     if execution_tier == "compiled" and len(request.questions) != 1:
@@ -220,12 +324,20 @@ def _prevalidate_request(
             "The local CLI accepts one calibration artifact and one question.",
             "/questions",
         )
+    resolved_capabilities = (
+        capabilities
+        if capabilities is not None
+        else (_LAYA_PREVALIDATION_CAPABILITIES if execution_tier == "universal" else None)
+    )
     default_workflows().validate(
         request,
         execution_tier=execution_tier,
-        capabilities=_LAYA_PREVALIDATION_CAPABILITIES if execution_tier == "universal" else None,
+        capabilities=resolved_capabilities,
     )
-    if request.model in {"latest", "main", "master"}:
+    if (
+        request.model in {"latest", "main", "master"}
+        and capabilities is not _SARACURA_PREVALIDATION_CAPABILITIES
+    ):
         raise SaracuraError(
             ErrorCode.MODEL_ALIAS_FORBIDDEN,
             "The immutable model revision is not available.",
@@ -261,13 +373,18 @@ def _prevalidate_request(
             raise SaracuraError(
                 ErrorCode.REQUEST_INVALID, "Universal input must already be NFC.", "/"
             )
-        candidate = load_laya_candidate()
-        if request.model != candidate.model_revision:
-            raise SaracuraError(
-                ErrorCode.MODEL_NOT_FOUND,
-                "The immutable model revision is not available.",
-                "/model",
-            )
+        if capabilities is _SARACURA_PREVALIDATION_CAPABILITIES:
+            # Model identity is intentionally deferred.  The next Saracura
+            # step must verify the sealed capsule, then compare its candidate.
+            validate_saracura_request_structure(request)
+        else:
+            candidate = load_laya_candidate()
+            if request.model != candidate.model_revision:
+                raise SaracuraError(
+                    ErrorCode.MODEL_NOT_FOUND,
+                    "The immutable model revision is not available.",
+                    "/model",
+                )
     return request, state_payload
 
 
@@ -388,6 +505,47 @@ def _run_describe(values: argparse.Namespace) -> int:
             return 0
         finally:
             backend.close()
+    if values.backend == "saracura-universal":
+        saracura_backend = _require_saracura_arguments(values)
+        try:
+            saracura_backend.prepare()
+            candidate = load_saracura_candidate()
+            payload = {
+                "model": saracura_backend.model.model_dump(mode="json"),
+                "execution_tier": "universal",
+                "execution_boundary": "explicit-verified-local-saracura-universal",
+                "encoder": {
+                    "id": candidate.foundation_encoder,
+                    "revision": candidate.encoder_revision,
+                    "snapshot_complete_sha256": candidate.encoder_snapshot_complete_sha256,
+                },
+                "tokenizer_revision": "minilm-verified-bytes.v1",
+                "renderer_revision": "phase4e-universal-renderer.v1",
+                "architecture": candidate.architecture,
+                "device": values.device,
+                "workflow": {
+                    "id": "universal-choice",
+                    "revision": "phase4e-saracura-ranker.v1",
+                    "locales": ["pt-BR", "en"],
+                    "question_type": "choice",
+                    "questions": {"minimum": 1, "maximum": 10},
+                    "criteria_per_question": {"minimum": 2, "maximum": 8},
+                },
+                "disposition": candidate.disposition,
+                "conformance": "passed",
+                "response": {
+                    "status": "uncalibrated",
+                    "score_semantics": "ranking_weights",
+                    "abstained": True,
+                    "reason": "uncalibrated_research",
+                    "calibration": None,
+                    "automation_allowed": False,
+                },
+            }
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            return 0
+        finally:
+            saracura_backend.close()
     if values.model_snapshot is not None:
         raise SaracuraError(
             ErrorCode.REQUEST_INVALID,
@@ -415,7 +573,11 @@ def _run_laya_decide(values: argparse.Namespace) -> int:
     """Run the explicit Laya lane, constructing it only after request-only gates."""
 
     try:
-        request, _state_payload = _prevalidate_request(values.request, execution_tier="universal")
+        request, _state_payload = _prevalidate_request(
+            values.request,
+            execution_tier="universal",
+            capabilities=_LAYA_PREVALIDATION_CAPABILITIES,
+        )
         backend = _require_laya_arguments(values)
         try:
             response = DecisionEngine(
@@ -431,6 +593,45 @@ def _run_laya_decide(values: argparse.Namespace) -> int:
         public = SaracuraError(ErrorCode.REQUEST_INVALID, "Input file was not found.", "/")
     except SaracuraError as error:
         public = error
+    except OSError:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Local input could not be read.", "/")
+    except Exception:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Unexpected internal error.", "/")
+    _print_error(public)
+    return 2
+
+
+def _run_saracura_decide(values: argparse.Namespace) -> int:
+    """Run the explicit Saracura lane, constructing it only after request-only gates."""
+
+    try:
+        request, _state_payload = _prevalidate_request(
+            values.request,
+            execution_tier="universal",
+            capabilities=_SARACURA_PREVALIDATION_CAPABILITIES,
+        )
+        _encoder_snapshot, training_capsule, _device = _saracura_artifact_paths(values)
+        verified_capsule = verify_training_capsule(training_capsule)
+        validate_saracura_model_identity(request, verified_capsule.candidate)
+        backend = _require_saracura_arguments(values, verified_capsule=verified_capsule)
+        try:
+            response = DecisionEngine(
+                backend=backend,
+                workflows=default_workflows(),
+                calibrations={},
+            ).decide(request, include_timing=values.timing)
+            print(response.model_dump_json(indent=2, exclude_none=False))
+            return 0
+        finally:
+            backend.close()
+    except FileNotFoundError:
+        public = SaracuraError(ErrorCode.REQUEST_INVALID, "Input file was not found.", "/")
+    except SaracuraError as error:
+        public = error
+    except SaracuraBackendError:
+        public = SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE, "Saracura backend is unavailable.", "/model"
+        )
     except OSError:
         public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Local input could not be read.", "/")
     except Exception:
@@ -480,6 +681,8 @@ def main(argv: list[str] | None = None) -> int:
         if values.command == "decide":
             if values.backend == "laya-universal":
                 return _run_laya_decide(values)
+            if values.backend == "saracura-universal":
+                return _run_saracura_decide(values)
             if values.calibration is None:
                 raise SaracuraError(
                     ErrorCode.REQUEST_INVALID,

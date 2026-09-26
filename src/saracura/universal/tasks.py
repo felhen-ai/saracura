@@ -1,4 +1,4 @@
-"""Closed synthetic-task contract for the planned Phase 4E ranker."""
+"""Closed synthetic-task contract for the installed Phase 4E ranker."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def _require_nfc(value: JsonValue) -> None:
 
 
 class UniversalTask(ClosedModel):
-    """One ordered Choice ranking task; training rows add provenance in Phase 4E.2."""
+    """One ordered Choice ranking task for synthetic training and test fixtures."""
 
     task_id: Identifier
     family_id: Identifier

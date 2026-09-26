@@ -1,7 +1,7 @@
-"""Closed descriptor validator for a future Saracura-only checkpoint.
+"""Closed descriptor validator for the installed Saracura-only checkpoint.
 
-The validator accepts metadata only in Phase 4E.1.  It deliberately does not
-open safetensors or permit a fixture/random tensor payload to look trained.
+It validates the immutable decision-head structure without importing a ML
+runtime; the explicit backend owns safetensors decoding and artifact binding.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class CheckpointDescriptor(ClosedModel):
 
 
 def validate_checkpoint_descriptor(value: object) -> CheckpointDescriptor:
-    """Validate metadata; actual weights stay unavailable until Phase 4E.3."""
+    """Validate the closed checkpoint metadata before tensor decoding."""
 
     return CheckpointDescriptor.model_validate(value)
 

@@ -448,7 +448,7 @@ def _entry_names(directory_descriptor: int) -> set[str]:
         raise VerifiedBytesError("operator directory cannot be enumerated safely") from error
 
 
-def _read_snapshot(snapshot: Path, candidate: MiniLMCandidate) -> Mapping[str, bytes]:
+def _read_snapshot(snapshot: Path, candidate: MiniLMCandidate) -> tuple[Mapping[str, bytes], bytes]:
     directory, _ = _open_directory(snapshot)
     try:
         expected_names = {item.name for item in candidate.files} | {"snapshot.complete.json"}
@@ -487,7 +487,7 @@ def _read_snapshot(snapshot: Path, candidate: MiniLMCandidate) -> Mapping[str, b
             raise VerifiedBytesError("snapshot exceeds the descriptor total-byte limit")
         if _entry_names(directory) != expected_names:
             raise VerifiedBytesError("snapshot changed while being read")
-        return MappingProxyType(values)
+        return MappingProxyType(values), marker_bytes
     finally:
         os.close(directory)
 
@@ -556,7 +556,23 @@ def read_verified_minilm_snapshot(
     """
 
     candidate = load_minilm_candidate()
-    return candidate, _read_snapshot(encoder_snapshot, candidate)
+    snapshot, _marker = _read_snapshot(encoder_snapshot, candidate)
+    return candidate, snapshot
+
+
+def read_verified_minilm_snapshot_with_marker(
+    encoder_snapshot: Path,
+) -> tuple[MiniLMCandidate, Mapping[str, bytes], bytes]:
+    """Read one verified MiniLM snapshot and retain its bound completion marker.
+
+    The marker is read in the same descriptor pass as the exact registry-bound
+    files. Callers can bind a second package-owned candidate to its raw digest
+    without reopening an operator-selected path.
+    """
+
+    candidate = load_minilm_candidate()
+    snapshot, marker = _read_snapshot(encoder_snapshot, candidate)
+    return candidate, snapshot, marker
 
 
 def open_verified_directory(path: Path) -> int:
@@ -1365,7 +1381,7 @@ def load_verified_minilm_bytes(
             )
             if manifest.get("schema_version") == "human-training-manifest.v1":
                 raise VerifiedBytesError("human runtime requires a sealed training capsule")
-        snapshot = _read_snapshot(encoder_snapshot, candidate)
+        snapshot, _marker = _read_snapshot(encoder_snapshot, candidate)
         return VerifiedMiniLMBytes(
             snapshot=snapshot,
             training_manifest=manifest,

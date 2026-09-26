@@ -47,9 +47,9 @@ English is the canonical language for technical documentation. The quickstart, p
 - local in-process runtime and CLI
 - one opt-in experimental `laya-universal` backend for the exact dynamic Choice workflow
 - opt-in research lanes for encoder acquisition, synthetic head training, human PT-BR calibration, and external controls
-- planned-only Phase 4E policy and deterministic ranker contracts; no `saracura-universal` runtime is installed
+- opt-in `saracura-universal` for exactly `universal-choice@phase4e-saracura-ranker.v1`, using explicit verified private artifacts only
 
-Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, `saracura-universal`, dynamic labels outside the exact experimental Phase 4D Choice workflow, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, or production automation. The planned `universal-choice@phase4e-saracura-ranker.v1` contract is unsupported until Phase 4E.3 seals a real checkpoint that passes its holdout gate. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
+Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels outside the exact Phase 4D and Phase 4E Choice workflows, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, calibration, confidence thresholds, public checkpoint publication, or production automation. The installed Saracura-owned backend is opt-in, synthetic-only and research-only; it requires an operator-provided verified MiniLM snapshot and sealed training capsule, returns uncalibrated abstained ranking weights, and never authorizes automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
 ## Two-tier research architecture
 
@@ -179,16 +179,21 @@ any other mailbox change. The candidate remains
 execution compatibility only, not quality, calibration, licensing, or
 production readiness.
 
-## Phase 4E planned Saracura-owned universal checkpoint
+## Phase 4E Saracura-owned universal checkpoint
 
-Phase 4E.1 adds only offline policy, rendering, ranker, checkpoint, and
-backend/workflow compatibility contracts for a future Saracura-owned universal
-ranker. It does not download a MiniLM snapshot, call a provider, generate a
-corpus, train a checkpoint, or register `saracura-universal` in the CLI or
-runtime. The future `universal-choice@phase4e-saracura-ranker.v1` workflow is
-therefore planned and unsupported until Phase 4E.3 seals a real synthetic-only
-checkpoint and it passes the reviewed holdout gate. Laya remains an external
-control, never a teacher, checkpoint source, or Saracura-owned model.
+Phase 4E.3C installs `saracura-universal` only for the sealed
+`universal-choice@phase4e-saracura-ranker.v1` checkpoint. It accepts explicit
+local paths only after descriptor, manifest, snapshot and conformance checks;
+the package contains metadata, never weights, vectors, raw rows or a capsule.
+It is synthetic-only research infrastructure, is uncalibrated and abstained,
+and cannot enable automation. Laya remains an external control, never a
+teacher, checkpoint source, or Saracura-owned model.
+
+```bash
+saracura decide --backend saracura-universal --request examples/ptbr-saracura-request.json \
+  --encoder-snapshot <verified-minilm-snapshot> \
+  --training-capsule <sealed-saracura-capsule> --device cpu
+```
 
 ### Phase 4E operator lane
 

@@ -23,6 +23,8 @@ UNIVERSAL_CHOICE_WORKFLOW_ID = "universal-choice"
 UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4d-laya.v1"
 SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4e-saracura-ranker.v1"
 _UNIVERSAL_CHOICE_LOCALES = frozenset({"pt-BR", "en"})
+_UNIVERSAL_CHOICE_MAX_QUESTIONS = 10
+_UNIVERSAL_CHOICE_MAX_CRITERIA = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +50,10 @@ class WorkflowRegistry:
         key = (request.workflow.id, request.workflow.revision)
         schema = self._schemas.get(key)
         if schema is None:
-            if key == (UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION):
+            if key in (
+                (UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION),
+                (UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
+            ):
                 return self._validate_universal_choice(request, execution_tier, capabilities)
             raise SaracuraError(
                 ErrorCode.WORKFLOW_UNSUPPORTED,
@@ -115,16 +120,22 @@ class WorkflowRegistry:
                 "The dynamic workflow is not verified for the requested locale.",
                 "/locale",
             )
-        if len(request.questions) > 10:
+        # The workflow contract remains capped at ten questions even when a
+        # generic universal test backend advertises a higher internal limit.
+        # A registered backend may impose a lower criterion capacity (the
+        # Phase 4E Saracura checkpoint permits eight rather than Laya's 20).
+        maximum_questions = 10 if capabilities is None else min(10, capabilities.max_questions)
+        maximum_criteria = 20 if capabilities is None else min(20, capabilities.max_criteria)
+        if len(request.questions) > maximum_questions:
             raise SaracuraError(
                 ErrorCode.CARDINALITY_EXCEEDED,
                 "Dynamic universal workflows support at most ten questions.",
                 "/questions",
             )
-        if any(len(question.criteria) > 20 for question in request.questions):
+        if any(len(question.criteria) > maximum_criteria for question in request.questions):
             raise SaracuraError(
                 ErrorCode.CARDINALITY_EXCEEDED,
-                "Dynamic universal workflow criteria exceed the reviewed limit.",
+                "Dynamic universal workflow criteria exceed the backend limit.",
                 "/questions/*/criteria",
             )
         return WorkflowSchema(
