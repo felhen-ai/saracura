@@ -1,11 +1,14 @@
-"""Canonical byte-length-framed renderer for planned Phase 4E tasks."""
+"""Canonical byte-length-framed renderer for installed Phase 4E tasks."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
+from pydantic import JsonValue
+
+from saracura.contracts.models import ChoiceCriterion
 from saracura.serialization import canonical_json_bytes
 from saracura.universal.tasks import UniversalTask
 
@@ -49,19 +52,38 @@ def _render(*segments: bytes | str) -> str:
 def render_task(task: UniversalTask) -> RenderedTask:
     """Render context once and criteria in declared order, with no implicit sorting."""
 
+    return render_choice(
+        locale=task.locale,
+        domain=task.domain,
+        instruction=task.instruction,
+        state=task.state,
+        criteria=task.criteria,
+    )
+
+
+def render_choice(
+    *,
+    locale: str,
+    domain: str,
+    instruction: str,
+    state: object,
+    criteria: tuple[ChoiceCriterion, ...],
+) -> RenderedTask:
+    """Render a runtime Choice without inventing training-row provenance fields."""
+
     context = _render(
         RENDERER_REVISION,
         "context",
-        task.locale,
-        task.domain,
-        task.instruction,
-        canonical_json_bytes(task.state),
+        locale,
+        domain,
+        instruction,
+        canonical_json_bytes(cast(JsonValue, state)),
     )
-    criteria = tuple(
+    rendered_criteria = tuple(
         _render(RENDERER_REVISION, "criterion", criterion.id, criterion.description)
-        for criterion in task.criteria
+        for criterion in criteria
     )
-    return RenderedTask(context=context, criteria=criteria)
+    return RenderedTask(context=context, criteria=rendered_criteria)
 
 
 def validate_rendered_capacity(rendered: RenderedTask, counter: TokenCounter) -> None:
@@ -76,6 +98,6 @@ def validate_rendered_capacity(rendered: RenderedTask, counter: TokenCounter) ->
 
 
 def rendered_bytes(rendered: RenderedTask) -> Sequence[bytes]:
-    """Expose exact UTF-8 framed bytes for a future tokenizer adapter."""
+    """Expose exact UTF-8 framed bytes for deterministic tokenizer checks."""
 
     return (rendered.context.encode("utf-8"), *(item.encode("utf-8") for item in rendered.criteria))

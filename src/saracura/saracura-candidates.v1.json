@@ -1,0 +1,38 @@
+{
+  "schema_version": "saracura-candidates.v1",
+  "candidates": [
+    {
+      "id": "saracura/universal-ranker",
+      "model_revision": "phase4e-saracura-ranker.v1.f1d72c34cc535ddefbf7e24cf45d1be6e0aee40ba881228b4edd092d78640d5e",
+      "checkpoint_sha256": "6914195d5526fb7b629eedaac7f33ae04f77eccd8448c75fed9104ccc57b728c",
+      "training_manifest_internal_sha256": "f1d72c34cc535ddefbf7e24cf45d1be6e0aee40ba881228b4edd092d78640d5e",
+      "training_manifest_file_sha256": "1daee9317425007a408646fdf07747fe5b5b59e6ef20104788bc577c659e1afb",
+      "capsule_descriptor_file_sha256": "44693fc40beb64c3c556b8f411c8f4f5e04088388ab24660b47340a09af03801",
+      "capsule_descriptor_internal_sha256": "036e6c6dc85d8b7d619de6e7f7fc943975a088ae5be1c27e5c786b57be9b7a64",
+      "conformance_manifest_file_sha256": "e2406ce5119f8261fd15224ceaf831c35e34004ffd0920b6d4fd0aca7196640a",
+      "conformance_vectors_sha256": "7682148b18edc3058ce2038300234c243c973dc06bf2f2ba0b7c7913fa7a0bde",
+      "architecture": "saracura-universal-ranker.v0",
+      "foundation_encoder": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "encoder_revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+      "encoder_snapshot_complete_sha256": "62827e84e66f4546f996b7ac92f01c0bf96e322e309618d69101f1925fe5b823",
+      "training_source_commit": "cbff1989c2c3f802f4b4186c65f339466310296c",
+      "disposition": "synthetic_only_research",
+      "capsule_files": [
+        "accepted-packet-receipt.json",
+        "architecture.json",
+        "capsule-descriptor.json",
+        "checkpoint.safetensors",
+        "conformance-manifest.json",
+        "conformance-vectors.safetensors",
+        "dependency-versions.json",
+        "dev-selection.json",
+        "embedding-descriptor.json",
+        "epoch-ledger.json",
+        "holdout-release.json",
+        "holdout-report.json",
+        "pre-holdout-gate.json",
+        "training-manifest.json"
+      ]
+    }
+  ]
+}

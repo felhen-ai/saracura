@@ -1,7 +1,10 @@
-"""Planned Phase 4E universal-ranker contracts with no runtime registration.
+"""Phase 4E universal-ranker contracts registered by the saracura-universal backend.
 
-The package intentionally contains deterministic schemas and math only.  It
-does not load an encoder, checkpoint, optional ML dependency, or backend.
+The package contains deterministic schemas, math, and checkpoint validation.
+The installed ``SaracuraUniversalBackend`` binds verified MiniLM embeddings and
+the sealed Phase 4E projection checkpoint.  The backend is opt-in, requires
+private verified artifacts, and returns only uncalibrated abstained research-safe
+rankings.  Calibration, automation and public model publication remain out of scope.
 """
 
 from saracura.universal.checkpoint import (

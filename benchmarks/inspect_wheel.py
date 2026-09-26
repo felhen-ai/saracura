@@ -13,6 +13,7 @@ PACKAGE_RESOURCES = {
     "saracura/laya-candidate.v1.json",
     "saracura/minilm-conformance.v1.json",
     "saracura/research-trust-keys.v1.json",
+    "saracura/saracura-candidates.v1.json",
 }
 ROOT = Path(__file__).parents[1]
 PACKET_BASENAMES = {

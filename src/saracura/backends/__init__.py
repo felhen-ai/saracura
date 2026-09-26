@@ -1,5 +1,7 @@
 """Backend protocols, fixture, and the opt-in local MiniLM backend."""
 
+from typing import TYPE_CHECKING, Any
+
 from saracura.backends.base import (
     Backend,
     BackendCalibrationMetadata,
@@ -10,8 +12,22 @@ from saracura.backends.base import (
     UniversalBackend,
 )
 from saracura.backends.fixture import DeterministicFixtureBackend
-from saracura.backends.laya import LayaUniversalBackend
 from saracura.backends.minilm import MiniLMRoutingBackend
+from saracura.backends.saracura_universal import SaracuraUniversalBackend
+
+if TYPE_CHECKING:
+    from saracura.backends.laya import LayaUniversalBackend
+
+
+def __getattr__(name: str) -> Any:
+    """Keep Laya's public export without loading it for unrelated backends."""
+
+    if name == "LayaUniversalBackend":
+        from saracura.backends.laya import LayaUniversalBackend
+
+        return LayaUniversalBackend
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "Backend",
@@ -22,6 +38,7 @@ __all__ = [
     "ExecutionTier",
     "LayaUniversalBackend",
     "MiniLMRoutingBackend",
+    "SaracuraUniversalBackend",
     "ScoredChoice",
     "UniversalBackend",
 ]

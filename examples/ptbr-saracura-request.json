@@ -1,0 +1,40 @@
+{
+  "api_version": "v1alpha1",
+  "model": "phase4e-saracura-ranker.v1.f1d72c34cc535ddefbf7e24cf45d1be6e0aee40ba881228b4edd092d78640d5e",
+  "mode": "research",
+  "locale": "pt-BR",
+  "domain": "customer_support",
+  "workflow": {
+    "id": "universal-choice",
+    "revision": "phase4e-saracura-ranker.v1"
+  },
+  "state": {
+    "subject": "Produto não funciona após atualização",
+    "summary": "Cliente relata falha após upgrade de versão"
+  },
+  "questions": [
+    {
+      "id": "support-triage",
+      "type": "choice",
+      "instruction": "Classifique a solicitação de suporte na categoria mais adequada.",
+      "criteria": [
+        {
+          "id": "technical",
+          "description": "Falha técnica ou bug no produto."
+        },
+        {
+          "id": "billing",
+          "description": "Cobrança, faturamento ou pagamento."
+        },
+        {
+          "id": "account",
+          "description": "Acesso, credenciais ou perfil do usuário."
+        },
+        {
+          "id": "general",
+          "description": "Dúvida geral ou solicitação de informação."
+        }
+      ]
+    }
+  ]
+}

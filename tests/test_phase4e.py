@@ -510,30 +510,16 @@ def test_laya_cli_prevalidation_rejects_phase4e_workflow_before_candidate_access
     assert captured.value.payload.code == ErrorCode.WORKFLOW_UNSUPPORTED
 
 
-def test_phase4e_workflow_contract_is_unsupported_before_backend_access() -> None:
+def test_phase4e_workflow_contract_is_admitted_only_for_matching_universal_backend() -> None:
     backend = _FakeUniversalBackend(
         frozenset({(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)})
     )
-    template = _request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION).questions[0]
-    expanded = template.model_copy(
-        update={
-            "criteria": tuple(
-                ChoiceCriterion(id=f"route-{index}", description=f"Route {index}.")
-                for index in range(9)
-            )
-        }
-    )
-    request = _request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION).model_copy(
-        update={"questions": (expanded,)}
-    )
+    response = DecisionEngine(
+        backend=backend, workflows=default_workflows(), calibrations={}
+    ).decide(_request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION))
 
-    with pytest.raises(SaracuraError) as captured:
-        DecisionEngine(backend=backend, workflows=default_workflows(), calibrations={}).decide(
-            request
-        )
-
-    assert captured.value.payload.code == ErrorCode.WORKFLOW_UNSUPPORTED
-    assert backend.validate_calls == backend.score_calls == 0
+    assert response.answers[0].status == "uncalibrated"
+    assert backend.validate_calls == backend.score_calls == 1
 
 
 def test_phase4e_contract_paths_are_network_and_optional_ml_free(
@@ -547,17 +533,14 @@ def test_phase4e_contract_paths_are_network_and_optional_ml_free(
     monkeypatch.setattr(socket, "getaddrinfo", blocked_network)
     validate_phase4e_policy()
     SaracuraUniversalRanker(_FakeEncoder(), _parameters()).score(_task())
-    with pytest.raises(SaracuraError) as captured:
-        default_workflows().validate(
-            _request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
-            "universal",
-            _FakeUniversalBackend(
-                frozenset(
-                    {(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)}
-                )
-            ).capabilities,
-        )
-    assert captured.value.payload.code == ErrorCode.WORKFLOW_UNSUPPORTED
+    schema = default_workflows().validate(
+        _request(SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
+        "universal",
+        _FakeUniversalBackend(
+            frozenset({(UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION)})
+        ).capabilities,
+    )
+    assert schema.revision == SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION
 
     assert not {
         "torch",

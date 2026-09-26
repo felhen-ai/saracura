@@ -245,7 +245,7 @@ def test_laya_cli_prevalidates_then_emits_abstained_response_and_closes_backend(
         def close(self) -> None:
             self.closed = True
 
-    monkeypatch.setattr(cli, "LayaUniversalBackend", FakeLaya)
+    monkeypatch.setattr(cli, "_load_laya_backend", lambda: FakeLaya)
     example = Path(__file__).parents[1] / "examples/ptbr-universal-request.json"
 
     assert (
@@ -283,7 +283,7 @@ def test_laya_cli_rejects_bad_request_and_exclusive_arguments_before_constructio
         def __init__(self, **_kwargs: object) -> None:
             constructed.append(object())
 
-    monkeypatch.setattr(cli, "LayaUniversalBackend", ConstructorSentinel)
+    monkeypatch.setattr(cli, "_load_laya_backend", lambda: ConstructorSentinel)
     bad_request = tmp_path / "bad-request.json"
     bad_request.write_text('{"api_version":"wrong"}', encoding="utf-8")
     common = [
@@ -348,7 +348,7 @@ def test_laya_describe_backend_reports_contract_and_closes(
         def close(self) -> None:
             closed.append(True)
 
-    monkeypatch.setattr(cli, "LayaUniversalBackend", FakeLaya)
+    monkeypatch.setattr(cli, "_load_laya_backend", lambda: FakeLaya)
     assert (
         cli.main(
             [
