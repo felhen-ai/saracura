@@ -9,7 +9,7 @@ status: current
 canonical: docs/README.pt-BR.md
 globalRef: qmd://saracura/docs/README.pt-BR.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-23
+lastReviewedAt: 2026-09-27
 sourceRefs: []
 related:
   - README.md
@@ -156,8 +156,9 @@ grupo opcional isolado de dependências, um snapshot Laya local e imutável
 fornecido pelo operador e um dispositivo CPU ou MPS explícito; nunca baixa,
 descobre nem contata um provedor de modelo. A requisição sintética em PT-BR em
 [`examples/ptbr-universal-request.json`](../examples/ptbr-universal-request.json)
-usa a triagem de e-mail somente como futuro piloto da Fase 4F em modo sombra e não
-contém dados de caixa postal.
+usa a triagem de e-mail somente como cenário de referência fictício para a
+avaliação em modo sombra e somente leitura da Fase 4F.1. Não contém dados de
+caixa postal nem se conecta a serviços de e-mail.
 
 ```bash
 uv sync --locked --dev --extra universal-local
@@ -312,6 +313,56 @@ uv run ruff check benchmarks/typesafe_native.py tests/test_typesafe_native.py
 uv run ruff format --check benchmarks/typesafe_native.py tests/test_typesafe_native.py
 uv run mypy benchmarks/typesafe_native.py tests/test_typesafe_native.py
 ```
+
+## Referência local e somente leitura da Fase 4F.1
+
+O exemplo de triagem de e-mail é um fluxo local em modo sombra e somente
+leitura, não uma integração com caixa postal. O Saracura não se conecta a
+Gmail, Outlook, IMAP, navegador ou serviço de rede, e não lê, move, rotula,
+apaga, responde nem altera mensagens. A policy e os JSONL de referência contêm
+dados fictícios; antes de usar a CLI local, o operador deve escolher uma
+`subject` e uma `preview` minimizadas.
+
+Execute somente com o snapshot local verificado do encoder e o capsule de
+treino selado correspondentes à revisão de modelo da policy. Esses artefatos
+não são incluídos no pacote nem baixados. `shadow-decide` emite decisões sem
+conteúdo de mensagem: não inclui estado de entrada, descrições dos critérios,
+scores crus ou timing. A saída é sempre `uncalibrated`, com abstenção e
+`automation_allowed=false`; pesos ordenados de ranking não são confiança nem
+autorização para agir. O feedback do operador serve apenas para uma avaliação
+descritiva separada: não deve ser reutilizado para treino, fine-tuning,
+retrieval, otimização de prompt ou calibração. Um adapter de caixa postal
+específico de provedor, se vier a ser aprovado, fica fora deste incremento
+público e pertence a uma futura Fase 4F.2 privada.
+
+```bash
+uv sync --locked --dev --extra universal-local
+mkdir -p .artifacts/shadow
+uv run saracura shadow-decide \
+  --policy examples/ptbr-email-shadow-policy.json \
+  --encoder-snapshot <snapshot-local-verificado-do-encoder> \
+  --training-capsule <capsule-local-de-treino-verificado> \
+  --device cpu \
+  < examples/ptbr-email-shadow-input.jsonl \
+  > .artifacts/shadow/decisions.jsonl
+uv run saracura shadow-evaluate \
+  --policy examples/ptbr-email-shadow-policy.json \
+  --decisions .artifacts/shadow/decisions.jsonl \
+  --feedback examples/ptbr-email-shadow-feedback.jsonl
+```
+
+A policy de referência é dado editável, não um pack fixo do runner nem uma
+alegação de que o checkpoint foi otimizado para e-mail. Na execução, o
+tokenizer verificado aplica os limites existentes de 128 tokens para o contexto
+e 96 tokens por critério. Não há orçamento público de tokens para a prévia: ele
+depende do smoke separado do operador com o tokenizer verificado, e o runner
+nunca trunca a entrada. O JSON da policy pode permanecer no source
+distribution, mas não entra no wheel; os JSONL fictícios de entrada e feedback
+ficam fora dos dois arquivos.
+
+Um smoke operacional sintético com 8 itens confirmou apenas a execução local; a
+concordância observada não demonstra qualidade do modelo nem prontidão. Consulte
+o [resultado do smoke da Fase 4F.1](action/phase4f1-shadow-evaluation-result.md).
 
 ## Licença
 

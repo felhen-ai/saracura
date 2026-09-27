@@ -9,7 +9,7 @@ status: current
 canonical: AGENTS.md
 globalRef: qmd://saracura/AGENTS.md
 reviewCadenceDays: 30
-lastReviewedAt: 2026-09-23
+lastReviewedAt: 2026-09-27
 sourceRefs: []
 related:
   - README.md
@@ -17,6 +17,7 @@ related:
   - CONTRIBUTING.md
   - docs/decisions/0001-two-tier-decision-architecture.md
   - docs/action/specs/phase4d-experimental-universal-choice.md
+  - docs/action/specs/phase4f1-shadow-evaluation-and-email-reference.md
 supersedes: []
 supersededBy: []
 sensitivity: public
@@ -29,6 +30,7 @@ Saracura is a standalone, local-first typed decision engine. This repository mus
 ## Current product boundary
 
 - `v1alpha1` is research-only and supports `choice` for known, versioned workflows plus the exact experimental `universal-choice@phase4d-laya.v1` dynamic workflow. `universal-choice@phase4e-saracura-ranker.v1` is installed as the explicit `saracura-universal` backend, remains opt-in and requires private verified artifacts, returns uncalibrated abstained rankings, and is synthetic-only, research-only, with automation disabled.
+- The public Phase 4F.1 `ShadowRunner` is a local, read-only evaluator over caller-selected minimized state and an editable `ShadowPolicy`. It has no Gmail, Outlook, IMAP, browser, provider, or network adapter and performs no mailbox reads or mutations. Decisions are content-free, uncalibrated, abstained rankings with `automation_allowed=false`; ranking weights are not confidence. Feedback is descriptive evaluation only and must not be reused for training, retrieval, prompt optimization, or calibration. A provider-specific mailbox adapter remains outside the public increment and requires a separately reviewed private Phase 4F.2.
 - Boolean, ordinal, other dynamic-label product paths, HTTP serving, training, model downloads, public checkpoint publication, calibration, confidence thresholds, and private adapters are out of scope until their own reviewed increments.
 - The deterministic fixture backend is test infrastructure, not a model and not evidence of decision quality.
 - No result authorizes automation. Calibration status `verified_for_research` only describes compatibility with the declared research protocol.
