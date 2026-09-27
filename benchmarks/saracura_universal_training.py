@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import stat
 import subprocess
@@ -20,6 +21,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -1981,15 +1983,36 @@ def _holdout_identity_baselines(capsule: EmbeddingCapsule) -> dict[str, Any]:
         "task_positions": task_positions,
         "task_positions_sha256": _sha(_canonical(task_positions)),
         "denominator": len(task_positions),
-        "expected_random_accuracy": sum(
-            1 / cast(int, row["option_count"]) for row in task_positions
-        )
-        / len(task_positions),
+        "expected_random_accuracy": _expected_random_accuracy_values(task_positions)[0],
         "most_frequent_gold_position_accuracy": max(
             positions.count(position) for position in set(positions)
         )
         / len(positions),
     }
+
+
+def _expected_random_accuracy_values(
+    task_positions: Sequence[Mapping[str, Any]],
+) -> tuple[float, float, float]:
+    """Return exact, modern-sum and legacy values for cross-Python artifacts."""
+
+    exact = Fraction(0, 1)
+    terms: list[float] = []
+    legacy_total = 0.0
+    for item in task_positions:
+        option_count = cast(int, item["option_count"])
+        exact += Fraction(1, option_count)
+        term = 1 / option_count
+        terms.append(term)
+        legacy_total += term
+    denominator = len(task_positions)
+    if denominator == 0:
+        raise ZeroDivisionError("empty task positions")
+    return (
+        float(exact / denominator),
+        math.fsum(terms) / denominator,
+        legacy_total / denominator,
+    )
 
 
 def _success_thresholds(policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -2466,9 +2489,7 @@ def _validate_pre_holdout_gate_descriptor(raw: bytes) -> dict[str, Any]:
     ):
         raise TrainingError("pre-holdout identity ordering")
     try:
-        expected_random = sum(1 / item["option_count"] for item in task_positions) / len(
-            task_positions
-        )
+        expected_random_values = _expected_random_accuracy_values(task_positions)
         positions = [item["gold_position"] for item in task_positions]
         position_baseline = max(positions.count(position) for position in set(positions)) / len(
             positions
@@ -2487,7 +2508,7 @@ def _validate_pre_holdout_gate_descriptor(raw: bytes) -> dict[str, Any]:
             for item in task_positions
         )
         or len(set(identity["task_ids"])) != len(task_positions)
-        or identity["expected_random_accuracy"] != expected_random
+        or identity["expected_random_accuracy"] not in expected_random_values
         or identity["most_frequent_gold_position_accuracy"] != position_baseline
     ):
         raise TrainingError("pre-holdout identity baselines")

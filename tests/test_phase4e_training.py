@@ -104,6 +104,20 @@ def _metric(rows: training._Rows, score: float) -> dict[str, Any]:
     }
 
 
+def test_expected_random_accuracy_is_stable_and_accepts_legacy_sequential_value() -> None:
+    task_positions = [
+        {"task_id": f"task-{index:03d}", "gold_position": 0, "option_count": count}
+        for index, count in enumerate(([2, 3, 4, 5, 6, 7, 8] * 36)[:248])
+    ]
+
+    exact, modern, legacy = training._expected_random_accuracy_values(task_positions)
+
+    assert exact == 0.24680779569892472
+    assert modern == 0.24680779569892475
+    assert legacy == 0.24680779569892508
+    assert len({exact, modern, legacy}) == 3
+
+
 def _fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, Path, Path, training.AcceptedPacketBinding]:
