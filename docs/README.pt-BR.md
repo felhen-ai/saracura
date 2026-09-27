@@ -24,13 +24,13 @@ sensitivity: public
 
 [English](../README.md) | [Português (Brasil)](README.pt-BR.md)
 
-Saracura é um motor de pesquisa PT-BR-first e local para decisões tipadas em volume. A tese arquitetural é simples: codificar um estado uma vez e responder muitas perguntas calibradas com baixo custo incremental.
+Saracura é um runtime aberto de decisões e laboratório de modelos para fluxos locais de alto volume, com benchmark PT-BR-first e backends de decisão plugáveis.
 
-> Um estado. Muitas decisões calibradas. Aberto e local.
+> Uma API tipada. Backends de pesquisa plugáveis. Evidência antes de alegações.
 
 Este repositório ainda é um **alpha exclusivo para pesquisa**. Ele não contém pesos treinados, não afirma qualidade de decisão e não deve ser usado como gate de automação ou autorização. O backend determinístico incluído é apenas uma fixture para exercitar o contrato e os invariantes do runtime.
 
-PT-BR-first significa que o português brasileiro é o primeiro idioma dos exemplos e do trabalho de governança de dados, anotação e avaliação. Isso não significa que este alpha já distribua um checkpoint otimizado para PT-BR. A API e a arquitetura permanecem neutras em relação ao idioma para que o mesmo protocolo de evidência possa se expandir para inglês e outros idiomas.
+PT-BR-first significa que o português brasileiro é o primeiro idioma dos exemplos e do trabalho de governança de dados, anotação e avaliação. Isso não significa que este alpha já distribua um checkpoint com qualidade medida em PT-BR. A API e a arquitetura permanecem neutras em relação ao idioma para que o mesmo protocolo de evidência possa se expandir para inglês e outros idiomas.
 
 O inglês é o idioma canônico da documentação técnica. O quickstart, os exemplos públicos e os materiais de avaliação em PT-BR também são mantidos em português brasileiro quando aplicável.
 
@@ -51,9 +51,9 @@ O inglês é o idioma canônico da documentação técnica. O quickstart, os exe
 
 Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos fora dos workflows Choice exatos das Fases 4D e 4E, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria, calibração, limiares de confiança, publicação pública de checkpoint ou automação de produção. O backend Saracura-owned instalado é opt-in, sintético-only e somente de pesquisa; exige snapshot MiniLM e capsule de treino verificados e fornecidos pelo operador, retorna ranking weights não calibrados com abstenção e nunca autoriza automação. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
 
-## Arquitetura de pesquisa em duas camadas
+## Direção da Fase 5 e arquitetura de pesquisa em duas camadas
 
-Saracura está seguindo uma única API de decisões tipadas com duas camadas de execução. A camada experimental `universal` deve aceitar novos schemas Choice sem exigir que usuários adotem pacotes de modelos predefinidos ou heads específicos por tarefa. A camada opcional `compiled` especializa decisões estáveis e de alto volume quando essa otimização se justifica. A primeira implementação universal continua experimental, nenhum modelo está aprovado para produção e resultados não autorizam automação. TypeSafe/Jev é referência de benchmark e de design, não uma dependência de runtime ou fallback do Saracura. Veja o [ADR 0001](decisions/0001-two-tier-decision-architecture.md).
+Saracura preserva uma única API de decisões tipadas com camada `universal` plugável para novos schemas Choice e camada `compiled` opcional para fluxos estáveis, repetidos e de alto volume. O atual `saracura-universal-ranker.v0` é um ranker histórico de projeção bi-encoder MiniLM, não a fundação presumida do produto nem uma alegação de número de parâmetros. A Fase 5 avalia candidatos abertos com evidência antes de qualquer novo treino de checkpoint. TypeSafe/Jev continua como controle externo independente, nunca dependência de runtime ou fallback. Nenhum candidato está aprovado para produção, calibrado para um protocolo declarado ou autorizado a automatizar. Veja o [ADR 0001](decisions/0001-two-tier-decision-architecture.md) e o [ADR 0002](decisions/0002-open-model-runtime-and-readiness.md).
 
 ## Instalação e validação
 

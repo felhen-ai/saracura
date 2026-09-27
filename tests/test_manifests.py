@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.validate_manifests import validate_manifest, validate_routed_manifest
+from benchmarks.validate_manifests import (
+    validate_manifest,
+    validate_phase5_candidate_manifest,
+    validate_phase5_readiness_manifest,
+    validate_routed_manifest,
+)
 from saracura.runtime.engine import FIXTURE_SPLIT_MANIFEST_SHA256
 
 
@@ -55,3 +60,109 @@ def test_phase4e_recovery_manifests_route_through_closed_validators(tmp_path: Pa
         tampered.write_text(json.dumps(payload), encoding="utf-8")
         with pytest.raises(ValueError):
             validate_routed_manifest(tampered)
+
+
+def _phase5_manifest(name: str) -> Path:
+    return Path(__file__).parents[1] / "benchmarks/manifests" / name
+
+
+def _write_tampered_manifest(path: Path, payload: object) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_phase5_candidate_manifest_is_closed_and_routed() -> None:
+    path = _phase5_manifest("phase5-open-model-candidates.v1.json")
+    validate_phase5_candidate_manifest(path)
+    validate_routed_manifest(path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda payload: payload.__setitem__("reviewed_at", "2026-09-27T00:00:00Z"),
+            "ISO calendar date",
+        ),
+        (
+            lambda payload: payload["candidates"][0].__setitem__(
+                "architecture_class", "unknown_architecture"
+            ),
+            "architecture_class",
+        ),
+        (
+            lambda payload: payload["candidates"][1].__setitem__("revision", "main"),
+            "revision",
+        ),
+        (
+            lambda payload: payload["candidates"][1].__setitem__(
+                "disposition", "historical_baseline"
+            ),
+            "disposition requires",
+        ),
+        (
+            lambda payload: payload["candidates"][2].__setitem__(
+                "allowed_claims", ["candidate_for_evaluation"]
+            ),
+            "allowed_claims",
+        ),
+    ],
+)
+def test_phase5_candidate_manifest_rejects_contract_tampering(
+    tmp_path: Path, mutate: object, error: str
+) -> None:
+    payload = json.loads(_phase5_manifest("phase5-open-model-candidates.v1.json").read_bytes())
+    mutate(payload)  # type: ignore[operator]
+    path = tmp_path / "phase5-open-model-candidates.v1.json"
+    _write_tampered_manifest(path, payload)
+    with pytest.raises(ValueError, match=error):
+        validate_routed_manifest(path)
+
+
+def test_phase5_candidate_manifest_rejects_packaged_copy(tmp_path: Path) -> None:
+    source = _phase5_manifest("phase5-open-model-candidates.v1.json")
+    path = tmp_path / "src" / "saracura" / source.name
+    path.parent.mkdir(parents=True)
+    path.write_bytes(source.read_bytes())
+    with pytest.raises(ValueError, match="must not live under src/saracura"):
+        validate_routed_manifest(path)
+
+
+def test_phase5_readiness_manifest_is_closed_and_routed() -> None:
+    path = _phase5_manifest("phase5-public-readiness.v1.json")
+    validate_phase5_readiness_manifest(path)
+    validate_routed_manifest(path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (lambda payload: payload.__setitem__("claim_vocabulary", []), "claim_vocabulary"),
+        (
+            lambda payload: payload["gates"][0].__setitem__("status", "met"),
+            "status",
+        ),
+        (
+            lambda payload: payload["gates"][1]["required_evidence"].pop(),
+            "required_evidence",
+        ),
+        (
+            lambda payload: payload["gates"][1]["allowed_claims"].append("production_ready"),
+            "gate claims",
+        ),
+        (
+            lambda payload: payload["gates"][0].__setitem__(
+                "forbidden_claims", ["production_ready"]
+            ),
+            "gate claims",
+        ),
+    ],
+)
+def test_phase5_readiness_manifest_rejects_contract_tampering(
+    tmp_path: Path, mutate: object, error: str
+) -> None:
+    payload = json.loads(_phase5_manifest("phase5-public-readiness.v1.json").read_bytes())
+    mutate(payload)  # type: ignore[operator]
+    path = tmp_path / "phase5-public-readiness.v1.json"
+    _write_tampered_manifest(path, payload)
+    with pytest.raises(ValueError, match=error):
+        validate_routed_manifest(path)
