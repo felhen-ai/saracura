@@ -165,7 +165,7 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
-def _pilot_reviewer_system() -> str:
+def pilot_reviewer_system() -> str:
     return (
         "Return a JSON object whose sole top-level key is reviews, one review with status, "
         "chosen criterion ID, reason codes, the quality flags natural_language, "
@@ -483,7 +483,7 @@ def preflight_bounds(slots: Sequence[Mapping[str, Any]]) -> dict[str, Decimal]:
                     "temperature": PILOT_REVIEWER_TEMPERATURE,
                     "reasoning": PILOT_REVIEWER_REASONING,
                 },
-                "reviewer_system": _pilot_reviewer_system(),
+                "reviewer_system": pilot_reviewer_system(),
             }
         )
     )
@@ -626,7 +626,7 @@ def pilot_reviewer_messages(row: Mapping[str, Any]) -> list[dict[str, str]]:
     safe = pilot_reviewer_view(row)
     payload = _canonical({"tasks": [safe]}).decode("utf-8")
     return [
-        {"role": "system", "content": _pilot_reviewer_system()},
+        {"role": "system", "content": pilot_reviewer_system()},
         {"role": "user", "content": payload},
     ]
 
@@ -704,20 +704,39 @@ def apply_pair_author_target_rule(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """An author target mismatch rejects both members of the planned pair."""
 
-    del slots
-    if not any(row.get("reason") == "semantic_target_mismatch" for row in rejected):
+    mismatched_ids = {
+        str(row["task_id"])
+        for row in rejected
+        if row.get("reason") == "semantic_target_mismatch" and isinstance(row.get("task_id"), str)
+    }
+    if not mismatched_ids:
         return usable, rejected
+    pair_by_task = {
+        str(slot["task_id"]): slot.get("pair_id")
+        for slot in slots
+        if isinstance(slot.get("task_id"), str)
+    }
+    mismatched_pairs = {
+        pair_by_task[task_id] for task_id in mismatched_ids if pair_by_task.get(task_id) is not None
+    }
+    reject_ids = mismatched_ids | {
+        task_id for task_id, pair_id in pair_by_task.items() if pair_id in mismatched_pairs
+    }
     extra: list[dict[str, Any]] = []
+    retained: list[dict[str, Any]] = []
     for row in usable:
-        extra.append(
-            {
-                "task_id": row["task_id"],
-                "split": row["split"],
-                "reason": "paired_author_target_mismatch",
-                **{key: row[key] for key in _AUTHOR_LINEAGE if key in row},
-            }
-        )
-    return [], [*rejected, *extra]
+        if row["task_id"] in reject_ids:
+            extra.append(
+                {
+                    "task_id": row["task_id"],
+                    "split": row["split"],
+                    "reason": "paired_author_target_mismatch",
+                    **{key: row[key] for key in _AUTHOR_LINEAGE if key in row},
+                }
+            )
+        else:
+            retained.append(row)
+    return retained, [*rejected, *extra]
 
 
 def build_plan() -> dict[str, Any]:
@@ -736,7 +755,7 @@ def build_plan() -> dict[str, Any]:
         "source_policy_registry_sha256": registry_sha,
         "policy_sha256": hashlib.sha256(POLICY_PATH.read_bytes()).hexdigest(),
         "recovery_policy_sha256": hashlib.sha256(RECOVERY_POLICY_PATH.read_bytes()).hexdigest(),
-        "reviewer_system_sha256": _sha(_pilot_reviewer_system().encode("utf-8")),
+        "reviewer_system_sha256": _sha(pilot_reviewer_system().encode("utf-8")),
         "models": {
             AUTHOR_STAGE: PILOT_AUTHOR_MODEL,
             REVIEWER_STAGE: PILOT_REVIEWER_MODEL,
@@ -1902,7 +1921,7 @@ def canonical_research_ledger_root() -> Path:
     return private_phase4e_paths()["research_ledgers"]
 
 
-def _semantic_kind(row: Mapping[str, Any], review: Mapping[str, Any]) -> str | None:
+def pilot_semantic_kind(row: Mapping[str, Any], review: Mapping[str, Any]) -> str | None:
     try:
         author = corpus.SemanticEquivalenceAttestation.model_validate(
             row["semantic_equivalence_attestation"]
@@ -1923,6 +1942,12 @@ def _semantic_kind(row: Mapping[str, Any], review: Mapping[str, Any]) -> str | N
         option_count=len(row["criteria"]),
         selected_position=selected,
     )
+
+
+def pilot_local_privacy(row: Mapping[str, Any]) -> bool:
+    """Return the shared local-only privacy diagnostic for an authored row."""
+
+    return corpus._privacy(row)
 
 
 def build_pilot_report(
@@ -2515,7 +2540,7 @@ def _run_pilot_batch(
     usable = [{**row, **author_lineage} for row in usable]
     rejected_author = [{**row, **author_lineage} for row in rejected_author]
     for row in [*usable, *rejected_author]:
-        if "instruction" in row and corpus._privacy(row):
+        if "instruction" in row and pilot_local_privacy(row):
             diagnostics["local_privacy"] += 1
     usable, rejected_author = apply_pair_author_target_rule(slots, usable, rejected_author)
     reviews: list[dict[str, Any]] = []
@@ -2598,7 +2623,7 @@ def _run_pilot_batch(
         diagnostics["reviewed"] += 1
         if review["private_or_sensitive"]:
             diagnostics["reviewer_privacy_flags"] += 1
-        kind = _semantic_kind(row, review)
+        kind = pilot_semantic_kind(row, review)
         if kind == "scenario_disagreement":
             diagnostics["scenario_disagreement"] += 1
         elif kind == "criterion_role_disagreement":
@@ -2658,6 +2683,7 @@ __all__ = [
     "REVIEWER_STAGE",
     "SpendScan",
     "apply_pair_author_target_rule",
+    "bind_pilot_reviewer_record",
     "build_plan",
     "canonical_research_ledger_root",
     "configured_private_phase4e_root",
@@ -2668,9 +2694,13 @@ __all__ = [
     "ensure_research_execution_marker",
     "import_research_artifacts",
     "pilot_acceptance",
+    "pilot_local_privacy",
     "pilot_pair_resolution",
     "pilot_reviewer_messages",
+    "pilot_reviewer_schema",
+    "pilot_reviewer_system",
     "pilot_reviewer_view",
+    "pilot_semantic_kind",
     "pilot_task_ids",
     "preflight_bounds",
     "private_phase4e_paths",

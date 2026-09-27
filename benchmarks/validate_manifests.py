@@ -165,6 +165,12 @@ def validate_routed_manifest(path: Path) -> None:
             raise ValueError(f"{path}: comparison policy must be the canonical file")
         validate_comparison_policy(path)
         return
+    if schema_version == "phase4e-comparison-policy.v2":
+        canonical_v2 = Path(__file__).parent / "manifests" / "phase4e-comparison-policy.v2.json"
+        if raw != canonical_v2.read_bytes():
+            raise ValueError(f"{path}: comparison policy must be the canonical file")
+        validate_comparison_policy(path)
+        return
     if schema_version == 1:
         validate_manifest(path)
         return

@@ -262,7 +262,7 @@ def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path)
     assert plan["schema_version"] == pilot.PILOT_PLAN_SCHEMA
     assert (
         plan["reviewer_system_sha256"]
-        == hashlib.sha256(pilot._pilot_reviewer_system().encode("utf-8")).hexdigest()
+        == hashlib.sha256(pilot.pilot_reviewer_system().encode("utf-8")).hexdigest()
     )
     assert plan["seed"] == pilot.PILOT_SEED
     assert plan["models"] == {
@@ -330,7 +330,7 @@ def test_pilot_plan_is_disjoint_balanced_and_cost_is_report_only(tmp_path: Path)
 
 
 def test_pilot_reviewer_uses_genericity_wire_contract() -> None:
-    system = pilot._pilot_reviewer_system()
+    system = pilot.pilot_reviewer_system()
     assert "observable content-safety flag" in system
     assert "generic_or_invented and private_or_sensitive only from instruction" in system
     assert "Ignore task_id, criterion IDs, locale, domain" in system
@@ -503,7 +503,7 @@ def test_repeated_pilot_roles_are_diagnostic_but_corpus_default_rejects() -> Non
     wire = dict(duplicate)
     wire["generic_or_invented"] = wire.pop("fictional")
     bound = pilot.bind_pilot_reviewer_record(wire, row["task_id"])
-    assert pilot._semantic_kind(row, bound) == "criterion_role_disagreement"
+    assert pilot.pilot_semantic_kind(row, bound) == "criterion_role_disagreement"
     accepted, rejected = resolve_reviews(
         [row],
         [bound],

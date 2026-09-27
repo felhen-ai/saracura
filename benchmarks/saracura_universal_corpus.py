@@ -2015,6 +2015,23 @@ def _normalized(row: Mapping[str, Any]) -> str:
     return " ".join(value.casefold().split())
 
 
+def _near_duplicate(candidate: str, existing: Sequence[str]) -> bool:
+    """Exact ratio >= 0.92 predicate with quick upper-bound short-circuits.
+
+    ``real_quick_ratio`` and ``quick_ratio`` are strict upper bounds;
+    the exact ``ratio()`` is authoritative when both bounds can meet 0.92.
+    """
+    for item in existing:
+        sm = SequenceMatcher(None, candidate, item)
+        if sm.real_quick_ratio() < 0.92:
+            continue
+        if sm.quick_ratio() < 0.92:
+            continue
+        if sm.ratio() >= 0.92:
+            return True
+    return False
+
+
 def _author_semantic_attestation(
     attestation: CrossLocaleAttestation,
 ) -> dict[str, Any]:
@@ -2360,9 +2377,7 @@ def resolve_reviews(
             normalized = _normalized(row)
             if fingerprint in seen:
                 reason = "semantic_duplicate"
-            elif any(
-                SequenceMatcher(None, normalized, item).ratio() >= 0.92 for item in normalized_seen
-            ):
+            elif _near_duplicate(normalized, normalized_seen):
                 reason = "near_duplicate"
         if reason:
             rejected.append(
@@ -2635,7 +2650,7 @@ def _validate_accepted_packet_rows(
         normalized = _normalized(row)
         if normalized in normalized_rows:
             raise CorpusError("packet normalized duplicate")
-        if any(SequenceMatcher(None, normalized, item).ratio() >= 0.92 for item in normalized_rows):
+        if _near_duplicate(normalized, normalized_rows):
             raise CorpusError("packet near duplicate")
         fingerprints.add(fingerprint)
         normalized_rows.append(normalized)
@@ -3910,7 +3925,7 @@ class OpenRouterCorpusClient:
             status, _, raw = cast(tuple[int, Mapping[str, str], bytes], result)
             response = cast(dict[str, Any], json.loads(raw))
             response_error = response.get("error")
-            if isinstance(response_error, dict):
+            if isinstance(response_error, dict) and not isinstance(response.get("usage"), dict):
                 raise CorpusError("provider response error")
             cost = Decimal(str(response["usage"]["cost"]))
             response_sha256 = _sha(raw)
@@ -3958,6 +3973,9 @@ class OpenRouterCorpusClient:
         )
         write_ledger_snapshot(self._ledger_directory, self.ledger)
         self._last_journal = dict(self.ledger.provider_journal[-1])
-        if status != 200:
-            raise CorpusError(f"provider HTTP {status}")
+        response_error = response.get("error")
+        if status != 200 or isinstance(response_error, dict):
+            raise CorpusError(
+                f"provider HTTP {status}" if status != 200 else "provider response error"
+            )
         return response
