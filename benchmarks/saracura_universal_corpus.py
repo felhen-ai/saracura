@@ -291,6 +291,18 @@ POST_PILOT_CORPUS_LEDGER_POLICY = LedgerPolicy(
     automatic_retries=4,
     enforce_budget=False,
 )
+COMPARISON_LEDGER_POLICY = LedgerPolicy(
+    schema_version="phase4e-comparison-cost-ledger.v1",
+    entry_stages={"comparison_author": Decimal("0"), "comparison_reviewer": Decimal("0")},
+    total_budget=Decimal("0"),
+    prices={
+        "comparison_author": (Decimal("2.00"), Decimal("8.00")),
+        "comparison_reviewer": (Decimal("0.40"), Decimal("1.60")),
+    },
+    journal_stages=frozenset({"comparison_author", "comparison_reviewer"}),
+    automatic_retries=4,
+    enforce_budget=False,
+)
 
 
 def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
@@ -308,6 +320,8 @@ def ledger_policy_for_schema(schema: object) -> LedgerPolicy:
         return PILOT_LEDGER_POLICY
     if schema == POST_PILOT_CORPUS_LEDGER_POLICY.schema_version:
         return POST_PILOT_CORPUS_LEDGER_POLICY
+    if schema == COMPARISON_LEDGER_POLICY.schema_version:
+        return COMPARISON_LEDGER_POLICY
     raise CorpusError("ledger identity")
 
 

@@ -316,3 +316,29 @@ uv run mypy benchmarks/typesafe_native.py tests/test_typesafe_native.py
 ## Licença
 
 Apache License 2.0. Consulte [LICENSE](../LICENSE).
+
+## Status da comparação cega da Fase 4E.4
+
+<!-- phase4e4-status:begin -->
+O protocolo de comparação cega da Fase 4E.4 e a implementação offline estão no
+módulo `benchmarks/saracura_universal_comparison.py`, disponível somente a partir
+do checkout. O plano imutável de 200 slots, a geração com transporte injetado, os
+workers isolados de pontuação, a publicação selada de evidência live, a atualização
+bilíngue de status e a suíte focada de conformidade offline estão implementados. A
+comparação live ainda não começou e nenhum resultado de comparação foi publicado.
+
+A Fase 4E.4A está **em andamento**. A comparação ao vivo ainda não começou.
+
+- `--allow-network` com `OPENROUTER_API_KEY`
+- snapshot privado verificado do encoder MiniLM e capsule de treino selada do Saracura
+- snapshot de controle Laya opt-in atrás do extra `universal-local`
+- `SARACURA_PRIVATE_STATE_ROOT` apontando para um diretório privado, não
+  sincronizado, com permissão `0700`, fora do checkout e das raízes sincronizadas
+
+Ainda não existe artefato de resultado ao vivo
+(`benchmarks/results/phase4e-comparison-v1.json`) nem relatório público
+(`docs/action/phase4e-comparison-result.md`) porque a execução ao vivo
+(Fase 4E.4B) ainda não rodou. Enquanto os dois backends não pontuarem o pacote
+aceito selado sem falha de transporte ou operacional, a comparação permanece
+não encerrada e não libera a Fase 4F.
+<!-- phase4e4-status:end -->
