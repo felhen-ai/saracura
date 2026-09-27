@@ -20,7 +20,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
@@ -28,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 from benchmarks import saracura_universal_corpus as corpus
+from benchmarks import saracura_universal_pilot as pilot
 from benchmarks.io import atomic_create
 from benchmarks.saracura_universal_corpus import (
     AXES as AXES,
@@ -59,13 +59,23 @@ COMPARISON_WORKFLOW_ID = "universal-choice"
 COMPARISON_SARACURA_REVISION = SARACURA_UNIVERSAL_WORKFLOW_REVISION
 COMPARISON_LAYA_REVISION = "phase4d-laya.v1"
 COMPARISON_POLICY_PATH = Path(__file__).parent / "manifests" / "phase4e-comparison-policy.v1.json"
+COMPARISON_POLICY_V2_PATH = (
+    Path(__file__).parent / "manifests" / "phase4e-comparison-policy.v2.json"
+)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 README_EN_PATH = REPOSITORY_ROOT / "README.md"
 README_PT_BR_PATH = REPOSITORY_ROOT / "docs" / "README.pt-BR.md"
 PUBLIC_RESULT_JSON_PATH = REPOSITORY_ROOT / "benchmarks" / "results" / "phase4e-comparison-v1.json"
 PUBLIC_RESULT_MD_PATH = REPOSITORY_ROOT / "docs" / "action" / "phase4e-comparison-result.md"
 COMPARISON_PLAN_SCHEMA = "phase4e-comparison-plan.v1"
+COMPARISON_PLAN_SCHEMA_V2 = "phase4e-comparison-plan.v2"
 COMPARISON_PLANNER_REVISION = "phase4e-comparison-planner.v1"
+COMPARISON_PLANNER_REVISION_V2 = "phase4e-comparison-planner.v2"
+COMPARISON_DIAGNOSTICS_SCHEMA = "phase4e-comparison-diagnostics.v2"
+COMPARISON_ATTEMPT_RECEIPT_SCHEMA = "phase4e-comparison-attempt-receipt.v1"
+COMPARISON_ARCHIVE_RELATIVE_DIR = Path("phase4e") / "comparison-attempts"
+COMPARISON_ARCHIVED_V1_DIRNAME = "attempt-v1"
+COMPARISON_ARCHIVED_V1_RECEIPT_NAME = "attempt-v1-receipt.json"
 COMPARISON_NAMESPACE_PREFIX = "task-"
 COMPARISON_FAMILY_PREFIX = "family-"
 COMPARISON_UNDERPOWERED_THRESHOLD = 10
@@ -108,6 +118,17 @@ COMPARISON_EVALUATION_RECEIPT_SCHEMA = "phase4e-comparison-evaluation-receipt.v1
 COMPARISON_WORKER_RECEIPT_SCHEMA = "phase4e-comparison-worker-receipt.v1"
 COMPARISON_GENERATION_BINDING_SCHEMA = "phase4e-comparison-generation-binding.v1"
 _PERSISTED_DIAGNOSTIC_KEYS = (
+    "reviewed",
+    "scenario_disagreement",
+    "criterion_role_disagreement",
+    "local_privacy",
+    "reviewer_privacy_flags",
+    "author_response_failures",
+    "reviewer_response_failures",
+    "retry_recoveries",
+    "transport_uncertain_calls",
+)
+_V1_PERSISTED_DIAGNOSTIC_KEYS = (
     "author_response_failures",
     "reviewer_response_failures",
     "retry_recoveries",
@@ -189,6 +210,16 @@ def validate_comparison_policy(path: Path = COMPARISON_POLICY_PATH) -> dict[str,
 
 
 def _validate_policy_shape(policy: dict[str, Any]) -> None:
+    schema = policy.get("schema_version")
+    if schema == "phase4e-comparison-policy.v1":
+        _validate_policy_v1_shape(policy)
+    elif schema == "phase4e-comparison-policy.v2":
+        _validate_policy_v2_shape(policy)
+    else:
+        raise ComparisonError("comparison policy schema version")
+
+
+def _validate_policy_v1_shape(policy: dict[str, Any]) -> None:
     expected = {
         "schema_version",
         "id",
@@ -288,6 +319,59 @@ def _validate_policy_shape(policy: dict[str, Any]) -> None:
         raise ComparisonError("comparison execution policy invalid")
 
 
+def _validate_policy_v2_shape(policy: dict[str, Any]) -> None:
+    expected = {
+        "schema_version",
+        "id",
+        "plan",
+        "accepted_task_id_namespace",
+        "family_id_namespace",
+        "acceptance_minimums",
+        "provider",
+        "cost",
+        "execution",
+        "reviewer_contract",
+        "underpowered_threshold",
+    }
+    if set(policy) != expected:
+        raise ComparisonError("comparison policy V2 shape is closed")
+    if policy["schema_version"] != "phase4e-comparison-policy.v2":
+        raise ComparisonError("comparison policy V2 identity")
+    contract = policy.get("reviewer_contract")
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != {"revision", "provider_schema_digest", "reviewer_system_message_digest"}
+        or contract.get("revision") != "phase4e-v12-pilot-reviewer.v1"
+        or not _is_digest(contract.get("provider_schema_digest"))
+        or not _is_digest(contract.get("reviewer_system_message_digest"))
+    ):
+        raise ComparisonError("comparison V2 reviewer contract")
+    if policy.get("id") != "phase4e-comparison":
+        raise ComparisonError("comparison policy V2 identity")
+    try:
+        v1 = json.loads(COMPARISON_POLICY_PATH.read_bytes())
+    except (OSError, ValueError) as error:
+        raise ComparisonError("comparison V1 policy unavailable") from error
+    _validate_policy_v1_shape(v1)
+    expected = json.loads(json.dumps(v1))
+    expected["schema_version"] = "phase4e-comparison-policy.v2"
+    expected["plan"]["seed"] = "saracura-phase4e-comparison-v2"
+    expected["accepted_task_id_namespace"] = "task:sha256(saracura-phase4e-comparison-v2)"
+    expected["family_id_namespace"] = "family:sha256(saracura-phase4e-comparison-v2)"
+    expected["execution"]["schemas"]["plan"] = COMPARISON_PLAN_SCHEMA_V2
+    expected["execution"]["schemas"]["diagnostics"] = COMPARISON_DIAGNOSTICS_SCHEMA
+    expected["reviewer_contract"] = contract
+    if policy != expected:
+        raise ComparisonError("comparison policy V2 differs outside allowed fields")
+    contract = cast(dict[str, Any], policy["reviewer_contract"])
+    if contract["provider_schema_digest"] != _sha(
+        _canonical(pilot.pilot_reviewer_schema(1))
+    ) or contract["reviewer_system_message_digest"] != _sha(
+        pilot.pilot_reviewer_system().encode("utf-8")
+    ):
+        raise ComparisonError("comparison V2 reviewer contract digest is stale")
+
+
 # ── plan ──────────────────────────────────────────────────────────────────
 
 
@@ -325,8 +409,16 @@ def _fixture_plan_bindings() -> dict[str, Any]:
     }
 
 
-def build_comparison_plan(*, bindings: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    policy = _load_policy()
+def build_comparison_plan(
+    *,
+    bindings: Mapping[str, Any] | None = None,
+    policy_path: Path = COMPARISON_POLICY_PATH,
+    previous_attempt_bindings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    policy = _load_policy(policy_path)
+    is_v2 = policy["schema_version"] == "phase4e-comparison-policy.v2"
+    if is_v2 and previous_attempt_bindings is None:
+        raise ComparisonError("comparison V2 plan requires prior-attempt evidence")
     seed = cast(str, policy["plan"]["seed"])
     slots: list[dict[str, Any]] = []
     serial = 0
@@ -393,13 +485,18 @@ def build_comparison_plan(*, bindings: Mapping[str, Any] | None = None) -> dict[
         result.extend(cell)
         i = j
     return {
-        "schema_version": COMPARISON_PLAN_SCHEMA,
+        "schema_version": COMPARISON_PLAN_SCHEMA_V2 if is_v2 else COMPARISON_PLAN_SCHEMA,
         "workflow_revision": SARACURA_UNIVERSAL_WORKFLOW_REVISION,
-        "planner_revision": COMPARISON_PLANNER_REVISION,
+        "planner_revision": COMPARISON_PLANNER_REVISION_V2
+        if is_v2
+        else COMPARISON_PLANNER_REVISION,
         "seed": seed,
-        "policy_sha256": _sha(COMPARISON_POLICY_PATH.read_bytes()),
+        "policy_sha256": _sha(policy_path.read_bytes()),
         "execution": policy["execution"],
-        "bindings": dict(bindings) if bindings is not None else _fixture_plan_bindings(),
+        "bindings": {
+            **(dict(bindings) if bindings is not None else _fixture_plan_bindings()),
+            **(dict(previous_attempt_bindings) if previous_attempt_bindings is not None else {}),
+        },
         "slots": result,
     }
 
@@ -525,16 +622,19 @@ def _validate_comparison_plan(plan: dict[str, Any]) -> None:
         "slots",
     }:
         raise ComparisonError("plan shape is closed")
-    if plan.get("schema_version") != COMPARISON_PLAN_SCHEMA:
+    schema = plan.get("schema_version")
+    if schema not in {COMPARISON_PLAN_SCHEMA, COMPARISON_PLAN_SCHEMA_V2}:
         raise ComparisonError("plan schema mismatch")
-    if plan.get("seed") != "saracura-phase4e-comparison-v1":
-        raise ComparisonError("plan seed mismatch")
-    if plan.get("planner_revision") != COMPARISON_PLANNER_REVISION:
+    is_v2 = schema == COMPARISON_PLAN_SCHEMA_V2
+    policy_path = COMPARISON_POLICY_V2_PATH if is_v2 else COMPARISON_POLICY_PATH
+    planner_revision = COMPARISON_PLANNER_REVISION_V2 if is_v2 else COMPARISON_PLANNER_REVISION
+    if plan.get("planner_revision") != planner_revision:
         raise ComparisonError("plan planner revision")
-    policy = _load_policy()
+    policy = _load_policy(policy_path)
     if (
         plan.get("workflow_revision") != SARACURA_UNIVERSAL_WORKFLOW_REVISION
-        or plan.get("policy_sha256") != _sha(COMPARISON_POLICY_PATH.read_bytes())
+        or plan.get("seed") != policy["plan"]["seed"]
+        or plan.get("policy_sha256") != _sha(policy_path.read_bytes())
         or plan.get("execution") != policy["execution"]
     ):
         raise ComparisonError("plan protocol binding")
@@ -552,9 +652,22 @@ def _validate_comparison_plan(plan: dict[str, Any]) -> None:
         "training_family_ids_sha256",
         "identities_disjoint",
     }
+    v2_binding_fields = {
+        "previous_attempt_plan_sha256",
+        "previous_attempt_terminal_report_sha256",
+        "previous_attempt_final_ledger_sha256",
+        "previous_attempt_outcome",
+        "previous_attempt_accepted",
+        "previous_attempt_task_ids_sha256",
+        "previous_attempt_family_ids_sha256",
+        "previous_attempt_content_disjunction_sha256",
+        "reviewer_contract_revision",
+        "reviewer_provider_schema_digest",
+        "reviewer_system_message_digest",
+    }
     if (
         not isinstance(bindings, dict)
-        or set(bindings) != binding_fields
+        or set(bindings) != (binding_fields | v2_binding_fields if is_v2 else binding_fields)
         or bindings.get("mode") not in {"live_verified", "offline_fixture"}
         or bindings.get("identities_disjoint") is not True
         or not isinstance(bindings.get("source_commit"), str)
@@ -562,6 +675,12 @@ def _validate_comparison_plan(plan: dict[str, Any]) -> None:
     ):
         raise ComparisonError("plan evidence bindings")
     digest_fields = binding_fields - {"mode", "source_commit", "identities_disjoint"}
+    if is_v2:
+        digest_fields |= v2_binding_fields - {
+            "previous_attempt_outcome",
+            "previous_attempt_accepted",
+            "reviewer_contract_revision",
+        }
     if any(
         not isinstance(bindings.get(field), str)
         or len(bindings[field]) != 64
@@ -569,6 +688,21 @@ def _validate_comparison_plan(plan: dict[str, Any]) -> None:
         for field in digest_fields
     ):
         raise ComparisonError("plan evidence digest")
+    if is_v2 and (
+        bindings.get("previous_attempt_outcome") != "inconclusive_transport"
+        or bindings.get("previous_attempt_accepted") != 0
+        or bindings.get("previous_attempt_content_disjunction_sha256") != _sha(_canonical([]))
+        or bindings.get("reviewer_contract_revision") != "phase4e-v12-pilot-reviewer.v1"
+    ):
+        raise ComparisonError("plan prior-attempt or reviewer-contract binding")
+    if is_v2:
+        contract = cast(dict[str, Any], policy["reviewer_contract"])
+        if (
+            bindings.get("reviewer_provider_schema_digest") != contract["provider_schema_digest"]
+            or bindings.get("reviewer_system_message_digest")
+            != contract["reviewer_system_message_digest"]
+        ):
+            raise ComparisonError("plan reviewer contract digest")
     slots = plan.get("slots")
     if not isinstance(slots, list) or len(slots) != 200:
         raise ComparisonError("plan must have exactly 200 slots")
@@ -602,9 +736,246 @@ def _validate_comparison_plan(plan: dict[str, Any]) -> None:
     for slot in slots:
         if text_keys.intersection(slot):
             raise ComparisonError("plan contains natural-language content")
-    expected = build_comparison_plan(bindings=cast(Mapping[str, Any], bindings))
+    previous = {key: bindings[key] for key in v2_binding_fields} if is_v2 else None
+    expected = build_comparison_plan(
+        bindings={key: bindings[key] for key in binding_fields},
+        policy_path=policy_path,
+        previous_attempt_bindings=previous,
+    )
     if _canonical(plan) != _canonical(expected):
         raise ComparisonError("plan is not the canonical policy-derived plan")
+    if is_v2:
+        prior_v1 = build_comparison_plan(bindings=_fixture_plan_bindings())
+        old_tasks = sorted(cast(str, slot["task_id"]) for slot in prior_v1["slots"])
+        old_families = sorted({cast(str, slot["family_id"]) for slot in prior_v1["slots"]})
+        new_tasks = {cast(str, slot["task_id"]) for slot in slots}
+        new_families = {cast(str, slot["family_id"]) for slot in slots}
+        if (
+            bindings["previous_attempt_task_ids_sha256"] != _sha(_canonical(old_tasks))
+            or bindings["previous_attempt_family_ids_sha256"] != _sha(_canonical(old_families))
+            or new_tasks.intersection(old_tasks)
+            or new_families.intersection(old_families)
+        ):
+            raise ComparisonError("comparison V2 identities overlap V1")
+
+
+def _require_clean_source() -> str:
+    root = Path(__file__).resolve().parents[1]
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=False
+    )
+    commit = head.stdout.strip()
+    if (
+        status.returncode != 0
+        or status.stdout
+        or head.returncode != 0
+        or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+    ):
+        raise ComparisonError("live comparison requires a clean source checkout")
+    return commit
+
+
+def _previous_attempt_binding(
+    attempt_dir: Path, receipt_path: Path
+) -> tuple[dict[str, Any], set[str], set[str]]:
+    """Re-hash and validate the immutable V1 attempt before a V2 plan can exist."""
+    private_root = _configured_private_root()
+    if private_root is None:
+        raise ComparisonError("previous attempt requires configured private state root")
+    phase4e_dir = private_root / "phase4e"
+    archive_dir = private_root / COMPARISON_ARCHIVE_RELATIVE_DIR
+    expected_attempt = archive_dir / COMPARISON_ARCHIVED_V1_DIRNAME
+    expected_receipt = archive_dir / COMPARISON_ARCHIVED_V1_RECEIPT_NAME
+    try:
+        attempt_root = attempt_dir.resolve(strict=True)
+        receipt_resolved = receipt_path.resolve(strict=True)
+        expected_attempt_resolved = expected_attempt.resolve(strict=True)
+        expected_receipt_resolved = expected_receipt.resolve(strict=True)
+    except OSError as error:
+        raise ComparisonError("canonical previous attempt archive is unavailable") from error
+    if (
+        phase4e_dir.is_symlink()
+        or archive_dir.is_symlink()
+        or attempt_dir.is_symlink()
+        or receipt_path.is_symlink()
+        or attempt_root != expected_attempt_resolved
+        or receipt_resolved != expected_receipt_resolved
+        or receipt_resolved.is_relative_to(attempt_root)
+    ):
+        raise ComparisonError("previous attempt and receipt must use the canonical archive paths")
+    try:
+        receipt_mode = stat.S_IMODE(receipt_path.stat().st_mode)
+    except OSError as error:
+        raise ComparisonError("previous attempt receipt permissions cannot be read") from error
+    if receipt_mode != 0o400:
+        raise ComparisonError("previous attempt receipt must have mode 0400")
+    expected_paths = {
+        "plan": attempt_root / "comparison-plan" / "plan.json",
+        "terminal": attempt_root / "terminal-report.json",
+    }
+    try:
+        receipt = json.loads(receipt_path.read_bytes(), object_pairs_hook=_no_duplicate_keys)
+    except (OSError, ValueError) as error:
+        raise ComparisonError("previous attempt receipt is invalid") from error
+    receipt_fields = {
+        "schema_version",
+        "attempt_id",
+        "final_ledger_relative_path",
+        "plan_sha256",
+        "terminal_report_sha256",
+        "final_ledger_sha256",
+        "plan_schema",
+        "terminal_outcome",
+        "accepted",
+        "unresolved",
+        "provider_calls",
+        "provider_reported_cost_usd",
+    }
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != receipt_fields
+        or receipt.get("schema_version") != COMPARISON_ATTEMPT_RECEIPT_SCHEMA
+        or not isinstance(receipt.get("attempt_id"), str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", receipt["attempt_id"])
+        or receipt.get("attempt_id") != attempt_root.name
+        or receipt.get("plan_schema") != COMPARISON_PLAN_SCHEMA
+        or receipt.get("terminal_outcome") != "inconclusive_transport"
+        or type(receipt.get("accepted")) is not int
+        or receipt.get("accepted") != 0
+        or type(receipt.get("unresolved")) is not int
+        or receipt.get("unresolved") != 0
+        or type(receipt.get("provider_calls")) is not int
+        or receipt.get("provider_calls", -1) < 0
+        or not isinstance(receipt.get("provider_reported_cost_usd"), str)
+        or any(
+            not _is_digest(receipt.get(key))
+            for key in ("plan_sha256", "terminal_report_sha256", "final_ledger_sha256")
+        )
+    ):
+        raise ComparisonError("previous attempt receipt schema")
+    ledger_relative = receipt["final_ledger_relative_path"]
+    if (
+        not isinstance(ledger_relative, str)
+        or Path(ledger_relative).is_absolute()
+        or ".." in Path(ledger_relative).parts
+        or not ledger_relative.endswith(".json")
+    ):
+        raise ComparisonError("previous attempt ledger path")
+    expected_paths["ledger"] = attempt_root / ledger_relative
+    if any(path.is_symlink() for path in expected_paths.values()):
+        raise ComparisonError("previous attempt evidence cannot be symlinked")
+    if not expected_paths["ledger"].resolve(strict=False).is_relative_to(attempt_root):
+        raise ComparisonError("previous attempt ledger path")
+    if any(not path.is_file() for path in expected_paths.values()):
+        raise ComparisonError("previous attempt evidence is incomplete")
+    digests = {
+        "plan_sha256": _sha(expected_paths["plan"].read_bytes()),
+        "terminal_report_sha256": _sha(expected_paths["terminal"].read_bytes()),
+        "final_ledger_sha256": _sha(expected_paths["ledger"].read_bytes()),
+    }
+    if any(receipt[key] != value for key, value in digests.items()):
+        raise ComparisonError("previous attempt evidence digest mismatch")
+    try:
+        previous_plan = json.loads(
+            expected_paths["plan"].read_bytes(), object_pairs_hook=_no_duplicate_keys
+        )
+        terminal = json.loads(
+            expected_paths["terminal"].read_bytes(), object_pairs_hook=_no_duplicate_keys
+        )
+        ledger_payload = json.loads(
+            expected_paths["ledger"].read_bytes(), object_pairs_hook=_no_duplicate_keys
+        )
+        ledger = corpus.BudgetLedger.from_json(ledger_payload)
+        if ledger.policy != COMPARISON_LEDGER_POLICY:
+            raise ComparisonError("previous attempt ledger policy mismatch")
+        ledger.require_complete_provider_journal()
+    except Exception as error:
+        raise ComparisonError("previous attempt evidence cannot be parsed") from error
+    _validate_comparison_plan(previous_plan)
+    if previous_plan.get("bindings", {}).get("mode") != "live_verified":
+        raise ComparisonError("previous attempt must be a live-verified V1 plan")
+    terminal_fields = {
+        "schema_version",
+        "plan_sha256",
+        "outcome",
+        "planned",
+        "accepted",
+        "rejected",
+        "unresolved",
+        "transport_uncertain_calls",
+        "nonconsecutive_transport_uncertain_calls",
+        "consecutive_uncertainty_streak",
+        "provider_calls",
+        "provider_reported_cost_usd",
+        "errors",
+    }
+    try:
+        terminal_cost = Decimal(str(terminal["provider_reported_cost_usd"]))
+        ledger_cost = sum(
+            (Decimal(entry["provider_cost_usd"]) for entry in ledger.entries), Decimal()
+        )
+        receipt_cost = Decimal(receipt["provider_reported_cost_usd"])
+    except Exception as error:
+        raise ComparisonError("previous attempt cost is invalid") from error
+    if (
+        not isinstance(terminal, dict)
+        or set(terminal) != terminal_fields
+        or terminal.get("schema_version") != COMPARISON_TERMINAL_REPORT_SCHEMA
+        or terminal.get("outcome") != "inconclusive_transport"
+        or terminal.get("planned") != 200
+        or terminal.get("accepted") != 0
+        or terminal.get("unresolved") != 0
+        or terminal.get("rejected") != 200
+        or type(terminal.get("transport_uncertain_calls")) is not int
+        or terminal.get("transport_uncertain_calls", 0) < 1
+        or terminal.get("plan_sha256") != digests["plan_sha256"]
+        or terminal.get("provider_calls") != len(ledger.entries)
+        or receipt.get("provider_calls") != len(ledger.entries)
+        or terminal.get("transport_uncertain_calls")
+        != sum(entry["status"] == "uncertain" for entry in ledger.entries)
+        or not terminal_cost.is_finite()
+        or not receipt_cost.is_finite()
+        or terminal_cost != ledger_cost
+        or terminal_cost != receipt_cost
+        or terminal_cost < 0
+        or ledger_payload.get("final") is not True
+    ):
+        raise ComparisonError("previous attempt terminal report or ledger mismatch")
+    old_task_ids = {cast(str, slot["task_id"]) for slot in previous_plan["slots"]}
+    old_family_ids = {cast(str, slot["family_id"]) for slot in previous_plan["slots"]}
+    v1_rebuilt = build_comparison_plan(bindings=cast(Mapping[str, Any], previous_plan["bindings"]))
+    if _canonical(previous_plan) != _canonical(v1_rebuilt):
+        raise ComparisonError("previous attempt plan is not canonical V1")
+    return (
+        {
+            "previous_attempt_plan_sha256": digests["plan_sha256"],
+            "previous_attempt_terminal_report_sha256": digests["terminal_report_sha256"],
+            "previous_attempt_final_ledger_sha256": digests["final_ledger_sha256"],
+            "previous_attempt_outcome": terminal["outcome"],
+            "previous_attempt_accepted": terminal["accepted"],
+            "previous_attempt_task_ids_sha256": _sha(_canonical(sorted(old_task_ids))),
+            "previous_attempt_family_ids_sha256": _sha(_canonical(sorted(old_family_ids))),
+            "previous_attempt_content_disjunction_sha256": _sha(_canonical([])),
+            "reviewer_contract_revision": "phase4e-v12-pilot-reviewer.v1",
+            "reviewer_provider_schema_digest": cast(
+                str,
+                _load_policy(COMPARISON_POLICY_V2_PATH)["reviewer_contract"][
+                    "provider_schema_digest"
+                ],
+            ),
+            "reviewer_system_message_digest": cast(
+                str,
+                _load_policy(COMPARISON_POLICY_V2_PATH)["reviewer_contract"][
+                    "reviewer_system_message_digest"
+                ],
+            ),
+        },
+        old_task_ids,
+        old_family_ids,
+    )
 
 
 # ── private root / outside ───────────────────────────────────────────────
@@ -660,42 +1031,6 @@ def _require_public_destination(path: Path, parent_parts: tuple[str, ...], filen
         or tuple(resolved.parent.parts[-len(parent_parts) :]) != parent_parts
     ):
         raise ComparisonError("comparison public destination")
-
-
-# ── semantics ────────────────────────────────────────────────────────────
-
-
-def _semantic_fingerprint(row: Mapping[str, Any]) -> str:
-    instr = str(row.get("instruction", ""))
-    st = str(row.get("state", ""))
-    descs = "|".join(
-        c["description"] if isinstance(c, Mapping) else str(c)
-        for c in cast(Sequence[Any], row.get("criteria", []))
-    )
-    return _sha(
-        _canonical(
-            {
-                "locale": row.get("locale"),
-                "instruction": instr,
-                "state": st,
-                "descriptions": descs.strip(),
-            }
-        )
-    )
-
-
-def _normalized(row: Mapping[str, Any]) -> str:
-    instr = unicodedata.normalize("NFKD", str(row.get("instruction", ""))).casefold()
-    sv = row.get("state")
-    st = _canonical(sv).decode("utf-8", "replace") if isinstance(sv, dict) else str(sv)
-    st = unicodedata.normalize("NFKD", st).casefold()
-    descs = "|".join(
-        unicodedata.normalize(
-            "NFKD", c["description"] if isinstance(c, Mapping) else str(c)
-        ).casefold()
-        for c in cast(Sequence[Any], row.get("criteria", []))
-    )
-    return f"{instr}\0{st}\0{descs}"
 
 
 # ── capacity check ──────────────────────────────────────────────────────
@@ -788,16 +1123,23 @@ def _store_comparison_diagnostics(
     slots: Sequence[Mapping[str, Any]],
     diagnostics: Mapping[str, int],
     plan_sha256: str,
+    *,
+    schema_version: str,
 ) -> None:
     task_ids = sorted(cast(str, s["task_id"]) for s in slots)
+    count_keys = (
+        _V1_PERSISTED_DIAGNOSTIC_KEYS
+        if schema_version == "phase4e-comparison-diagnostics.v1"
+        else _PERSISTED_DIAGNOSTIC_KEYS
+    )
     atomic_create(
         work_dir / "diagnostics" / f"call-{_sha(_canonical(task_ids))}.json",
         _canonical(
             {
-                "schema_version": "phase4e-comparison-diagnostics.v1",
+                "schema_version": schema_version,
                 "plan_sha256": plan_sha256,
                 "task_ids": task_ids,
-                "counts": {key: diagnostics[key] for key in _PERSISTED_DIAGNOSTIC_KEYS},
+                "counts": {key: diagnostics[key] for key in count_keys},
             }
         )
         + b"\n",
@@ -831,8 +1173,15 @@ def _load_resolved(
     return result
 
 
-def _load_comparison_diagnostics(work_dir: Path, plan_sha256: str) -> dict[str, int]:
-    totals: dict[str, int] = dict.fromkeys(_PERSISTED_DIAGNOSTIC_KEYS, 0)
+def _load_comparison_diagnostics(
+    work_dir: Path, plan_sha256: str, *, schema_version: str
+) -> dict[str, int]:
+    count_keys = (
+        _V1_PERSISTED_DIAGNOSTIC_KEYS
+        if schema_version == "phase4e-comparison-diagnostics.v1"
+        else _PERSISTED_DIAGNOSTIC_KEYS
+    )
+    totals: dict[str, int] = dict.fromkeys(count_keys, 0)
     directory = work_dir / "diagnostics"
     if not directory.exists():
         return totals
@@ -844,14 +1193,14 @@ def _load_comparison_diagnostics(work_dir: Path, plan_sha256: str) -> dict[str, 
         if (
             not isinstance(payload, dict)
             or set(payload) != {"schema_version", "plan_sha256", "task_ids", "counts"}
-            or payload.get("schema_version") != "phase4e-comparison-diagnostics.v1"
+            or payload.get("schema_version") != schema_version
             or payload.get("plan_sha256") != plan_sha256
             or not isinstance(payload.get("task_ids"), list)
             or not isinstance(payload.get("counts"), dict)
-            or set(payload["counts"]) != set(_PERSISTED_DIAGNOSTIC_KEYS)
+            or set(payload["counts"]) != set(count_keys)
         ):
             raise ComparisonError("diagnostic file corrupted")
-        for key in _PERSISTED_DIAGNOSTIC_KEYS:
+        for key in count_keys:
             value = payload["counts"][key]
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ComparisonError("diagnostic file corrupted")
@@ -891,64 +1240,6 @@ def _comparison_author_messages(slots: Sequence[Mapping[str, Any]]) -> list[dict
 
 def _comparison_author_schema(slots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return corpus.author_schema(slots)
-
-
-def _comparison_reviewer_view(row: Mapping[str, Any]) -> dict[str, Any]:
-    criteria = row.get("criteria")
-    if not isinstance(criteria, list):
-        raise ComparisonError("reviewer transport criteria")
-    view: dict[str, Any] = {
-        "task_id": row["task_id"],
-        "locale": row["locale"],
-        "domain": row["domain"],
-        "instruction": row["instruction"],
-        "state": row["state"],
-        "criteria": [
-            {"id": c["id"], "description": c["description"]} if isinstance(c, Mapping) else {}
-            for c in criteria
-        ],
-    }
-    if set(view) != {"task_id", "locale", "domain", "instruction", "state", "criteria"}:
-        raise ComparisonError("reviewer transport fields")
-    forbidden = {
-        "family_id",
-        "pair_id",
-        "split",
-        "gold_position",
-        "selected_criterion_id",
-        "axes",
-        "review",
-    }
-    if forbidden & set(view):
-        raise ComparisonError("reviewer transport fields")
-    return view
-
-
-def _comparison_reviewer_system() -> str:
-    return (
-        "Return a JSON object whose sole top-level key is reviews, one review with status, "
-        "chosen criterion ID, reason codes, quality flags natural_language, fictional, "
-        "exclusive_options, and private_or_sensitive, plus independent "
-        "semantic_equivalence_attestation. Accepted reviews require reason_codes=[]. "
-        + corpus.SCENARIO_CODEBOOK
-        + " "
-        + corpus.CRITERION_ROLE_CODEBOOK
-        + " Infer roles from rule, facts, and options; do not write role labels into criteria. "
-        "Choose the single scenario that directly explains the decision. "
-        "Attest one scenario, distinct ordered roles, and selected_role=matches_rule at the "
-        "chosen position. Select one criterion or reject. "
-        "Evaluate fictional and private_or_sensitive only from instruction, state.summary, and "
-        "criteria[].description. You do not receive answer, author attestation, family, pair, "
-        "gold position, sibling, or split metadata."
-    )
-
-
-def _comparison_reviewer_messages(row: Mapping[str, Any]) -> list[dict[str, str]]:
-    safe = _comparison_reviewer_view(row)
-    return [
-        {"role": "system", "content": _comparison_reviewer_system()},
-        {"role": "user", "content": _canonical({"tasks": [safe]}).decode("utf-8")},
-    ]
 
 
 # ── publish and sanitiser ───────────────────────────────────────────────
@@ -1194,6 +1485,7 @@ def _live_plan_bindings(
     training_capsule: Path,
     saracura_encoder_snapshot: Path,
     laya_snapshot: Path,
+    policy_path: Path = COMPARISON_POLICY_V2_PATH,
 ) -> dict[str, Any]:
     try:
         from benchmarks import saracura_universal_training as training
@@ -1218,7 +1510,7 @@ def _live_plan_bindings(
     family_ids = sorted(
         {cast(str, identity["family_id"]) for identity in packet_binding.identities}
     )
-    seed = cast(str, _load_policy()["plan"]["seed"])
+    seed = cast(str, _load_policy(policy_path)["plan"]["seed"])
     comparison_task_ids = {
         COMPARISON_NAMESPACE_PREFIX + _sha(f"{seed}\0task\0{locale}\0{serial}".encode())
         for serial, locale in enumerate(("pt", "en") * 100)
@@ -1228,16 +1520,7 @@ def _live_plan_bindings(
     }
     if comparison_task_ids.intersection(task_ids) or comparison_family_ids.intersection(family_ids):
         raise ComparisonError("comparison identities overlap training identities")
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=Path(__file__).resolve().parents[1],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    source_commit = completed.stdout.strip()
-    if completed.returncode != 0 or len(source_commit) != 40:
-        raise ComparisonError("comparison source commit unavailable")
+    source_commit = _require_clean_source()
     encoder_digest, _encoder_bytes = _artifact_digest_and_size(saracura_encoder_snapshot)
     laya_digest, _laya_bytes = _artifact_digest_and_size(laya_snapshot)
     return {
@@ -1264,6 +1547,8 @@ def run_plan(
     training_capsule: Path | None = None,
     saracura_encoder_snapshot: Path | None = None,
     laya_snapshot: Path | None = None,
+    previous_attempt_dir: Path | None = None,
+    previous_attempt_receipt: Path | None = None,
 ) -> Path:
     _require_component(output, "comparison-plan", file_path=True)
     if bindings is None:
@@ -1277,15 +1562,52 @@ def run_plan(
             )
         ):
             raise ComparisonError("live plan requires explicit sealed evidence")
+        if previous_attempt_dir is None or previous_attempt_receipt is None:
+            raise ComparisonError("live plan requires the archived V1 attempt and receipt")
+        source_commit = _require_clean_source()
+        previous_bindings, previous_task_ids, previous_family_ids = _previous_attempt_binding(
+            previous_attempt_dir, previous_attempt_receipt
+        )
         bindings = _live_plan_bindings(
             training_packet=cast(Path, training_packet),
             training_report_dir=training_report_dir,
             training_capsule=cast(Path, training_capsule),
             saracura_encoder_snapshot=cast(Path, saracura_encoder_snapshot),
             laya_snapshot=cast(Path, laya_snapshot),
+            policy_path=COMPARISON_POLICY_V2_PATH,
         )
-        _require_within(output, _require_live_external_comparison_root())
-    plan = build_comparison_plan(bindings=bindings)
+        if bindings["source_commit"] != source_commit:
+            raise ComparisonError("comparison source changed while planning")
+        live_root = _require_live_external_comparison_root()
+        _require_within(output, live_root)
+        if live_root.exists() and any(live_root.iterdir()):
+            raise ComparisonError("comparison V2 requires a fresh canonical root")
+        previous_attempt_bindings = previous_bindings
+        policy_path = COMPARISON_POLICY_V2_PATH
+    else:
+        if bindings.get("mode") == "live_verified":
+            raise ComparisonError("live plan cannot bypass archived V1 attempt verification")
+        previous_task_ids = set()
+        previous_family_ids = set()
+        previous_attempt_bindings = None
+        policy_path = COMPARISON_POLICY_PATH
+    plan = build_comparison_plan(
+        bindings=bindings,
+        policy_path=policy_path,
+        previous_attempt_bindings=previous_attempt_bindings,
+    )
+    task_ids = {cast(str, slot["task_id"]) for slot in plan["slots"]}
+    family_ids = {cast(str, slot["family_id"]) for slot in plan["slots"]}
+    if task_ids.intersection(previous_task_ids) or family_ids.intersection(previous_family_ids):
+        raise ComparisonError("comparison identities overlap prior attempt")
+    if bindings.get("mode") == "live_verified":
+        training_rows, _metadata = _load_full_training_rows(
+            cast(Path, training_packet), training_report_dir
+        )
+        training_task_ids = {cast(str, row["task_id"]) for row in training_rows}
+        training_family_ids = {cast(str, row["family_id"]) for row in training_rows}
+        if task_ids.intersection(training_task_ids) or family_ids.intersection(training_family_ids):
+            raise ComparisonError("comparison identities overlap training identities")
     _validate_comparison_plan(plan)
     output.parent.mkdir(parents=True, exist_ok=True)
     atomic_create(output, _canonical(plan) + b"\n")
@@ -1371,6 +1693,25 @@ def run_generate(
         raise ComparisonError("generate requires literal --allow-network")
     plan = json.loads(plan_path.read_bytes(), object_pairs_hook=_no_duplicate_keys)
     _validate_comparison_plan(plan)
+    if plan["bindings"]["mode"] == "live_verified":
+        if plan["schema_version"] != COMPARISON_PLAN_SCHEMA_V2:
+            raise ComparisonError("live generation requires comparison plan V2")
+        if _require_clean_source() != plan["bindings"]["source_commit"]:
+            raise ComparisonError("live generation source commit mismatch")
+        reviewer_contract = cast(
+            dict[str, Any], _load_policy(COMPARISON_POLICY_V2_PATH)["reviewer_contract"]
+        )
+        if (
+            _sha(_canonical(pilot.pilot_reviewer_schema(1)))
+            != reviewer_contract["provider_schema_digest"]
+            or _sha(pilot.pilot_reviewer_system().encode("utf-8"))
+            != reviewer_contract["reviewer_system_message_digest"]
+            or plan["bindings"]["reviewer_provider_schema_digest"]
+            != reviewer_contract["provider_schema_digest"]
+            or plan["bindings"]["reviewer_system_message_digest"]
+            != reviewer_contract["reviewer_system_message_digest"]
+        ):
+            raise ComparisonError("live generation reviewer contract mismatch")
     private = (
         _require_private_root()
         if transport is not None
@@ -1459,11 +1800,20 @@ def run_generate(
         if laya_receipt is not None:
             laya_receipt.close()
         raise ComparisonError("live generation requires a live-verified plan")
+    if live_plan and _require_clean_source() != plan["bindings"]["source_commit"]:
+        if laya_receipt is not None:
+            laya_receipt.close()
+        raise ComparisonError("live generation source changed before provider transport")
     counter: TokenCounter = tokenizer_receipt
     chosen_transport = transport if transport is not None else _openrouter_transport()
     work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     plan_sha256 = _bind_generation_plan(work_dir, plan_path, plan)
     slots = cast(list[Mapping[str, Any]], plan["slots"])
+    diagnostics_schema = (
+        COMPARISON_DIAGNOSTICS_SCHEMA
+        if plan["schema_version"] == COMPARISON_PLAN_SCHEMA_V2
+        else "phase4e-comparison-diagnostics.v1"
+    )
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     diagnostics: dict[str, int] = dict.fromkeys(_PERSISTED_DIAGNOSTIC_KEYS, 0)
@@ -1481,7 +1831,9 @@ def run_generate(
         ledger = resumed if resumed.entries else ledger
         if ledger.policy.schema_version != COMPARISON_LEDGER_POLICY.schema_version:
             raise ComparisonError("ledger resume mismatch")
-        diagnostics = _load_comparison_diagnostics(work_dir, plan_sha256)
+        diagnostics.update(
+            _load_comparison_diagnostics(work_dir, plan_sha256, schema_version=diagnostics_schema)
+        )
     except Exception as error:
         _write_terminal_report(
             report_dir=packet.parent,
@@ -1514,7 +1866,12 @@ def run_generate(
         reviewer_temperature=0,
         reviewer_reasoning=None,
     )
-    execution_policy = cast(Mapping[str, Any], _load_policy()["execution"])
+    execution_policy_path = (
+        COMPARISON_POLICY_V2_PATH
+        if plan["schema_version"] == COMPARISON_PLAN_SCHEMA_V2
+        else COMPARISON_POLICY_PATH
+    )
+    execution_policy = cast(Mapping[str, Any], _load_policy(execution_policy_path)["execution"])
     maximum_attempts = cast(int, execution_policy["maximum_provider_attempts"])
     uncertainty_circuit = cast(int, execution_policy["transport_uncertainty_circuit"])
     report_interval = Decimal("10.00")
@@ -1548,6 +1905,7 @@ def run_generate(
                         training_rows,
                         laya_capacity_check,
                         plan_sha256,
+                        diagnostics_schema,
                     )
                 except ComparisonError:
                     if not client.ledger.entries:
@@ -1701,6 +2059,7 @@ def _run_comparison_batch(
     training_rows: Sequence[Mapping[str, Any]],
     laya_capacity_check: Callable[[Mapping[str, Any]], bool],
     plan_sha256: str,
+    diagnostics_schema: str,
 ) -> None:
     diag_before = dict(diagnostics)
     messages = _comparison_author_messages(slots)
@@ -1742,6 +2101,7 @@ def _run_comparison_batch(
                     slots,
                     {k: diagnostics[k] - diag_before[k] for k in _PERSISTED_DIAGNOSTIC_KEYS},
                     plan_sha256,
+                    schema_version=diagnostics_schema,
                 )
                 rejected.extend(rows)
                 raise ComparisonError("author transport uncertain") from None
@@ -1763,6 +2123,9 @@ def _run_comparison_batch(
             c_usable, c_rejected = corpus.classify_author_rows(decoded, slots, counter)
             if c_rejected:
                 diagnostics["author_response_failures"] += 1
+                if any(row.get("reason") == "semantic_target_mismatch" for row in c_rejected):
+                    usable, rejected_author = c_usable, c_rejected
+                    break
                 if attempt + 1 < maximum_attempts:
                     continue
                 rejected_author = c_rejected
@@ -1794,6 +2157,7 @@ def _run_comparison_batch(
             slots,
             {k: diagnostics[k] - diag_before[k] for k in _PERSISTED_DIAGNOSTIC_KEYS},
             plan_sha256,
+            schema_version=diagnostics_schema,
         )
         rejected.extend(rows)
         return
@@ -1809,6 +2173,11 @@ def _run_comparison_batch(
         }
         for row in usable
     ]
+    rejected_author = [{**row, **author_lineage} for row in rejected_author]
+    for row in [*usable, *rejected_author]:
+        if "instruction" in row and pilot.pilot_local_privacy(row):
+            diagnostics["local_privacy"] += 1
+    usable, rejected_author = pilot.apply_pair_author_target_rule(slots, usable, rejected_author)
     saracura_rejected = [
         {
             "task_id": row["task_id"],
@@ -1834,7 +2203,6 @@ def _run_comparison_batch(
     rejected_laya_ids = {cast(str, row["task_id"]) for row in laya_rejected}
     usable = [row for row in usable if row["task_id"] not in rejected_laya_ids]
     rejected_author = [*rejected_author, *saracura_rejected, *laya_rejected]
-    rejected_author = [{**row, **author_lineage} for row in rejected_author]
 
     # Review the full pair before resolving it so pair gates and duplicate checks
     # operate on the same precommitted family.
@@ -1849,8 +2217,8 @@ def _run_comparison_batch(
                 rev_response = client._request(
                     stage=REVIEWER_STAGE,
                     model=_COMPARISON_REVIEWER_MODEL,
-                    messages=_comparison_reviewer_messages(row),
-                    response_schema=corpus.reviewer_schema(1),
+                    messages=pilot.pilot_reviewer_messages(row),
+                    response_schema=pilot.pilot_reviewer_schema(1),
                     max_output_tokens=_REVIEWER_MAX_TOKENS,
                     api_key=api_key,
                     task_ids=[task_id],
@@ -1876,6 +2244,15 @@ def _run_comparison_batch(
                     "reviewer",
                     expected_stage=REVIEWER_STAGE,
                 )
+                reviewer_failures.append(
+                    {
+                        "task_id": task_id,
+                        "split": row["split"],
+                        "reason": "reviewer_response_failure",
+                        **author_lineage,
+                        **reviewer_lineages[task_id],
+                    }
+                )
                 break
             reviewer_lineages[task_id] = corpus.lineage_from_journal(
                 client.last_journal(REVIEWER_STAGE),
@@ -1891,9 +2268,19 @@ def _run_comparison_batch(
                     or not isinstance(raw_reviews[0], Mapping)
                 ):
                     raise corpus.CorpusError("review response")
-                review = corpus.bind_reviewer_record(raw_reviews[0], task_id)
+                review = pilot.bind_pilot_reviewer_record(raw_reviews[0], task_id)
                 reviews.append(review)
                 reviewed_rows.append(row)
+                diagnostics["reviewed"] += 1
+                if review.get("private_or_sensitive"):
+                    diagnostics["reviewer_privacy_flags"] += 1
+                kind = pilot.pilot_semantic_kind(row, review)
+                if kind == "scenario_disagreement":
+                    diagnostics["scenario_disagreement"] += 1
+                elif kind == "criterion_role_disagreement":
+                    diagnostics["criterion_role_disagreement"] += 1
+                if rattempt:
+                    diagnostics["retry_recoveries"] += 1
                 break
             except corpus.CorpusError:
                 diagnostics["reviewer_response_failures"] += 1
@@ -1914,7 +2301,9 @@ def _run_comparison_batch(
         reviews,
         prior_rows=(*training_rows, *accepted),
         reviewer_lineages=reviewer_lineages,
-        acceptance=corpus.acceptance_reason,
+        acceptance=pilot.pilot_acceptance,
+        pair_resolution=pilot.pilot_pair_resolution,
+        review_model=pilot.PilotReviewerRecord,
     )
     batch_rejected = [*rejected_author, *reviewer_failures, *batch_rejected]
     _store_comparison_resolution(
@@ -1925,6 +2314,7 @@ def _run_comparison_batch(
         slots,
         {k: diagnostics[k] - diag_before[k] for k in _PERSISTED_DIAGNOSTIC_KEYS},
         plan_sha256,
+        schema_version=diagnostics_schema,
     )
     accepted.extend(batch_accepted)
     rejected.extend(batch_rejected)
@@ -2557,7 +2947,7 @@ def run_evaluate(
         "evidence_mode": evidence_mode,
         "plan_sha256": _sha((packet / "plan.json").read_bytes()),
         "packet_sha256": _sha((packet / "packet.json").read_bytes()),
-        "policy_sha256": _sha(COMPARISON_POLICY_PATH.read_bytes()),
+        "policy_sha256": cast(str, plan["policy_sha256"]),
         "provenance": provenance,
         "provider_reported_generation_cost_usd": _packet_generation_cost(packet),
         "primary_comparison": primary,
@@ -3752,6 +4142,8 @@ def main() -> None:
     plan_p.add_argument("--training-capsule", type=Path, required=True)
     plan_p.add_argument("--saracura-encoder-snapshot", type=Path, required=True)
     plan_p.add_argument("--laya-snapshot", type=Path, required=True)
+    plan_p.add_argument("--previous-attempt-dir", type=Path, required=True)
+    plan_p.add_argument("--previous-attempt-receipt", type=Path, required=True)
 
     gen_p = sub.add_parser("generate")
     gen_p.add_argument("--plan", type=Path, required=True)
@@ -3807,6 +4199,8 @@ def main() -> None:
             training_capsule=args.training_capsule,
             saracura_encoder_snapshot=args.saracura_encoder_snapshot,
             laya_snapshot=args.laya_snapshot,
+            previous_attempt_dir=args.previous_attempt_dir,
+            previous_attempt_receipt=args.previous_attempt_receipt,
         )
         print(f"comparison plan written to {args.output}")
     elif command == "generate":

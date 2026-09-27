@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import socket
 import stat
 import subprocess
 import sys
 from collections.abc import Mapping
+from decimal import Decimal
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -24,6 +27,7 @@ import pytest
 
 from benchmarks import saracura_universal_comparison as comparison
 from benchmarks import saracura_universal_corpus as corpus
+from benchmarks import saracura_universal_pilot as pilot
 from benchmarks.saracura_universal_corpus import build_plan as corpus_build_plan
 
 ROOT = Path(__file__).parents[1]
@@ -178,7 +182,7 @@ def _author_reviewer_transport_fixture(
             "selected_criterion_id": f"criterion-{selected}",
             "reason_codes": [],
             "natural_language": True,
-            "fictional": True,
+            "generic_or_invented": True,
             "exclusive_options": True,
             "private_or_sensitive": False,
             "semantic_equivalence_attestation": {
@@ -217,7 +221,7 @@ def _author_reviewer_transport_fixture(
                             "status": "rejected",
                             "reason_codes": ["language"],
                             "natural_language": True,
-                            "fictional": True,
+                            "generic_or_invented": True,
                             "exclusive_options": True,
                             "private_or_sensitive": False,
                             "semantic_equivalence_attestation": {
@@ -264,6 +268,64 @@ def _setup_work(work: Path) -> tuple[dict[str, Any], Path, Path]:
     plan_path = work / "comparison-plan" / "plan.json"
     work_dir = work / "comparison-work"
     return plan, plan_path, work_dir
+
+
+def _write_previous_attempt_receipt(
+    attempt_root: Path,
+    receipt_path: Path,
+    *,
+    bindings_mode: str = "live_verified",
+) -> None:
+    plan = comparison.build_comparison_plan(
+        bindings={**comparison._fixture_plan_bindings(), "mode": bindings_mode}
+    )
+    plan_dir = attempt_root / "comparison-plan"
+    ledger_dir = attempt_root / "comparison-work" / "ledger"
+    plan_dir.mkdir(parents=True)
+    ledger_dir.mkdir(parents=True)
+    plan_path = plan_dir / "plan.json"
+    plan_path.write_bytes(comparison._canonical(plan) + b"\n")
+    ledger = corpus.BudgetLedger(policy=comparison.COMPARISON_LEDGER_POLICY)
+    for index, stage in enumerate((comparison.AUTHOR_STAGE, comparison.REVIEWER_STAGE)):
+        reservation = "reservation-" + f"{index + 1:064x}"
+        task_id = str(plan["slots"][index]["task_id"])
+        ledger.reserve_request(stage, reservation, Decimal("0"))
+        ledger.mark_uncertain(reservation, f"{index + 1:064x}")
+        ledger.record_provider_journal(
+            stage=stage,
+            reservation_id=reservation,
+            task_ids=[task_id],
+        )
+    ledger_path = ledger_dir / "ledger-0000.json"
+    ledger_path.write_bytes(corpus._canonical(ledger.as_json(final=True)) + b"\n")
+    comparison._write_terminal_report(
+        report_dir=attempt_root,
+        plan=plan,
+        accepted=[],
+        rejected=[
+            {"task_id": slot["task_id"], "reason": "fixture_rejection"} for slot in plan["slots"]
+        ],
+        ledger=ledger,
+        outcome="inconclusive_transport",
+        diagnostics={"transport_uncertain_calls": 2},
+    )
+    terminal_path = attempt_root / "terminal-report.json"
+    receipt = {
+        "schema_version": comparison.COMPARISON_ATTEMPT_RECEIPT_SCHEMA,
+        "attempt_id": attempt_root.name,
+        "final_ledger_relative_path": "comparison-work/ledger/ledger-0000.json",
+        "plan_sha256": corpus._sha(plan_path.read_bytes()),
+        "terminal_report_sha256": corpus._sha(terminal_path.read_bytes()),
+        "final_ledger_sha256": corpus._sha(ledger_path.read_bytes()),
+        "plan_schema": comparison.COMPARISON_PLAN_SCHEMA,
+        "terminal_outcome": "inconclusive_transport",
+        "accepted": 0,
+        "unresolved": 0,
+        "provider_calls": 2,
+        "provider_reported_cost_usd": "0",
+    }
+    receipt_path.write_bytes(comparison._canonical(receipt) + b"\n")
+    os.chmod(receipt_path, 0o400)
 
 
 def _comparison_result_fixture() -> dict[str, Any]:
@@ -446,6 +508,324 @@ def test_comparison_policy_validates() -> None:
     assert policy["underpowered_threshold"] == 10
 
 
+def test_comparison_policy_v2_only_changes_reviewed_allowlist() -> None:
+    policy = comparison.validate_comparison_policy(comparison.COMPARISON_POLICY_V2_PATH)
+    assert policy["schema_version"] == "phase4e-comparison-policy.v2"
+    assert policy["plan"]["seed"] != comparison.validate_comparison_policy()["plan"]["seed"]
+    assert policy["reviewer_contract"]["revision"] == "phase4e-v12-pilot-reviewer.v1"
+    assert policy["reviewer_contract"]["provider_schema_digest"] == corpus._sha(
+        corpus._canonical(pilot.pilot_reviewer_schema(1))
+    )
+    assert policy["reviewer_contract"]["reviewer_system_message_digest"] == corpus._sha(
+        pilot.pilot_reviewer_system().encode("utf-8")
+    )
+    altered = json.loads(json.dumps(policy))
+    altered["cost"]["automatic_retries"] += 1
+    with pytest.raises(comparison.ComparisonError, match="outside allowed fields"):
+        comparison._validate_policy_shape(altered)
+
+
+def test_comparison_v2_plan_ids_are_disjoint_from_v1() -> None:
+    previous = comparison.build_comparison_plan()
+    old_tasks = sorted(str(slot["task_id"]) for slot in previous["slots"])
+    old_families = sorted({str(slot["family_id"]) for slot in previous["slots"]})
+    contract = comparison.validate_comparison_policy(comparison.COMPARISON_POLICY_V2_PATH)[
+        "reviewer_contract"
+    ]
+    prior_binding = {
+        "previous_attempt_plan_sha256": "a" * 64,
+        "previous_attempt_terminal_report_sha256": "b" * 64,
+        "previous_attempt_final_ledger_sha256": "c" * 64,
+        "previous_attempt_outcome": "inconclusive_transport",
+        "previous_attempt_accepted": 0,
+        "previous_attempt_task_ids_sha256": corpus._sha(corpus._canonical(old_tasks)),
+        "previous_attempt_family_ids_sha256": corpus._sha(corpus._canonical(old_families)),
+        "previous_attempt_content_disjunction_sha256": corpus._sha(corpus._canonical([])),
+        "reviewer_contract_revision": contract["revision"],
+        "reviewer_provider_schema_digest": contract["provider_schema_digest"],
+        "reviewer_system_message_digest": contract["reviewer_system_message_digest"],
+    }
+    plan = comparison.build_comparison_plan(
+        bindings=comparison._fixture_plan_bindings(),
+        policy_path=comparison.COMPARISON_POLICY_V2_PATH,
+        previous_attempt_bindings=prior_binding,
+    )
+    comparison._validate_comparison_plan(plan)
+    assert plan["schema_version"] == comparison.COMPARISON_PLAN_SCHEMA_V2
+    assert {slot["task_id"] for slot in plan["slots"]}.isdisjoint(old_tasks)
+    assert {slot["family_id"] for slot in plan["slots"]}.isdisjoint(old_families)
+
+
+def _v2_fixture_plan(*, live: bool = False) -> dict[str, Any]:
+    prior = comparison.build_comparison_plan()
+    tasks = sorted(str(slot["task_id"]) for slot in prior["slots"])
+    families = sorted({str(slot["family_id"]) for slot in prior["slots"]})
+    contract = comparison.validate_comparison_policy(comparison.COMPARISON_POLICY_V2_PATH)[
+        "reviewer_contract"
+    ]
+    previous = {
+        "previous_attempt_plan_sha256": "a" * 64,
+        "previous_attempt_terminal_report_sha256": "b" * 64,
+        "previous_attempt_final_ledger_sha256": "c" * 64,
+        "previous_attempt_outcome": "inconclusive_transport",
+        "previous_attempt_accepted": 0,
+        "previous_attempt_task_ids_sha256": corpus._sha(corpus._canonical(tasks)),
+        "previous_attempt_family_ids_sha256": corpus._sha(corpus._canonical(families)),
+        "previous_attempt_content_disjunction_sha256": corpus._sha(corpus._canonical([])),
+        "reviewer_contract_revision": contract["revision"],
+        "reviewer_provider_schema_digest": contract["provider_schema_digest"],
+        "reviewer_system_message_digest": contract["reviewer_system_message_digest"],
+    }
+    bindings = comparison._fixture_plan_bindings()
+    if live:
+        bindings["mode"] = "live_verified"
+    return comparison.build_comparison_plan(
+        bindings=bindings,
+        policy_path=comparison.COMPARISON_POLICY_V2_PATH,
+        previous_attempt_bindings=previous,
+    )
+
+
+@pytest.mark.parametrize(
+    "source_state", ["dirty", "head_mismatch", "reviewer_digest_mismatch", "v1"]
+)
+def test_live_generate_guards_fail_before_fake_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_state: str,
+) -> None:
+    private_root = tmp_path / "phase4e" / "comparison"
+    plan_root = private_root / "comparison-plan"
+    plan_root.mkdir(parents=True)
+    plan = (
+        comparison.build_comparison_plan(
+            bindings={**comparison._fixture_plan_bindings(), "mode": "live_verified"}
+        )
+        if source_state == "v1"
+        else _v2_fixture_plan(live=True)
+    )
+    if source_state == "reviewer_digest_mismatch":
+        plan["bindings"]["reviewer_provider_schema_digest"] = "f" * 64
+    plan_path = plan_root / "plan.json"
+    plan_path.write_bytes(comparison._canonical(plan) + b"\n")
+    calls = 0
+
+    def fake_transport(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("transport must not run before source guards pass")
+
+    if source_state == "dirty":
+        monkeypatch.setattr(
+            comparison,
+            "_require_clean_source",
+            lambda: (_ for _ in ()).throw(comparison.ComparisonError("dirty source")),
+        )
+        expected = "dirty source"
+    elif source_state == "head_mismatch":
+        monkeypatch.setattr(comparison, "_require_clean_source", lambda: "f" * 40)
+        expected = "source commit mismatch"
+    elif source_state == "reviewer_digest_mismatch":
+        expected = "reviewer contract digest"
+    else:
+        expected = "requires comparison plan V2"
+    with pytest.raises(comparison.ComparisonError, match=expected):
+        comparison.run_generate(
+            plan_path,
+            private_root / "comparison-work",
+            private_root / "comparison-packet",
+            allow_network=True,
+            transport=fake_transport,
+        )
+    assert calls == 0
+
+
+def test_v2_plan_binds_rehashed_previous_attempt_and_rejects_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_root = tmp_path / "private-state"
+    private_root.mkdir(mode=0o700)
+    os.chmod(private_root, 0o700)
+    archive_dir = private_root / comparison.COMPARISON_ARCHIVE_RELATIVE_DIR
+    attempt_root = archive_dir / comparison.COMPARISON_ARCHIVED_V1_DIRNAME
+    receipt_path = archive_dir / comparison.COMPARISON_ARCHIVED_V1_RECEIPT_NAME
+    archive_dir.mkdir(parents=True)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(private_root))
+    _write_previous_attempt_receipt(attempt_root, receipt_path)
+    bindings, old_tasks, old_families = comparison._previous_attempt_binding(
+        attempt_root, receipt_path
+    )
+    assert len(old_tasks) == 200
+    assert len(old_families) == 100
+    assert bindings["previous_attempt_accepted"] == 0
+    ledger_path = attempt_root / "comparison-work" / "ledger" / "ledger-0000.json"
+    ledger_path.write_bytes(ledger_path.read_bytes() + b" ")
+    with pytest.raises(comparison.ComparisonError, match="digest mismatch"):
+        comparison._previous_attempt_binding(attempt_root, receipt_path)
+
+
+def test_previous_attempt_rejects_offline_fixture_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_root = tmp_path / "private-state"
+    private_root.mkdir(mode=0o700)
+    archive_dir = private_root / comparison.COMPARISON_ARCHIVE_RELATIVE_DIR
+    archive_dir.mkdir(parents=True)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(private_root))
+    attempt_root = archive_dir / comparison.COMPARISON_ARCHIVED_V1_DIRNAME
+    receipt_path = archive_dir / comparison.COMPARISON_ARCHIVED_V1_RECEIPT_NAME
+    _write_previous_attempt_receipt(attempt_root, receipt_path, bindings_mode="offline_fixture")
+    with pytest.raises(comparison.ComparisonError, match="live-verified V1 plan"):
+        comparison._previous_attempt_binding(attempt_root, receipt_path)
+
+
+def test_previous_attempt_rejects_noncanonical_archive_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_root = tmp_path / "private-state"
+    private_root.mkdir(mode=0o700)
+    archive_dir = private_root / comparison.COMPARISON_ARCHIVE_RELATIVE_DIR
+    archive_dir.mkdir(parents=True)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(private_root))
+    attempt_root = archive_dir / comparison.COMPARISON_ARCHIVED_V1_DIRNAME
+    receipt_path = archive_dir / comparison.COMPARISON_ARCHIVED_V1_RECEIPT_NAME
+    _write_previous_attempt_receipt(attempt_root, receipt_path)
+    misplaced_attempt = private_root / "attempt-copy"
+    misplaced_attempt.mkdir()
+    misplaced_receipt = private_root / "attempt-copy-receipt.json"
+    misplaced_receipt.write_bytes(receipt_path.read_bytes())
+    os.chmod(misplaced_receipt, 0o400)
+    with pytest.raises(comparison.ComparisonError, match="canonical archive paths"):
+        comparison._previous_attempt_binding(misplaced_attempt, receipt_path)
+    with pytest.raises(comparison.ComparisonError, match="canonical archive paths"):
+        comparison._previous_attempt_binding(attempt_root, misplaced_receipt)
+
+
+def test_previous_attempt_rejects_receipt_mode_other_than_0400(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_root = tmp_path / "private-state"
+    private_root.mkdir(mode=0o700)
+    archive_dir = private_root / comparison.COMPARISON_ARCHIVE_RELATIVE_DIR
+    archive_dir.mkdir(parents=True)
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(private_root))
+    attempt_root = archive_dir / comparison.COMPARISON_ARCHIVED_V1_DIRNAME
+    receipt_path = archive_dir / comparison.COMPARISON_ARCHIVED_V1_RECEIPT_NAME
+    _write_previous_attempt_receipt(attempt_root, receipt_path)
+    os.chmod(receipt_path, 0o600)
+    with pytest.raises(comparison.ComparisonError, match="mode 0400"):
+        comparison._previous_attempt_binding(attempt_root, receipt_path)
+
+
+def test_diagnostic_schemas_are_closed_and_plan_version_specific(tmp_path: Path) -> None:
+    plan = comparison.build_comparison_plan()
+    slots = plan["slots"][:2]
+    counts = dict.fromkeys(comparison._PERSISTED_DIAGNOSTIC_KEYS, 0)
+    v1_root = tmp_path / "v1" / "comparison-work"
+    comparison._store_comparison_diagnostics(
+        v1_root,
+        slots,
+        counts,
+        "1" * 64,
+        schema_version="phase4e-comparison-diagnostics.v1",
+    )
+    loaded = comparison._load_comparison_diagnostics(
+        v1_root, "1" * 64, schema_version="phase4e-comparison-diagnostics.v1"
+    )
+    assert set(loaded) == set(comparison._V1_PERSISTED_DIAGNOSTIC_KEYS)
+    with pytest.raises(comparison.ComparisonError, match="diagnostic file corrupted"):
+        comparison._load_comparison_diagnostics(
+            v1_root,
+            "1" * 64,
+            schema_version=comparison.COMPARISON_DIAGNOSTICS_SCHEMA,
+        )
+
+    v2_root = tmp_path / "v2" / "comparison-work"
+    comparison._store_comparison_diagnostics(
+        v2_root,
+        slots,
+        counts,
+        "2" * 64,
+        schema_version=comparison.COMPARISON_DIAGNOSTICS_SCHEMA,
+    )
+    assert set(
+        comparison._load_comparison_diagnostics(
+            v2_root, "2" * 64, schema_version=comparison.COMPARISON_DIAGNOSTICS_SCHEMA
+        )
+    ) == set(comparison._PERSISTED_DIAGNOSTIC_KEYS)
+
+
+def test_near_duplicate_quick_bounds_are_exact_equivalent() -> None:
+    adversarial = [
+        ("a" * 23 + "bc", "a" * 25),  # exact ratio 0.92
+        ("a" * 300, "a" * 301),
+        ("x", "a" * 260 + "x"),  # only second argument exceeds autojunk length
+        ("a" * 250 + "bc", "a" * 250 + "bd"),
+        ("abc", "xyz"),
+        ("", ""),
+    ]
+    assert SequenceMatcher(None, *adversarial[0]).ratio() == 0.92
+    rng = random.Random(0x5A2AC0)
+    alphabet = "abcde 0123"
+    samples = [
+        (
+            "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 340))),
+            "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 340))),
+        )
+        for _ in range(1000)
+    ]
+    for candidate, existing in [*adversarial, *samples]:
+        exact = SequenceMatcher(None, candidate, existing).ratio() >= 0.92
+        assert corpus._near_duplicate(candidate, [existing]) is exact
+
+
+def test_semantic_mismatch_is_diagnostic_but_answer_disagreement_rejects() -> None:
+    row = _accepted_comparison_rows(comparison.build_comparison_plan())[0]
+    roles = ["matches_rule"] * len(row["criteria"])
+    other_scenario = next(
+        scenario
+        for scenario in corpus.SCENARIO_CODES
+        if scenario != row["semantic_equivalence_attestation"]["scenario"]
+    )
+    wire = {
+        "status": "accepted",
+        "selected_criterion_id": row["selected_criterion_id"],
+        "reason_codes": [],
+        "natural_language": True,
+        "generic_or_invented": True,
+        "exclusive_options": True,
+        "private_or_sensitive": False,
+        "semantic_equivalence_attestation": {
+            "scenario": other_scenario,
+            "criterion_roles": roles,
+            "selected_role": "matches_rule",
+        },
+    }
+    review = pilot.bind_pilot_reviewer_record(wire, row["task_id"])
+    assert pilot.pilot_semantic_kind(row, review) == "scenario_disagreement"
+    accepted, rejected = corpus.resolve_reviews(
+        [row],
+        [review],
+        acceptance=pilot.pilot_acceptance,
+        pair_resolution=pilot.pilot_pair_resolution,
+        review_model=pilot.PilotReviewerRecord,
+    )
+    assert len(accepted) == 1
+    assert rejected == []
+
+    disagree = {**wire, "selected_criterion_id": row["criteria"][1]["id"]}
+    bound_disagree = pilot.bind_pilot_reviewer_record(disagree, row["task_id"])
+    accepted, rejected = corpus.resolve_reviews(
+        [row],
+        [bound_disagree],
+        acceptance=pilot.pilot_acceptance,
+        pair_resolution=pilot.pilot_pair_resolution,
+        review_model=pilot.PilotReviewerRecord,
+    )
+    assert accepted == []
+    assert rejected[0]["reason"] == "review_disagreement"
+
+
 def test_plan_deterministic_text_free_200_slots() -> None:
     plan_a = comparison.build_comparison_plan()
     plan_b = comparison.build_comparison_plan()
@@ -593,6 +973,8 @@ def test_generate_fails_missing_openrouter_key(
     (tmp_path / "phase4e" / "comparison").mkdir(parents=True, exist_ok=True)
     root = tmp_path / "phase4e" / "comparison"
     plan, plan_path, work_dir = _setup_work(root)
+    plan = _v2_fixture_plan()
+    plan_path.write_bytes(comparison._canonical(plan) + b"\n")
     packet = root / "comparison-packet"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(comparison.ComparisonError, match="OPENROUTER_API_KEY"):
@@ -617,9 +999,110 @@ def test_generate_full_pass_with_injected_transport(
 
     root = tmp_path / "phase4e" / "comparison"
     plan, plan_path, work_dir = _setup_work(root)
+    plan = _v2_fixture_plan()
+    plan_path.write_bytes(comparison._canonical(plan) + b"\n")
     packet = root / "comparison-packet"
 
     transport, _, _ = _author_reviewer_transport_fixture(plan["slots"])
+    captured_reviewer: dict[str, Any] = {}
+
+    def capture_reviewer_request(
+        method: str, url: str, headers: Mapping[str, str], body: bytes
+    ) -> Any:
+        request = json.loads(body)
+        if request.get("model") == _comparison_reviewer_model() and not captured_reviewer:
+            captured_reviewer.update(request)
+        return transport(method, url, headers, body)
+
+    result = comparison.run_generate(
+        plan_path,
+        work_dir,
+        packet,
+        allow_network=True,
+        transport=capture_reviewer_request,
+        tokenizer_receipt=cast(corpus.VerifiedMiniLMTokenizerReceipt, _TokenFactory()),
+    )
+    assert result == packet / "packet.json"
+    descriptor = json.loads(result.read_bytes())
+    assert descriptor["schema_version"] == "phase4e-comparison-packet.v1"
+    assert descriptor["accepted_count"] == 200
+    assert descriptor["rejected_count"] == 0
+    first_reviewer = json.loads(captured_reviewer["messages"][1]["content"])["tasks"][0]
+    slot = next(item for item in plan["slots"] if item["task_id"] == first_reviewer["task_id"])
+    sibling_slots = [item for item in plan["slots"] if item["pair_id"] == slot["pair_id"]]
+    authored_rows = corpus._materialize_author_rows(
+        corpus.decode_author_response(_build_author_wire(sibling_slots), sibling_slots),
+        sibling_slots,
+    )
+    authored_row = next(row for row in authored_rows if row["task_id"] == first_reviewer["task_id"])
+    assert captured_reviewer["messages"] == pilot.pilot_reviewer_messages(authored_row)
+    provider_schema = captured_reviewer["response_format"]["json_schema"]["schema"]
+    assert provider_schema == pilot.pilot_reviewer_schema(1)
+    schema_text = json.dumps(provider_schema)
+    assert "generic_or_invented" in schema_text
+    assert '"fictional"' not in schema_text
+    diagnostics = comparison._load_comparison_diagnostics(
+        work_dir,
+        comparison._sha(plan_path.read_bytes()),
+        schema_version=comparison.COMPARISON_DIAGNOSTICS_SCHEMA,
+    )
+    assert diagnostics["reviewed"] == 200
+    assert diagnostics["scenario_disagreement"] == 0
+
+
+def test_author_target_mismatch_rejects_pair_before_reviewer_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    root = tmp_path / "phase4e" / "comparison"
+    root.mkdir(parents=True, exist_ok=True)
+    plan, plan_path, work_dir = _setup_work(root)
+    plan = _v2_fixture_plan()
+    plan_path.write_bytes(comparison._canonical(plan) + b"\n")
+    base_transport, _, _ = _author_reviewer_transport_fixture(plan["slots"])
+    mutated_pair_ids: set[str] = set()
+    mutated_task_ids: set[str] = set()
+    reviewer_task_ids: list[str] = []
+    changed = False
+
+    def transport(method: str, url: str, headers: Mapping[str, str], body: bytes) -> Any:
+        nonlocal changed
+        request = json.loads(body)
+        if request.get("model") == _comparison_author_model() and not changed:
+            supplied = json.loads(request["messages"][1]["content"])["slots"]
+            pair_id = str(supplied[0]["pair_id"])
+            mutated_pair_ids.add(pair_id)
+            mutated_task_ids.update(
+                str(slot["task_id"]) for slot in plan["slots"] if slot["pair_id"] == pair_id
+            )
+            response = base_transport(method, url, headers, body)
+            response_payload = json.loads(response[2])
+            author_wire = json.loads(response_payload["choices"][0]["message"]["content"])
+            alternate = next(
+                code
+                for code in corpus.SCENARIO_CODES
+                if code != supplied[0]["semantic_target"]["scenario"]
+            )
+            author_wire["record_0_scenario"] = alternate
+            sibling_index = next(
+                index
+                for index, slot in enumerate(supplied)
+                if slot["pair_id"] == pair_id and slot["task_id"] != supplied[0]["task_id"]
+            )
+            author_wire[f"record_{sibling_index}_instruction"] = (
+                "Caso de teste: CPF 123.456.789-09, decisão fictícia."
+            )
+            changed = True
+            return _raw_completion(json.dumps(author_wire))
+        if request.get("model") == _comparison_reviewer_model():
+            reviewer_task_ids.extend(
+                str(task["task_id"])
+                for task in json.loads(request["messages"][1]["content"])["tasks"]
+            )
+        return base_transport(method, url, headers, body)
+
+    packet = root / "comparison-packet"
     result = comparison.run_generate(
         plan_path,
         work_dir,
@@ -629,10 +1112,75 @@ def test_generate_full_pass_with_injected_transport(
         tokenizer_receipt=cast(corpus.VerifiedMiniLMTokenizerReceipt, _TokenFactory()),
     )
     assert result == packet / "packet.json"
-    descriptor = json.loads(result.read_bytes())
-    assert descriptor["schema_version"] == "phase4e-comparison-packet.v1"
-    assert descriptor["accepted_count"] == 200
-    assert descriptor["rejected_count"] == 0
+    assert mutated_pair_ids
+    assert mutated_task_ids.isdisjoint(reviewer_task_ids)
+    rejected = comparison._read_jsonl(packet / "rejected.jsonl")
+    assert {
+        row["task_id"]
+        for row in rejected
+        if row["reason"] in {"semantic_target_mismatch", "paired_author_target_mismatch"}
+    } == mutated_task_ids
+    diagnostics = comparison._load_comparison_diagnostics(
+        work_dir,
+        comparison._sha(plan_path.read_bytes()),
+        schema_version=comparison.COMPARISON_DIAGNOSTICS_SCHEMA,
+    )
+    assert diagnostics["local_privacy"] == 1
+    assert any(
+        row["task_id"] in mutated_task_ids and row["reason"] == "paired_author_target_mismatch"
+        for row in rejected
+    )
+
+
+def test_settled_reviewer_error_resolves_identity_with_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SARACURA_PRIVATE_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    root = tmp_path / "phase4e" / "comparison"
+    root.mkdir(parents=True, exist_ok=True)
+    plan, plan_path, work_dir = _setup_work(root)
+    plan = _v2_fixture_plan()
+    plan_path.write_bytes(comparison._canonical(plan) + b"\n")
+    base_transport, _, _ = _author_reviewer_transport_fixture(plan["slots"])
+    failed_task_ids: set[str] = set()
+    failed = False
+
+    def transport(method: str, url: str, headers: Mapping[str, str], body: bytes) -> Any:
+        nonlocal failed
+        request = json.loads(body)
+        if request.get("model") == _comparison_reviewer_model() and not failed:
+            tasks = json.loads(request["messages"][1]["content"])["tasks"]
+            failed_task_ids.update(str(task["task_id"]) for task in tasks)
+            failed = True
+            return (
+                400,
+                {},
+                json.dumps(
+                    {"error": {"message": "settled provider rejection"}, "usage": {"cost": "0"}}
+                ).encode(),
+            )
+        return base_transport(method, url, headers, body)
+
+    packet = root / "comparison-packet"
+    result = comparison.run_generate(
+        plan_path,
+        work_dir,
+        packet,
+        allow_network=True,
+        transport=transport,
+        tokenizer_receipt=cast(corpus.VerifiedMiniLMTokenizerReceipt, _TokenFactory()),
+    )
+    assert result == packet / "packet.json"
+    assert len(failed_task_ids) == 1
+    terminal = json.loads((root / "terminal-report.json").read_bytes())
+    assert terminal["planned"] == 200
+    assert terminal["accepted"] + terminal["rejected"] == 200
+    assert terminal["unresolved"] == 0
+    rejected = comparison._read_jsonl(packet / "rejected.jsonl")
+    failure = next(row for row in rejected if row["task_id"] in failed_task_ids)
+    assert failure["reason"] == "reviewer_response_failure"
+    assert failure["reviewer_request_id"]
 
 
 def test_saracura_capacity_check_uses_generated_semantic_content() -> None:
