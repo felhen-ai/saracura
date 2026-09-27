@@ -9,7 +9,7 @@ status: current
 canonical: README.md
 globalRef: qmd://saracura/README.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-23
+lastReviewedAt: 2026-09-27
 sourceRefs: []
 related:
   - docs/README.pt-BR.md
@@ -159,8 +159,9 @@ isolated optional dependency group, an operator-supplied immutable local Laya
 snapshot, and an explicit CPU or MPS device; it never downloads, discovers, or
 contacts a model provider. The synthetic PT-BR request in
 [`examples/ptbr-universal-request.json`](examples/ptbr-universal-request.json)
-uses e-mail triage only as a future Phase 4F shadow-mode pilot and contains no mailbox
-data.
+uses e-mail triage only as a fictional reference scenario for Phase 4F.1's
+read-only shadow evaluation. It contains no mailbox data and does not connect to
+e-mail services.
 
 ```bash
 uv sync --locked --dev --extra universal-local
@@ -334,6 +335,50 @@ uv run ruff check benchmarks/typesafe_native.py tests/test_typesafe_native.py
 uv run ruff format --check benchmarks/typesafe_native.py tests/test_typesafe_native.py
 uv run mypy benchmarks/typesafe_native.py tests/test_typesafe_native.py
 ```
+
+## Phase 4F.1 read-only shadow reference
+
+The e-mail triage example is a local, read-only shadow workflow, not a mailbox
+integration. Saracura does not connect to Gmail, Outlook, IMAP, a browser, or a
+network service, and it does not read, move, label, delete, reply to, or otherwise
+mutate messages. The reference policy and JSONL records contain fictional data;
+operators must choose a minimized `subject` and `preview` before sending input
+to the local command.
+
+Run it only with the exact verified local encoder snapshot and sealed training
+capsule for the policy's model revision. Those artifacts are not bundled or
+downloaded. `shadow-decide` emits content-free decisions, not input state,
+criterion descriptions, raw scores, or timing. The output is always
+`uncalibrated`, abstained, and `automation_allowed=false`; its ordered ranking
+weights are not confidence and do not authorize actions. Operator feedback is a
+separate descriptive evaluation only: it must not be used to train, fine-tune,
+retrieve, optimize prompts, or calibrate a model. A provider-specific mailbox
+adapter, if ever approved, remains outside this public increment and belongs to
+a later private Phase 4F.2.
+
+```bash
+uv sync --locked --dev --extra universal-local
+mkdir -p .artifacts/shadow
+uv run saracura shadow-decide \
+  --policy examples/ptbr-email-shadow-policy.json \
+  --encoder-snapshot <verified-local-encoder-snapshot> \
+  --training-capsule <verified-local-training-capsule> \
+  --device cpu \
+  < examples/ptbr-email-shadow-input.jsonl \
+  > .artifacts/shadow/decisions.jsonl
+uv run saracura shadow-evaluate \
+  --policy examples/ptbr-email-shadow-policy.json \
+  --decisions .artifacts/shadow/decisions.jsonl \
+  --feedback examples/ptbr-email-shadow-feedback.jsonl
+```
+
+The sample policy is editable data, not a hard-coded runner pack or a claim
+that the checkpoint is optimized for e-mail. At execution, the verified
+tokenizer enforces the existing limits of 128 context tokens and 96 tokens per
+criterion. No preview token budget is published here: it requires the separate
+operator smoke with the verified tokenizer, and the runner never truncates
+input. The JSON policy may appear in the source distribution but is not in the
+wheel; fictional JSONL inputs and feedback remain excluded from both archives.
 
 ## License
 

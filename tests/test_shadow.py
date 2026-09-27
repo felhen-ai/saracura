@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unicodedata
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import pytest
@@ -498,6 +499,61 @@ def test_optional_synthetic_torch_shadow_batch_loads_once() -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_ptbr_email_reference_examples_match_policy_and_stay_synthetic() -> None:
+    root = Path(__file__).parents[1]
+    policy = parse_shadow_policy_json(
+        (root / "examples/ptbr-email-shadow-policy.json").read_bytes()
+    )
+    assert policy.model == (
+        "phase4e-saracura-ranker.v1."
+        "f1d72c34cc535ddefbf7e24cf45d1be6e0aee40ba881228b4edd092d78640d5e"
+    )
+    assert policy.workflow.revision == "phase4e-saracura-ranker.v1"
+    assert policy.domain == "email_triage"
+    assert policy.locale == "pt-BR"
+    assert policy.state_keys == ("subject", "preview")
+    assert tuple(criterion.id for criterion in policy.criteria) == (
+        "action_required",
+        "financial_or_accounting",
+        "legal_or_security",
+        "project_or_operations",
+        "marketing_or_newsletter",
+        "low_value_or_spam",
+        "manual_review",
+    )
+    assert len(policy.instruction) <= 120
+    assert len(policy.instruction.encode("utf-8")) <= 480
+    assert all(len(item.description) <= 120 for item in policy.criteria)
+    assert all(len(item.description.encode("utf-8")) <= 480 for item in policy.criteria)
+
+    input_path = root / "examples/ptbr-email-shadow-input.jsonl"
+    input_lines = input_path.read_text(encoding="utf-8").splitlines()
+    items = [parse_shadow_item_json(line) for line in input_lines]
+    assert len(items) == 8
+    for item in items:
+        validate_shadow_item_state(policy, item)
+        assert len(canonical_json_bytes(cast(Any, item.state)).decode("utf-8")) <= 200
+        assert len(canonical_json_bytes(cast(Any, item.state))) <= 800
+    refs = {item.item_ref for item in items}
+    assert len(refs) == len(items)
+    assert all("@" not in item.item_ref and "/" not in item.item_ref for item in items)
+    assert not any("@" in line for line in input_lines)
+
+    feedback_lines = (
+        (root / "examples/ptbr-email-shadow-feedback.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    feedback = [parse_shadow_feedback_json(line) for line in feedback_lines]
+    assert len(feedback) == 8
+    assert {record.item_ref for record in feedback} == refs
+    assert all(record.policy_sha256 == shadow_policy_digest(policy) for record in feedback)
+    assert {record.operator_label for record in feedback if record.operator_label is not None} == {
+        criterion.id for criterion in policy.criteria
+    }
+    assert sum(record.disposition == "skipped" for record in feedback) == 1
 
 
 def test_shadow_json_parsers_enforce_closed_decision_and_feedback_schemas() -> None:

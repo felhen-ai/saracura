@@ -1,0 +1,45 @@
+{
+  "schema_version": "saracura-shadow-policy.v1",
+  "id": "ptbr-email-triage",
+  "revision": "reference.v1",
+  "model": "phase4e-saracura-ranker.v1.f1d72c34cc535ddefbf7e24cf45d1be6e0aee40ba881228b4edd092d78640d5e",
+  "locale": "pt-BR",
+  "domain": "email_triage",
+  "workflow": {
+    "id": "universal-choice",
+    "revision": "phase4e-saracura-ranker.v1"
+  },
+  "state_keys": ["subject", "preview"],
+  "question_id": "classification",
+  "instruction": "Classifique o item usando apenas assunto e prévia fornecidos; não infira o que não está presente.",
+  "criteria": [
+    {
+      "id": "action_required",
+      "description": "Há uma providência concreta a executar, como responder, confirmar ou enviar algo."
+    },
+    {
+      "id": "financial_or_accounting",
+      "description": "Cobranças, pagamentos, notas fiscais, extratos, impostos ou contabilidade são o tema principal."
+    },
+    {
+      "id": "legal_or_security",
+      "description": "Contratos, obrigações legais, privacidade, acesso suspeito ou alertas de segurança são o tema."
+    },
+    {
+      "id": "project_or_operations",
+      "description": "Atualizações, entregas, reuniões ou decisões de projeto e operação, sem tema financeiro ou jurídico predominante."
+    },
+    {
+      "id": "marketing_or_newsletter",
+      "description": "Conteúdo promocional, ofertas e newsletters sem solicitação operacional ou obrigação de resposta."
+    },
+    {
+      "id": "low_value_or_spam",
+      "description": "Mensagem repetitiva, irrelevante ou provável spam; não use para cobrança ou alerta legítimo."
+    },
+    {
+      "id": "manual_review",
+      "description": "Use quando faltar contexto, houver categorias concorrentes ou a decisão exigir análise humana."
+    }
+  ]
+}

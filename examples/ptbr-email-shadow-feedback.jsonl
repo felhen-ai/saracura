@@ -1,0 +1,8 @@
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-001","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"financial_or_accounting"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-002","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"action_required"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-003","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"marketing_or_newsletter"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-004","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"legal_or_security"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-005","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"project_or_operations"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-006","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"low_value_or_spam"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-007","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"labeled","operator_label":"manual_review"}
+{"schema_version":"saracura-shadow-feedback.v1","item_ref":"demo-msg-008","policy_sha256":"fefe634cb4da9aa2b8afa91de84e1d284a4996f26c62e09c562c8cefc2131110","disposition":"skipped","operator_label":null}
