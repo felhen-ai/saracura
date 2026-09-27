@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import subprocess
@@ -453,7 +454,7 @@ def test_shadow_runner_revalidates_copied_policy_before_backend_factory(
 
 
 def _run_optional_synthetic_torch_shadow_batch() -> None:
-    import torch
+    torch = cast(Any, importlib.import_module("torch"))
 
     policy = _policy()
 
