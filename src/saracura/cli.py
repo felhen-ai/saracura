@@ -10,6 +10,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Never, cast
 
+from pydantic import JsonValue
+
 from saracura.backends import (
     DeterministicFixtureBackend,
     MiniLMRoutingBackend,
@@ -44,13 +46,29 @@ from saracura.runtime.workflows import (
     UNIVERSAL_CHOICE_WORKFLOW_ID,
     UNIVERSAL_CHOICE_WORKFLOW_REVISION,
 )
-from saracura.serialization import serialize_state
+from saracura.serialization import canonical_json_bytes, serialize_state
+from saracura.shadow import (
+    ShadowDecisionRecord,
+    ShadowItem,
+    ShadowPolicy,
+    ShadowRunner,
+    evaluate_shadow_feedback,
+    parse_shadow_decision_json,
+    parse_shadow_feedback_json,
+    parse_shadow_item_json,
+    parse_shadow_policy_json,
+)
+from saracura.shadow.runner import build_shadow_request
 from saracura.verified_bytes import read_public_external_file
 
 if TYPE_CHECKING:
     from saracura.backends.laya import LayaUniversalBackend
 
 MAX_REQUEST_BYTES = 1_000_000
+MAX_SHADOW_BATCH_ITEMS = 500
+MAX_SHADOW_LINE_BYTES = 4096
+MAX_SHADOW_INPUT_BYTES = 2_048_000
+MAX_SHADOW_FILE_BYTES = 8 * 1024 * 1024
 _LAYA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
     execution_tier="universal",
     decision_types=frozenset({"choice"}),
@@ -160,6 +178,21 @@ def _parser() -> argparse.ArgumentParser:
     identity.add_argument("--output", type=Path, required=True)
     identity.add_argument("--created-at", required=True)
     _add_minilm_arguments(identity)
+
+    shadow_decide = commands.add_parser(
+        "shadow-decide", help="run a bounded local shadow batch from UTF-8 JSONL stdin"
+    )
+    shadow_decide.add_argument("--policy", type=Path, required=True)
+    shadow_decide.add_argument("--encoder-snapshot", type=Path, required=True)
+    shadow_decide.add_argument("--training-capsule", type=Path, required=True)
+    shadow_decide.add_argument("--device", choices=("mps", "cpu"), required=True)
+
+    shadow_evaluate = commands.add_parser(
+        "shadow-evaluate", help="evaluate local content-free shadow decisions and feedback"
+    )
+    shadow_evaluate.add_argument("--policy", type=Path, required=True)
+    shadow_evaluate.add_argument("--decisions", type=Path, required=True)
+    shadow_evaluate.add_argument("--feedback", type=Path, required=True)
     return parser
 
 
@@ -640,6 +673,208 @@ def _run_saracura_decide(values: argparse.Namespace) -> int:
     return 2
 
 
+def _shadow_public_error(
+    *, line_index: int | None = None, code: ErrorCode = ErrorCode.REQUEST_INVALID
+) -> SaracuraError:
+    details: dict[str, JsonValue] = {} if line_index is None else {"line_index": line_index}
+    message = (
+        "Shadow model execution is unavailable."
+        if code == ErrorCode.BACKEND_UNAVAILABLE
+        else "Shadow input or execution is invalid."
+    )
+    return SaracuraError(
+        code,
+        message,
+        ("/model" if code == ErrorCode.BACKEND_UNAVAILABLE else "/state")
+        if line_index is not None
+        else "/",
+        details=details,
+    )
+
+
+def _load_shadow_policy(path: Path) -> ShadowPolicy:
+    failed = False
+    policy: ShadowPolicy | None = None
+    try:
+        raw = read_public_external_file(path, maximum=MAX_SHADOW_FILE_BYTES)
+        policy = parse_shadow_policy_json(raw.decode("utf-8", errors="strict"))
+    except BaseException:
+        failed = True
+    if failed or policy is None:
+        raise _shadow_public_error()
+    return policy
+
+
+def _read_shadow_items(stream: Any, policy: ShadowPolicy) -> list[ShadowItem]:
+    items: list[ShadowItem] = []
+    references: set[str] = set()
+    total_bytes = 0
+    line_index = 0
+    while True:
+        failed = False
+        raw_line: bytes | None = None
+        try:
+            raw_line = stream.readline(MAX_SHADOW_LINE_BYTES + 1)
+        except BaseException:
+            failed = True
+        if failed or not isinstance(raw_line, bytes):
+            raise _shadow_public_error(line_index=line_index)
+        if raw_line == b"":
+            break
+        current_index = line_index
+        line_index += 1
+        total_bytes += len(raw_line)
+        if (
+            len(raw_line) > MAX_SHADOW_LINE_BYTES
+            or total_bytes > MAX_SHADOW_INPUT_BYTES
+            or current_index >= MAX_SHADOW_BATCH_ITEMS
+        ):
+            raise _shadow_public_error(line_index=current_index)
+        content = raw_line[:-1] if raw_line.endswith(b"\n") else raw_line
+        if content.endswith(b"\r"):
+            content = content[:-1]
+        failed = False
+        item: ShadowItem | None = None
+        try:
+            if not content:
+                raise ValueError("empty JSONL line")
+            decoded = content.decode("utf-8", errors="strict")
+            item = parse_shadow_item_json(decoded)
+        except BaseException:
+            failed = True
+        if failed or item is None or item.item_ref in references:
+            raise _shadow_public_error(line_index=current_index)
+        failed = False
+        try:
+            build_shadow_request(policy, item)
+        except BaseException:
+            failed = True
+        if failed:
+            raise _shadow_public_error(line_index=current_index)
+        references.add(item.item_ref)
+        items.append(item)
+    if not items:
+        raise _shadow_public_error(line_index=0)
+    return items
+
+
+def _write_stdout_bytes(payload: bytes) -> None:
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is not None:
+        binary.write(payload)
+    else:
+        sys.stdout.write(payload.decode("utf-8", errors="strict"))
+
+
+def _run_shadow_decide(values: argparse.Namespace) -> int:
+    try:
+        policy = _load_shadow_policy(values.policy)
+        input_stream = getattr(sys.stdin, "buffer", None)
+        if input_stream is None:
+            raise _shadow_public_error()
+        items = _read_shadow_items(input_stream, policy)
+
+        # Capsule provenance and model binding are checked before the factory can
+        # construct a backend or trigger optional model loading.
+        candidate = load_saracura_candidate()
+        verified_capsule = verify_training_capsule(values.training_capsule, candidate)
+        if policy.model != verified_capsule.candidate.model_revision:
+            raise _shadow_public_error()
+
+        backend_values = argparse.Namespace(
+            encoder_snapshot=values.encoder_snapshot,
+            training_capsule=values.training_capsule,
+            device=values.device,
+            calibration=None,
+            model_snapshot=None,
+            training_manifest=None,
+            checkpoint=None,
+        )
+        records: list[ShadowDecisionRecord] = []
+        failed = False
+        failed_index = 0
+        failure_code = ErrorCode.BACKEND_UNAVAILABLE
+        try:
+            with ShadowRunner(
+                policy,
+                lambda: _require_saracura_arguments(
+                    backend_values, verified_capsule=verified_capsule
+                ),
+            ) as runner:
+                for index, item in enumerate(items):
+                    record: ShadowDecisionRecord | None = None
+                    try:
+                        record = runner.decide(item)
+                    except SaracuraError as error:
+                        failed = True
+                        failed_index = index
+                        failure_code = error.payload.code
+                    except BaseException:
+                        failed = True
+                        failed_index = index
+                        failure_code = ErrorCode.BACKEND_UNAVAILABLE
+                    if failed or record is None:
+                        failed = True
+                        failed_index = index
+                        break
+                    records.append(record)
+        except SaracuraError as error:
+            failed = True
+            failure_code = error.payload.code
+        except BaseException:
+            failed = True
+            failure_code = ErrorCode.BACKEND_UNAVAILABLE
+        if failed:
+            raise _shadow_public_error(line_index=failed_index, code=failure_code)
+
+        output = b"".join(
+            canonical_json_bytes(record.model_dump(mode="json")) + b"\n" for record in records
+        )
+    except SaracuraError as error:
+        public = error
+    except BaseException:
+        public = _shadow_public_error()
+    else:
+        _write_stdout_bytes(output)
+        return 0
+    _print_error(public)
+    return 2
+
+
+def _read_shadow_records(path: Path, parser: Callable[[str], Any]) -> list[Any]:
+    failed = False
+    records: list[Any] = []
+    try:
+        raw = read_public_external_file(path, maximum=MAX_SHADOW_FILE_BYTES)
+        for line in raw.splitlines():
+            if not line:
+                raise ValueError("empty JSONL line")
+            records.append(parser(line.decode("utf-8", errors="strict")))
+    except BaseException:
+        failed = True
+    if failed:
+        raise _shadow_public_error()
+    return records
+
+
+def _run_shadow_evaluate(values: argparse.Namespace) -> int:
+    try:
+        policy = _load_shadow_policy(values.policy)
+        decisions = _read_shadow_records(values.decisions, parse_shadow_decision_json)
+        feedback = _read_shadow_records(values.feedback, parse_shadow_feedback_json)
+        summary = evaluate_shadow_feedback(policy, decisions, feedback)
+        output = canonical_json_bytes(summary.model_dump(mode="json")) + b"\n"
+    except SaracuraError as error:
+        public = error
+    except BaseException:
+        public = _shadow_public_error()
+    else:
+        _write_stdout_bytes(output)
+        return 0
+    _print_error(public)
+    return 2
+
+
 def _run_create_identity(values: argparse.Namespace) -> int:
     request = parse_request_json(
         read_public_external_file(values.request, maximum=MAX_REQUEST_BYTES)
@@ -702,6 +937,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_describe(values)
         if values.command == "create-identity-calibration":
             return _run_create_identity(values)
+        if values.command == "shadow-decide":
+            return _run_shadow_decide(values)
+        if values.command == "shadow-evaluate":
+            return _run_shadow_evaluate(values)
         raise _ArgumentFailure("unknown command")
     except _ArgumentFailure:
         _print_error(

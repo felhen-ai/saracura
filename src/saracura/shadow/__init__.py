@@ -18,6 +18,7 @@ from saracura.shadow.models import (
     parse_shadow_policy_json,
     shadow_policy_digest,
 )
+from saracura.shadow.runner import ShadowRunner, build_shadow_request
 
 __all__ = [
     "ShadowDecisionRecord",
@@ -26,6 +27,8 @@ __all__ = [
     "ShadowItem",
     "ShadowPolicy",
     "ShadowRankingEntry",
+    "ShadowRunner",
+    "build_shadow_request",
     "evaluate_shadow_feedback",
     "parse_shadow_decision_json",
     "parse_shadow_feedback_json",

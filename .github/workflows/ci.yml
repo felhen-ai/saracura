@@ -97,7 +97,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --dev --extra universal-local
       # Synthetic fixtures only: no model host, checkpoint, or operator cache.
-      - run: uv run pytest -q tests/test_universal_local.py tests/test_phase4e_comparison.py
+      - run: uv run pytest -q tests/test_universal_local.py tests/test_phase4e_comparison.py tests/test_shadow.py
       - run: uv run python -m benchmarks.universal_local validate-registry
       - run: uv run python -m benchmarks.validate_manifests
 

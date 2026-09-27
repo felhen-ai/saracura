@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
 import unicodedata
 from hashlib import sha256
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import ValidationError
 
+import saracura.shadow.runner as shadow_runner_module
+from saracura.backends.base import BackendCapabilities, ScoredChoice
 from saracura.contracts.errors import SaracuraError
 from saracura.contracts.models import (
     Answer,
@@ -25,6 +29,7 @@ from saracura.shadow import (
     ShadowFeedbackRecord,
     ShadowItem,
     ShadowPolicy,
+    ShadowRunner,
     evaluate_shadow_feedback,
     parse_shadow_decision_json,
     parse_shadow_feedback_json,
@@ -37,6 +42,59 @@ from saracura.shadow import (
 
 MODEL_REVISION = "phase4e-saracura-ranker.v1.fixture"
 LABELS = ("action_required", "finance", "manual_review")
+
+
+class _FakeUniversalBackend:
+    def __init__(self, *, fail_with: BaseException | None = None) -> None:
+        self.prepared = 0
+        self.closed = 0
+        self.decisions = 0
+        self.include_timing: list[bool] = []
+        self.fail_with = fail_with
+
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            execution_tier="universal",
+            decision_types=frozenset({"choice"}),
+            max_questions=10,
+            max_criteria=8,
+            execution_boundary="synthetic-shadow-test",
+            cold_warm_semantics="synthetic",
+            quality_claims=False,
+            dynamic_workflows=frozenset({("universal-choice", "phase4e-saracura-ranker.v1")}),
+        )
+
+    @property
+    def model(self) -> ModelReference:
+        return ModelReference(
+            id="saracura/universal-ranker",
+            revision=MODEL_REVISION,
+            checkpoint_sha256="a" * 64,
+        )
+
+    def prepare(self) -> None:
+        self.prepared += 1
+
+    def validate_request(self, request: Any) -> None:
+        del request
+
+    def score_universal_choice(self, request: Any, question: Any, state: bytes) -> ScoredChoice:
+        del request, state
+        self.decisions += 1
+        if self.fail_with is not None:
+            raise self.fail_with
+        return ScoredChoice(
+            question_id=question.id,
+            raw_scores={
+                criterion.id: float(len(question.criteria) - index)
+                for index, criterion in enumerate(question.criteria)
+            },
+            input_tokens=5,
+        )
+
+    def close(self) -> None:
+        self.closed += 1
 
 
 def _policy(**updates: object) -> ShadowPolicy:
@@ -128,7 +186,7 @@ def _feedback(
     policy: ShadowPolicy | None = None,
     *,
     label: str | None = LABELS[0],
-    disposition: str = "labeled",
+    disposition: Literal["labeled", "skipped"] = "labeled",
 ) -> ShadowFeedbackRecord:
     selected_policy = policy or _policy()
     return ShadowFeedbackRecord(
@@ -143,7 +201,7 @@ def _feedback(
 def test_policy_is_frozen_closed_and_has_canonical_digest() -> None:
     policy = _policy()
     with pytest.raises(ValidationError):
-        policy.id = "changed"  # type: ignore[misc]
+        policy.id = "changed"
     with pytest.raises(ValidationError):
         ShadowPolicy.model_validate({**policy.model_dump(), "extra": "no"})
     raw = json.dumps(policy.model_dump(mode="json"), ensure_ascii=False)
@@ -287,6 +345,159 @@ def test_item_parser_rejects_non_nfc_and_non_string_state() -> None:
             item_ref="msg-1",
             state={1: "not-a-string-key", "preview": "ok"},  # type: ignore[dict-item]
         )
+
+
+def test_shadow_runner_owns_one_prepared_backend_and_preserves_batch_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _policy()
+    backend = _FakeUniversalBackend()
+    real_engine = cast(Any, shadow_runner_module).DecisionEngine
+    include_timing_values: list[bool] = []
+
+    class EngineSpy:
+        def __init__(self, **kwargs: Any) -> None:
+            self.delegate = real_engine(**kwargs)
+
+        def decide(self, request: Any, *, include_timing: bool = True) -> Any:
+            include_timing_values.append(include_timing)
+            return self.delegate.decide(request, include_timing=include_timing)
+
+    monkeypatch.setattr(shadow_runner_module, "DecisionEngine", EngineSpy)
+    runner = ShadowRunner(policy, lambda: backend)
+    with pytest.raises(SaracuraError):
+        runner.decide(_item())
+
+    with runner as active:
+        records = [active.decide(_item(f"msg-{index:03d}")) for index in range(100)]
+        assert [record.item_ref for record in records] == [f"msg-{i:03d}" for i in range(100)]
+        assert all(record.status == "uncalibrated" for record in records)
+        assert all(record.abstained and not record.automation_allowed for record in records)
+    runner.close()
+
+    assert backend.prepared == 1
+    assert backend.closed == 1
+    assert backend.decisions == 100
+    assert include_timing_values == [False] * 100
+    assert "subject" not in records[0].model_dump_json()
+
+
+@pytest.mark.parametrize("failure", [ValueError("private-content-canary"), KeyboardInterrupt()])
+def test_shadow_runner_redacts_engine_failures_and_closes_backend(failure: BaseException) -> None:
+    backend = _FakeUniversalBackend(fail_with=failure)
+    runner = ShadowRunner(_policy(), lambda: backend)
+    caught: SaracuraError | None = None
+    try:
+        with runner as active:
+            active.decide(_item())
+    except SaracuraError as error:
+        caught = error
+    assert caught is not None
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+    assert "private-content-canary" not in str(caught)
+    assert backend.prepared == backend.closed == 1
+    with pytest.raises(SaracuraError):
+        runner.decide(_item())
+
+
+def test_shadow_runner_prepare_failure_closes_and_never_exposes_cause() -> None:
+    class BrokenBackend(_FakeUniversalBackend):
+        def prepare(self) -> None:
+            self.prepared += 1
+            raise ValueError("private-prepare-canary")
+
+    backend = BrokenBackend()
+    runner = ShadowRunner(_policy(), lambda: backend)
+    caught: SaracuraError | None = None
+    try:
+        runner.__enter__()
+    except SaracuraError as error:
+        caught = error
+    assert caught is not None
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+    assert "private-prepare-canary" not in str(caught)
+    assert backend.prepared == backend.closed == 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"domain": "unregistered_domain"},
+        {"workflow": WorkflowReference(id="universal-choice", revision="phase4d-laya.v1")},
+    ],
+)
+def test_shadow_runner_revalidates_copied_policy_before_backend_factory(
+    updates: dict[str, object],
+) -> None:
+    calls: list[bool] = []
+    mutated_policy = _policy().model_copy(update=updates)
+
+    def backend_factory() -> _FakeUniversalBackend:
+        calls.append(True)
+        return _FakeUniversalBackend()
+
+    caught: SaracuraError | None = None
+    try:
+        runner = ShadowRunner(mutated_policy, backend_factory)
+        runner.__enter__()
+    except SaracuraError as error:
+        caught = error
+    assert caught is not None
+    assert caught.payload.path == "/policy"
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+    assert calls == []
+
+
+def _run_optional_synthetic_torch_shadow_batch() -> None:
+    import torch
+
+    policy = _policy()
+
+    class SyntheticTorchBackend(_FakeUniversalBackend):
+        def prepare(self) -> None:
+            self.prepared += 1
+            self.layer = torch.nn.Linear(1, len(LABELS), bias=False)
+            with torch.no_grad():
+                self.layer.weight.copy_(torch.tensor([[1.0], [2.0], [3.0]]))
+
+        def score_universal_choice(self, request: Any, question: Any, state: bytes) -> ScoredChoice:
+            del state
+            self.decisions += 1
+            output = self.layer(torch.tensor([[1.0]])).detach().tolist()[0]
+            return ScoredChoice(
+                question_id=question.id,
+                raw_scores=dict(
+                    zip((criterion.id for criterion in question.criteria), output, strict=True)
+                ),
+                input_tokens=5,
+            )
+
+    backend = SyntheticTorchBackend()
+    with ShadowRunner(policy, lambda: backend) as active:
+        records = [active.decide(_item(f"syn-{index:02d}")) for index in range(10)]
+    assert len(records) == 10
+    assert backend.prepared == backend.closed == 1
+    assert backend.decisions == 10
+
+
+def test_optional_synthetic_torch_shadow_batch_loads_once() -> None:
+    if importlib.util.find_spec("torch") is None:
+        pytest.skip("universal-local extra is not installed")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tests.test_shadow import _run_optional_synthetic_torch_shadow_batch; "
+            "_run_optional_synthetic_torch_shadow_batch()",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_shadow_json_parsers_enforce_closed_decision_and_feedback_schemas() -> None:
