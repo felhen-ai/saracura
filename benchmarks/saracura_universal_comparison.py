@@ -3560,20 +3560,30 @@ def run_publish(
         "plan_sha256": private_raw["plan_sha256"],
         "packet_sha256": private_raw["packet_sha256"],
         "policy_sha256": private_raw["policy_sha256"],
-        "provenance": private_raw["provenance"],
+        "provenance": {
+            (
+                "saracura_encoder_snapshot_sha256"
+                if key == "saracura_tokenizer_snapshot_sha256"
+                else key
+            ): value
+            for key, value in private_raw["provenance"].items()
+        },
         "provider_reported_generation_cost_usd": private_raw[
             "provider_reported_generation_cost_usd"
         ],
         "primary_comparison": private_raw["primary_comparison"],
         "candidate_device_observations": private_raw["candidate_device_observations"],
         "limitations": [
-            "Synthetic comparison records share the training author/reviewer model family.",
+            "The author/reviewer model family and prompt family are both shared with training "
+            "generation; this synthetic comparison is in-distribution for Saracura but not "
+            "necessarily for Laya.",
             "The common workload is restricted to Saracura's 128-context and "
             "96-criterion-token envelope, not Laya's larger envelope.",
             "This is descriptive research evidence, not a superiority, calibration, "
             "production, or automation claim.",
         ],
     }
+    _validate_public_projection(projected)
     _assert_public_safe(projected)
     projected_bytes = _canonical(projected) + b"\n"
     _create_or_identical(publish_json, projected_bytes, mode=0o400)
@@ -3671,17 +3681,23 @@ def _validate_slice_tree(summary: Mapping[str, Any]) -> None:
         "axes",
     }:
         raise ComparisonError("publishable slices")
+    expected_labels = {
+        "locale": set(LOCALES),
+        "domain": set(DOMAINS),
+        "scenario": set(SCENARIO_CODES),
+        "option_count": {str(value) for value in OPTION_COUNTS},
+    }
     for dimension in ("locale", "domain", "scenario", "option_count"):
         cells = slices[dimension]
-        if not isinstance(cells, dict):
+        if not isinstance(cells, dict) or not set(cells).issubset(expected_labels[dimension]):
             raise ComparisonError("publishable slices")
         for cell in cells.values():
             _validate_accuracy_cell(cell)
     axes = slices["axes"]
     if not isinstance(axes, dict) or set(axes) != set(AXES):
         raise ComparisonError("publishable axes")
-    for cells in axes.values():
-        if not isinstance(cells, dict):
+    for axis, cells in axes.items():
+        if not isinstance(cells, dict) or not set(cells).issubset(set(AXES[axis])):
             raise ComparisonError("publishable axes")
         for cell in cells.values():
             _validate_accuracy_cell(cell)
@@ -3864,15 +3880,77 @@ def _validate_publishable_result(value: Mapping[str, Any]) -> None:
         raise ComparisonError("candidate device observations are not implemented")
 
 
-def _assert_public_safe(value: object) -> None:
+def _validate_public_projection(value: Mapping[str, Any]) -> None:
+    public_fields = {
+        "schema_version",
+        "status",
+        "evidence_mode",
+        "evaluation_receipt_sha256",
+        "plan_sha256",
+        "packet_sha256",
+        "policy_sha256",
+        "provenance",
+        "provider_reported_generation_cost_usd",
+        "primary_comparison",
+        "candidate_device_observations",
+        "limitations",
+    }
+    if (
+        set(value) != public_fields
+        or value.get("schema_version") != "phase4e-comparison-v1"
+        or value.get("status") != "scored"
+        or value.get("evidence_mode") != "live_verified"
+        or not _is_digest(value.get("evaluation_receipt_sha256"))
+        or not isinstance(value.get("limitations"), list)
+        or not all(isinstance(item, str) for item in value["limitations"])
+    ):
+        raise ComparisonError("public comparison schema")
+
+    provenance = value.get("provenance")
+    public_provenance_fields = {
+        "source_commit",
+        "training_packet_receipt_sha256",
+        "training_accepted_rows_sha256",
+        "training_manifest_sha256",
+        "training_checkpoint_sha256",
+        "saracura_encoder_snapshot_sha256",
+        "laya_snapshot_sha256",
+        "training_task_ids_sha256",
+        "training_family_ids_sha256",
+    }
+    if not isinstance(provenance, dict) or set(provenance) != public_provenance_fields:
+        raise ComparisonError("public comparison provenance")
+
+    private_equivalent = {
+        key: value[key] for key in public_fields - {"evaluation_receipt_sha256", "limitations"}
+    }
+    private_equivalent["schema_version"] = "phase4e-comparison-result.v1"
+    private_provenance = dict(provenance)
+    private_provenance["saracura_tokenizer_snapshot_sha256"] = private_provenance.pop(
+        "saracura_encoder_snapshot_sha256"
+    )
+    private_equivalent["provenance"] = private_provenance
+    _validate_publishable_result(private_equivalent)
+
+
+def _is_public_safetensors_dependency_key(key: str, parent_keys: tuple[str, ...]) -> bool:
+    return key.casefold() == "safetensors" and parent_keys in {
+        ("primary_comparison", "candidate", "dependency_versions"),
+        ("primary_comparison", "control", "dependency_versions"),
+    }
+
+
+def _assert_public_safe(value: object, *, _parent_keys: tuple[str, ...] = ()) -> None:
     forbidden_keys = {
         "instruction",
         "state",
         "criteria",
         "selected_criterion_id",
+        "score_vector",
         "raw_scores",
         "logits",
         "tensor",
+        "safetensors",
         "reservation_id",
         "request_id",
         "response_id",
@@ -3887,14 +3965,18 @@ def _assert_public_safe(value: object) -> None:
     }
     if isinstance(value, dict):
         for key, child in value.items():
-            folded = key.casefold()
-            if folded in forbidden_keys or any(marker in folded for marker in forbidden_keys):
+            if not isinstance(key, str):
                 raise ComparisonError("public projection contains a forbidden field")
-            _assert_public_safe(child)
+            folded = key.casefold()
+            if not _is_public_safetensors_dependency_key(key, _parent_keys) and any(
+                marker in folded for marker in forbidden_keys
+            ):
+                raise ComparisonError("public projection contains a forbidden field")
+            _assert_public_safe(child, _parent_keys=(*_parent_keys, key.casefold()))
         return
     if isinstance(value, list):
         for child in value:
-            _assert_public_safe(child)
+            _assert_public_safe(child, _parent_keys=_parent_keys)
         return
     if isinstance(value, str):
         if (

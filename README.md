@@ -342,24 +342,6 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Phase 4E.4 blind comparison status
 
 <!-- phase4e4-status:begin -->
-The Phase 4E.4 blind comparison protocol and offline implementation are in the
-checkout-only `benchmarks/saracura_universal_comparison.py` module. The
-immutable 200-slot plan, injected-transport generation, isolated scoring
-workers, sealed live-evidence publication, bilingual status update, and focused
-offline conformance suite are implemented. The live comparison has not started,
-and no comparison result is published yet.
-
-Phase 4E.4A is **in progress**. The live comparison has not started.
-
-- `--allow-network` with `OPENROUTER_API_KEY`
-- private verified MiniLM encoder snapshot and sealed Saracura training capsule
-- opt-in Laya control snapshot behind the `universal-local` extra
-- `SARACURA_PRIVATE_STATE_ROOT` pointing to a private, non-synchronized, `0700`
-  directory outside the checkout and synchronized roots
-
-No live comparison result artifact (`benchmarks/results/phase4e-comparison-v1.json`)
-or public report (`docs/action/phase4e-comparison-result.md`) yet exists because
-the live execution (Phase 4E.4B) has not run. Until both backends score the
-sealed accepted packet without any transport or operational failure, the
-comparison remains unclosed and does not release Phase 4F.
+<!-- phase4e4-status-binding:scored:080e9264b3d7fbaf2c95ff51d2599f0522daf27bf94861a144c1463e94ac5596 -->
+The Phase 4E.4 live blind comparison is complete. Saracura scored 187/198 and Laya scored 139/198 on the same accepted synthetic records. See the [aggregate result](docs/action/phase4e-comparison-result.md). This remains synthetic research evidence and does not authorize automation.
 <!-- phase4e4-status:end -->
