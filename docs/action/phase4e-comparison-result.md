@@ -34,4 +34,4 @@ Paired outcomes: both correct 137; candidate only 50; control only 2; both not c
 - The common workload is restricted to Saracura's 128-context and 96-criterion-token envelope, not Laya's larger envelope.
 - This is descriptive research evidence, not a superiority, calibration, production, or automation claim.
 
-Canonical JSON SHA-256: `2dbd0ebc7ee002557e6c5256a00074aab4ad34a905270621d3550380b27fa34d`.
+Canonical JSON SHA-256: `080e9264b3d7fbaf2c95ff51d2599f0522daf27bf94861a144c1463e94ac5596`.

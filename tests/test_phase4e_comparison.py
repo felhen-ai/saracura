@@ -2190,6 +2190,21 @@ def test_publish_ordered_create_or_byte_identical_from_live_evaluator_chain(
     assert published["primary_comparison"]["candidate"]["accuracy"]["correct"] == 150
     assert published["primary_comparison"]["control"]["accuracy"]["correct"] == 200
     assert published["provenance"]["training_checkpoint_sha256"] == "4" * 64
+    assert published["provenance"]["saracura_encoder_snapshot_sha256"] == "6" * 64
+    assert "saracura_tokenizer_snapshot_sha256" not in published["provenance"]
+    private_result = json.loads(result_path.read_bytes())
+    assert private_result["provenance"]["saracura_tokenizer_snapshot_sha256"] == "6" * 64
+    assert "saracura_encoder_snapshot_sha256" not in private_result["provenance"]
+    comparison._validate_public_projection(published)
+    extra_public_field = {**published, "unexpected": "value"}
+    with pytest.raises(comparison.ComparisonError, match="public comparison schema"):
+        comparison._validate_public_projection(extra_public_field)
+    old_public_provenance = json.loads(json.dumps(published))
+    old_public_provenance["provenance"]["saracura_tokenizer_snapshot_sha256"] = (
+        old_public_provenance["provenance"].pop("saracura_encoder_snapshot_sha256")
+    )
+    with pytest.raises(comparison.ComparisonError, match="public comparison provenance"):
+        comparison._validate_public_projection(old_public_provenance)
     assert any(
         "model family and prompt family" in item
         and "in-distribution for Saracura but not necessarily for Laya" in item

@@ -3560,7 +3560,14 @@ def run_publish(
         "plan_sha256": private_raw["plan_sha256"],
         "packet_sha256": private_raw["packet_sha256"],
         "policy_sha256": private_raw["policy_sha256"],
-        "provenance": private_raw["provenance"],
+        "provenance": {
+            (
+                "saracura_encoder_snapshot_sha256"
+                if key == "saracura_tokenizer_snapshot_sha256"
+                else key
+            ): value
+            for key, value in private_raw["provenance"].items()
+        },
         "provider_reported_generation_cost_usd": private_raw[
             "provider_reported_generation_cost_usd"
         ],
@@ -3576,6 +3583,7 @@ def run_publish(
             "production, or automation claim.",
         ],
     }
+    _validate_public_projection(projected)
     _assert_public_safe(projected)
     projected_bytes = _canonical(projected) + b"\n"
     _create_or_identical(publish_json, projected_bytes, mode=0o400)
@@ -3870,6 +3878,59 @@ def _validate_publishable_result(value: Mapping[str, Any]) -> None:
     observations = value["candidate_device_observations"]
     if observations != []:
         raise ComparisonError("candidate device observations are not implemented")
+
+
+def _validate_public_projection(value: Mapping[str, Any]) -> None:
+    public_fields = {
+        "schema_version",
+        "status",
+        "evidence_mode",
+        "evaluation_receipt_sha256",
+        "plan_sha256",
+        "packet_sha256",
+        "policy_sha256",
+        "provenance",
+        "provider_reported_generation_cost_usd",
+        "primary_comparison",
+        "candidate_device_observations",
+        "limitations",
+    }
+    if (
+        set(value) != public_fields
+        or value.get("schema_version") != "phase4e-comparison-v1"
+        or value.get("status") != "scored"
+        or value.get("evidence_mode") != "live_verified"
+        or not _is_digest(value.get("evaluation_receipt_sha256"))
+        or not isinstance(value.get("limitations"), list)
+        or not all(isinstance(item, str) for item in value["limitations"])
+    ):
+        raise ComparisonError("public comparison schema")
+
+    provenance = value.get("provenance")
+    public_provenance_fields = {
+        "source_commit",
+        "training_packet_receipt_sha256",
+        "training_accepted_rows_sha256",
+        "training_manifest_sha256",
+        "training_checkpoint_sha256",
+        "saracura_encoder_snapshot_sha256",
+        "laya_snapshot_sha256",
+        "training_task_ids_sha256",
+        "training_family_ids_sha256",
+    }
+    if not isinstance(provenance, dict) or set(provenance) != public_provenance_fields:
+        raise ComparisonError("public comparison provenance")
+
+    private_equivalent = {
+        key: value[key] for key in public_fields - {"evaluation_receipt_sha256", "limitations"}
+    }
+    private_equivalent["schema_version"] = "phase4e-comparison-result.v1"
+    private_provenance = dict(provenance)
+    private_provenance["saracura_tokenizer_snapshot_sha256"] = private_provenance.pop(
+        "saracura_encoder_snapshot_sha256"
+    )
+    private_equivalent["provenance"] = private_provenance
+    _validate_publishable_result(private_equivalent)
 
 
 def _is_public_safetensors_dependency_key(key: str, parent_keys: tuple[str, ...]) -> bool:

@@ -320,6 +320,6 @@ Apache License 2.0. Consulte [LICENSE](../LICENSE).
 ## Status da comparação cega da Fase 4E.4
 
 <!-- phase4e4-status:begin -->
-<!-- phase4e4-status-binding:scored:2dbd0ebc7ee002557e6c5256a00074aab4ad34a905270621d3550380b27fa34d -->
+<!-- phase4e4-status-binding:scored:080e9264b3d7fbaf2c95ff51d2599f0522daf27bf94861a144c1463e94ac5596 -->
 A comparação cega live da Fase 4E.4 foi concluída. O Saracura acertou 187/198 e o Laya acertou 139/198 nos mesmos registros sintéticos aceitos. Veja o [resultado agregado](action/phase4e-comparison-result.md). Isso permanece evidência de pesquisa sintética e não autoriza automação.
 <!-- phase4e4-status:end -->
