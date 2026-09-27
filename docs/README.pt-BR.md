@@ -356,9 +356,15 @@ alegação de que o checkpoint foi otimizado para e-mail. Na execução, o
 tokenizer verificado aplica os limites existentes de 128 tokens para o contexto
 e 96 tokens por critério. Não há orçamento público de tokens para a prévia: ele
 depende do smoke separado do operador com o tokenizer verificado, e o runner
-nunca trunca a entrada. O JSON da policy pode permanecer no source
-distribution, mas não entra no wheel; os JSONL fictícios de entrada e feedback
-ficam fora dos dois arquivos.
+nunca trunca a entrada. Uma saída válida do tokenizer que exceda esses limites
+é reportada como `CAPACITY_EXCEEDED`; uma saída malformada é tratada como
+`BACKEND_UNAVAILABLE`. A CLI mantém a saída do lote atômica e não emite decisões
+parciais em nenhum dos casos. Integrações podem chamar o helper público
+`validate_shadow_state_capacity` antes de construir um `ShadowItem`; ele é dono
+dos limites canônicos de bytes/codepoints do estado serializado, enquanto a
+validação de chaves da policy permanece separada. O JSON da policy pode
+permanecer no source distribution, mas não entra no wheel; os JSONL fictícios
+de entrada e feedback ficam fora dos dois arquivos.
 
 Um smoke operacional sintético com 8 itens confirmou apenas a execução local; a
 concordância observada não demonstra qualidade do modelo nem prontidão. Consulte

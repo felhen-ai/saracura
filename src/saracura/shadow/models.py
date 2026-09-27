@@ -29,6 +29,9 @@ SHADOW_ITEM_SCHEMA: Final = "saracura-shadow-item.v1"
 SHADOW_DECISION_SCHEMA: Final = "saracura-shadow-decision.v1"
 SHADOW_FEEDBACK_SCHEMA: Final = "saracura-shadow-feedback.v1"
 SHADOW_SUMMARY_SCHEMA: Final = "saracura-shadow-evaluation.v1"
+SHADOW_STATE_MAX_FIELDS: Final = 16
+SHADOW_STATE_MAX_CODEPOINTS: Final = 200
+SHADOW_STATE_MAX_BYTES: Final = 800
 _UNIVERSAL_WORKFLOW_ID = "universal-choice"
 _WORKFLOW_REVISIONS = frozenset({"phase4e-saracura-ranker.v1"})
 _ALIASES = frozenset({"latest", "main", "master"})
@@ -52,6 +55,45 @@ def _reject_non_nfc(value: str) -> None:
 def _reject_alias(value: str) -> None:
     if value.casefold() in _ALIASES:
         raise ValueError("aliases are not immutable revisions")
+
+
+def _shadow_state_capacity_issue(state: object) -> Literal["invalid", "capacity", "ok"]:
+    if type(state) is not dict or not state:
+        return "invalid"
+    if len(state) > SHADOW_STATE_MAX_FIELDS:
+        return "capacity"
+    for key, value in state.items():
+        if type(key) is not str or type(value) is not str:
+            return "invalid"
+        if not _is_nfc(key) or not _is_nfc(value):
+            return "invalid"
+    try:
+        canonical = canonical_json_bytes(cast(Any, state))
+        codepoints = len(canonical.decode("utf-8"))
+    except (SaracuraError, UnicodeError, ValueError, TypeError):
+        return "invalid"
+    if codepoints > SHADOW_STATE_MAX_CODEPOINTS or len(canonical) > SHADOW_STATE_MAX_BYTES:
+        return "capacity"
+    return "ok"
+
+
+def validate_shadow_state_capacity(state: object) -> None:
+    """Validate canonical public state capacity before constructing a ShadowItem.
+
+    This provider-neutral boundary owns JSON framing, UTF-8 byte count, and
+    codepoint limits. Policy-key equality remains the responsibility of
+    ``validate_shadow_item_state``.
+    """
+
+    issue = _shadow_state_capacity_issue(state)
+    if issue == "capacity":
+        raise SaracuraError(
+            ErrorCode.CAPACITY_EXCEEDED,
+            "Shadow state exceeds the installed capacity.",
+            "/state",
+        )
+    if issue == "invalid":
+        raise _invalid("Shadow state is invalid.", "/state")
 
 
 class ShadowPolicy(ClosedModel):
@@ -102,7 +144,10 @@ class ShadowItem(ClosedModel):
 
     schema_version: Literal["saracura-shadow-item.v1"]
     item_ref: Annotated[StrictStr, Field(min_length=1, max_length=128)]
-    state: Annotated[dict[Identifier, StrictStr], Field(min_length=1, max_length=16)]
+    state: Annotated[
+        dict[Identifier, StrictStr],
+        Field(min_length=1, max_length=SHADOW_STATE_MAX_FIELDS),
+    ]
 
     @field_validator("state", mode="before")
     @classmethod
@@ -120,15 +165,10 @@ class ShadowItem(ClosedModel):
 
     @model_validator(mode="after")
     def state_is_nfc_and_bounded(self) -> ShadowItem:
-        for key, value in self.state.items():
-            _reject_non_nfc(key)
-            _reject_non_nfc(value)
-        try:
-            canonical = canonical_json_bytes(cast(Any, self.state))
-            codepoints = len(canonical.decode("utf-8"))
-        except (SaracuraError, UnicodeError, ValueError):
-            raise ValueError("state is not canonicalizable") from None
-        if codepoints > 200 or len(canonical) > 800:
+        issue = _shadow_state_capacity_issue(self.state)
+        if issue == "invalid":
+            raise ValueError("state is invalid")
+        if issue == "capacity":
             raise ValueError("state exceeds the installed capacity")
         return self
 
@@ -348,6 +388,7 @@ def validate_shadow_item_state(policy: ShadowPolicy, item: ShadowItem) -> None:
 
     policy = _revalidate(policy, ShadowPolicy, "Shadow policy is invalid.")
     item = _revalidate(item, ShadowItem, "Shadow item is invalid.")
+    validate_shadow_state_capacity(item.state)
     if set(item.state) != set(policy.state_keys):
         raise _invalid("Shadow item state does not match policy state keys.", "/state")
 

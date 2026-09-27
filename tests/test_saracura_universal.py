@@ -720,7 +720,10 @@ class _CaptureTokenizer:
     (
         ([[0] * 129, [1]], ErrorCode.CAPACITY_EXCEEDED),
         ([[0], [1] * 97], ErrorCode.CAPACITY_EXCEEDED),
-        ([["not-an-id"], [1]], ErrorCode.CAPACITY_EXCEEDED),
+        ([["not-an-id"], [1]], ErrorCode.BACKEND_UNAVAILABLE),
+        ([[0], [1], [2]], ErrorCode.BACKEND_UNAVAILABLE),
+        ([[], [1]], ErrorCode.BACKEND_UNAVAILABLE),
+        ([None, [1]], ErrorCode.BACKEND_UNAVAILABLE),
     ),
 )
 def test_tokenizer_enforces_complete_untruncated_capacity_before_encoder(
@@ -740,6 +743,38 @@ def test_tokenizer_enforces_complete_untruncated_capacity_before_encoder(
     assert captured.value.payload.code == code
     assert tokenizer.calls[0][1]["truncation"] is False
     assert tokenizer.calls[0][1]["padding"] is False
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TypeError("tokenizer-canary"),
+        ValueError("tokenizer-canary"),
+        RuntimeError("tokenizer-canary"),
+    ],
+)
+def test_tokenizer_exceptions_are_sanitized_backend_unavailable(
+    tmp_path: Path, failure: BaseException
+) -> None:
+    backend = SaracuraUniversalBackend(
+        encoder_snapshot=tmp_path / "snapshot",
+        training_capsule=tmp_path / "capsule",
+        device="cpu",
+    )
+
+    class BrokenTokenizer:
+        def __call__(self, *_args: object, **_kwargs: object) -> object:
+            raise failure
+
+    backend._tokenizer = BrokenTokenizer()
+    backend._torch = object()
+    with pytest.raises(SaracuraError) as captured:
+        backend._tokenize_joint(RenderedTask(context="context", criteria=("criterion",)))
+    error = captured.value
+    assert error.payload.code == ErrorCode.BACKEND_UNAVAILABLE
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert "tokenizer-canary" not in str(error)
 
 
 def test_renderer_and_engine_preserve_order_for_repeated_descriptions_and_ties() -> None:

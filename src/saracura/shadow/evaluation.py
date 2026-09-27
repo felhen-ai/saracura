@@ -17,6 +17,7 @@ from saracura.shadow.models import (
     project_shadow_decision,
     shadow_policy_digest,
     validate_shadow_item_state,
+    validate_shadow_state_capacity,
 )
 
 
@@ -121,4 +122,9 @@ def evaluate_shadow_feedback(
     return summary
 
 
-__all__ = ["evaluate_shadow_feedback", "project_shadow_decision", "validate_shadow_item_state"]
+__all__ = [
+    "evaluate_shadow_feedback",
+    "project_shadow_decision",
+    "validate_shadow_item_state",
+    "validate_shadow_state_capacity",
+]

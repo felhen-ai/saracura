@@ -4,6 +4,7 @@ from saracura.shadow.evaluation import (
     evaluate_shadow_feedback,
     project_shadow_decision,
     validate_shadow_item_state,
+    validate_shadow_state_capacity,
 )
 from saracura.shadow.models import (
     ShadowDecisionRecord,
@@ -37,4 +38,5 @@ __all__ = [
     "project_shadow_decision",
     "shadow_policy_digest",
     "validate_shadow_item_state",
+    "validate_shadow_state_capacity",
 ]

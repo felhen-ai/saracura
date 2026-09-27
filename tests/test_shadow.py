@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 import saracura.shadow.runner as shadow_runner_module
 from saracura.backends.base import BackendCapabilities, ScoredChoice
-from saracura.contracts.errors import SaracuraError
+from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.contracts.models import (
     Answer,
     ChoiceCriterion,
@@ -40,6 +40,7 @@ from saracura.shadow import (
     project_shadow_decision,
     shadow_policy_digest,
     validate_shadow_item_state,
+    validate_shadow_state_capacity,
 )
 
 MODEL_REVISION = "phase4e-saracura-ranker.v1.fixture"
@@ -401,6 +402,79 @@ def test_shadow_runner_redacts_engine_failures_and_closes_backend(failure: BaseE
     assert backend.prepared == backend.closed == 1
     with pytest.raises(SaracuraError):
         runner.decide(_item())
+
+
+def test_shadow_runner_preserves_only_sanitized_capacity_failure() -> None:
+    private = SaracuraError(
+        ErrorCode.CAPACITY_EXCEEDED,
+        "private-input-canary at /private/input with 987654 tokens",
+        "/private/input",
+        details={"content": "private-content-canary"},
+    )
+    backend = _FakeUniversalBackend(fail_with=private)
+    runner = ShadowRunner(_policy(), lambda: backend)
+    caught: SaracuraError | None = None
+    try:
+        with runner as active:
+            active.decide(_item())
+    except SaracuraError as error:
+        caught = error
+
+    assert caught is not None
+    assert caught.payload.code == ErrorCode.CAPACITY_EXCEEDED
+    assert caught.payload.path == "/state"
+    assert caught.payload.details == {}
+    assert "private" not in str(caught)
+    assert "987654" not in str(caught)
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+    assert backend.prepared == backend.closed == 1
+    with pytest.raises(SaracuraError):
+        runner.decide(_item())
+
+
+def test_shadow_runner_masks_non_capacity_contract_errors() -> None:
+    backend = _FakeUniversalBackend(
+        fail_with=SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "private-error-canary",
+            "/private/input",
+            details={"content": "private-content-canary"},
+        )
+    )
+    runner = ShadowRunner(_policy(), lambda: backend)
+    caught: SaracuraError | None = None
+    try:
+        with runner as active:
+            active.decide(_item())
+    except SaracuraError as error:
+        caught = error
+
+    assert caught is not None
+    assert caught.payload.code == ErrorCode.BACKEND_UNAVAILABLE
+    assert caught.payload.path == "/model"
+    assert caught.payload.details == {}
+    assert "private" not in str(caught)
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+    assert backend.prepared == backend.closed == 1
+
+
+def test_shadow_state_capacity_helper_owns_canonical_bounds_without_echo() -> None:
+    validate_shadow_state_capacity({"subject": "ok", "preview": "ok"})
+
+    with pytest.raises(SaracuraError) as overflow:
+        validate_shadow_state_capacity({"subject": "x" * 201})
+    assert overflow.value.payload.code == ErrorCode.CAPACITY_EXCEEDED
+    assert overflow.value.payload.path == "/state"
+    assert "x" * 20 not in str(overflow.value)
+    assert overflow.value.__cause__ is None
+    assert overflow.value.__context__ is None
+
+    with pytest.raises(SaracuraError) as malformed:
+        validate_shadow_state_capacity({"subject": 17})
+    assert malformed.value.payload.code == ErrorCode.REQUEST_INVALID
+    assert "17" not in str(malformed.value)
 
 
 def test_shadow_runner_prepare_failure_closes_and_never_exposes_cause() -> None:

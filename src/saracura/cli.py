@@ -680,6 +680,8 @@ def _shadow_public_error(
     message = (
         "Shadow model execution is unavailable."
         if code == ErrorCode.BACKEND_UNAVAILABLE
+        else "Shadow item exceeds model token capacity."
+        if code == ErrorCode.CAPACITY_EXCEEDED
         else "Shadow input or execution is invalid."
     )
     return SaracuraError(
