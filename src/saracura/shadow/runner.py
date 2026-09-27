@@ -27,6 +27,14 @@ def _invalid_item() -> SaracuraError:
     return SaracuraError(ErrorCode.REQUEST_INVALID, "Shadow item is invalid.", "/state")
 
 
+def _capacity_exceeded() -> SaracuraError:
+    return SaracuraError(
+        ErrorCode.CAPACITY_EXCEEDED,
+        "Shadow item exceeds model token capacity.",
+        "/state",
+    )
+
+
 def build_shadow_request(policy: ShadowPolicy, item: ShadowItem) -> DecisionRequest:
     """Build and structurally validate one closed request without backend access."""
 
@@ -122,12 +130,18 @@ class ShadowRunner:
             raise _unavailable()
         request = build_shadow_request(self._policy, item)
         failed = False
+        capacity_exceeded = False
         response: Any = None
         try:
             response = self._engine.decide(request, include_timing=False)
+        except SaracuraError as error:
+            capacity_exceeded = error.payload.code == ErrorCode.CAPACITY_EXCEEDED
+            failed = True
         except BaseException:
             failed = True
         if failed:
+            if capacity_exceeded:
+                raise _capacity_exceeded()
             raise _unavailable()
         failed = False
         record: ShadowDecisionRecord | None = None

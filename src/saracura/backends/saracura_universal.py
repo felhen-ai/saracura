@@ -1092,23 +1092,28 @@ class SaracuraUniversalBackend:
             encoded = self._tokenizer(
                 list(texts), truncation=False, padding=False, add_special_tokens=True
             )
-            rows = encoded.get("input_ids") if isinstance(encoded, Mapping) else None
-        except (TypeError, ValueError) as error:
+            rows: object = encoded.get("input_ids") if isinstance(encoded, Mapping) else None
+        except Exception:
+            malformed = True
+        else:
+            malformed = False
+        if malformed:
             raise SaracuraError(
                 ErrorCode.BACKEND_UNAVAILABLE, "Saracura backend is unavailable.", "/model"
-            ) from error
+            )
         limits = (MAX_CONTEXT_TOKENS, *(MAX_CRITERION_TOKENS for _ in rendered.criteria))
         if (
             not isinstance(rows, list)
             or len(rows) != len(texts)
             or any(
-                not isinstance(row, list)
-                or not row
-                or not all(type(token) is int for token in row)
-                or len(row) > limit
-                for row, limit in zip(rows, limits, strict=True)
+                not isinstance(row, list) or not row or not all(type(token) is int for token in row)
+                for row in rows
             )
         ):
+            raise SaracuraError(
+                ErrorCode.BACKEND_UNAVAILABLE, "Saracura backend is unavailable.", "/model"
+            )
+        if any(len(row) > limit for row, limit in zip(rows, limits, strict=True)):
             raise SaracuraError(
                 ErrorCode.CAPACITY_EXCEEDED,
                 "Rendered input exceeds tokenizer capacity.",

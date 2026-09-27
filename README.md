@@ -377,8 +377,15 @@ that the checkpoint is optimized for e-mail. At execution, the verified
 tokenizer enforces the existing limits of 128 context tokens and 96 tokens per
 criterion. No preview token budget is published here: it requires the separate
 operator smoke with the verified tokenizer, and the runner never truncates
-input. The JSON policy may appear in the source distribution but is not in the
-wheel; fictional JSONL inputs and feedback remain excluded from both archives.
+input. A valid tokenizer result that exceeds those limits is reported as
+`CAPACITY_EXCEEDED`; malformed tokenizer output is treated as
+`BACKEND_UNAVAILABLE`. The CLI keeps batch output all-or-nothing and emits no
+partial decisions on either failure. Integrations can call the public
+`validate_shadow_state_capacity` helper before constructing a `ShadowItem`; it
+owns the canonical serialized state byte/codepoint limits, while policy-key
+matching remains a separate validation. The JSON policy may appear in the
+source distribution but is not in the wheel; fictional JSONL inputs and
+feedback remain excluded from both archives.
 
 An 8-item synthetic operator smoke confirmed local execution only; its observed
 agreement is not evidence of model quality or readiness. See the [Phase 4F.1

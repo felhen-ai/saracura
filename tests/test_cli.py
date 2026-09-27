@@ -632,6 +632,55 @@ def test_shadow_decide_cli_runtime_failure_closes_and_discards_batch(
     assert backend.calls == 3
 
 
+def test_shadow_decide_cli_reports_sanitized_capacity_and_discards_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lines = [
+        json.dumps(
+            {
+                "schema_version": "saracura-shadow-item.v1",
+                "item_ref": f"msg-{index}",
+                "state": {
+                    "subject": f"capacity-subject-canary-{index}",
+                    "preview": "capacity-preview-canary",
+                },
+            }
+        )
+        for index in range(3)
+    ]
+    backend = _ShadowCliBackend(
+        fail_on_call=2,
+        failure=SaracuraError(
+            ErrorCode.CAPACITY_EXCEEDED,
+            "private tokenizer output /private/model 999 tokens",
+            "/private/model",
+            details={"input": "capacity-content-canary"},
+        ),
+    )
+    _policy_value, policy_path = _configure_shadow_cli(
+        tmp_path, monkeypatch, ("\n".join(lines) + "\n").encode(), backend
+    )
+
+    assert cli.main(_shadow_cli_args(policy_path, tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)["error"]
+    assert captured.out == ""
+    assert error["code"] == ErrorCode.CAPACITY_EXCEEDED
+    assert error["message"] == "Shadow item exceeds model token capacity."
+    assert error["path"] == "/state"
+    assert error["details"]["line_index"] == 1
+    assert "capacity-subject-canary" not in captured.err
+    assert "capacity-preview-canary" not in captured.err
+    assert "capacity-content-canary" not in captured.err
+    assert "/private/model" not in captured.err
+    assert "999" not in captured.err
+    assert backend.prepared == backend.closed == 1
+    assert backend.calls == 2
+
+
 def test_shadow_decide_cli_prepare_failure_reports_first_line_and_closes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
