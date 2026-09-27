@@ -97,7 +97,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --dev --extra universal-local
       # Synthetic fixtures only: no model host, checkpoint, or operator cache.
-      - run: uv run pytest -q tests/test_universal_local.py
+      - run: uv run pytest -q tests/test_universal_local.py tests/test_phase4e_comparison.py
       - run: uv run python -m benchmarks.universal_local validate-registry
       - run: uv run python -m benchmarks.validate_manifests
 
@@ -119,9 +119,9 @@ jobs:
       # local MiniLM lane below.
       - run: uv sync --locked --dev
       - run: uv run python benchmarks/validate_default_environment.py
-      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py tests/test_phase4e_pipeline.py tests/test_phase4e_pilot.py
+      - run: uv run pytest -q tests/test_phase4e.py tests/test_phase4e_corpus.py tests/test_phase4e_pipeline.py tests/test_phase4e_pilot.py tests/test_phase4e_comparison.py
       # Synthetic tensors only: the isolated ML extra is exercised without a
       # model snapshot, provider, cache discovery, or MPS.
       - run: uv sync --locked --dev --extra local-minilm
-      - run: uv run --extra local-minilm pytest -q tests/test_phase4e_training.py tests/test_phase4e_pipeline.py
+      - run: uv run --extra local-minilm pytest -q tests/test_phase4e_training.py tests/test_phase4e_pipeline.py tests/test_phase4e_comparison.py
       - run: uv run python -m benchmarks.validate_manifests

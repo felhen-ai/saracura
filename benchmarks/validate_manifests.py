@@ -10,6 +10,10 @@ from benchmarks.data_policy_registry import load_registry_v2 as load_data_policy
 from benchmarks.data_policy_registry import load_registry_v3 as load_data_policy_registry_v3
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
+from benchmarks.saracura_universal_comparison import (
+    COMPARISON_POLICY_PATH,
+    validate_comparison_policy,
+)
 from benchmarks.saracura_universal_pilot import (
     RECOVERY_POLICY_V2_PATH,
     RECOVERY_POLICY_V3_PATH,
@@ -155,6 +159,11 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "phase4e-saracura-universal-training-authorization.v1":
         validate_v4_training_grant_file(path)
+        return
+    if schema_version == "phase4e-comparison-policy.v1":
+        if raw != COMPARISON_POLICY_PATH.read_bytes():
+            raise ValueError(f"{path}: comparison policy must be the canonical file")
+        validate_comparison_policy(path)
         return
     if schema_version == 1:
         validate_manifest(path)

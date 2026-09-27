@@ -1,0 +1,86 @@
+{
+  "schema_version": "phase4e-comparison-policy.v1",
+  "id": "phase4e-comparison",
+  "plan": {
+    "seed": "saracura-phase4e-comparison-v1",
+    "task_slots": 200,
+    "locales": ["pt-BR", "en"],
+    "domains": [
+      "email_triage",
+      "customer_support",
+      "finance",
+      "accounting",
+      "commerce",
+      "operations",
+      "scheduling",
+      "document_routing",
+      "browser_action",
+      "security_triage",
+      "content_moderation",
+      "personal_productivity"
+    ],
+    "axes": {
+      "explicitness": ["explicit", "implicit"],
+      "negation": ["absent", "present"],
+      "distractor_overlap": ["low", "high"],
+      "urgency": ["normal", "urgent"]
+    },
+    "cross_locale_pairs": 100,
+    "option_counts": [2, 3, 4, 5, 6, 7, 8]
+  },
+  "accepted_task_id_namespace": "task:sha256(saracura-phase4e-comparison-v1)",
+  "family_id_namespace": "family:sha256(saracura-phase4e-comparison-v1)",
+  "acceptance_minimums": {
+    "total_accepted": 150,
+    "minimum_per_locale": 60,
+    "minimum_per_domain": 5,
+    "minimum_per_option_count": 10,
+    "minimum_complete_pairs": 60
+  },
+  "provider": {
+    "host": "openrouter.ai",
+    "author_model": "openai/gpt-4.1",
+    "reviewer_model": "openai/gpt-4.1-mini",
+    "provider_policy": {
+      "order": ["Azure"],
+      "allow_fallbacks": false,
+      "require_parameters": true,
+      "data_collection": "deny",
+      "zdr": true
+    },
+    "transport_timeout_seconds": 120,
+    "author_request": {
+      "max_output_tokens": 1024,
+      "temperature": 0,
+      "reasoning": null
+    },
+    "reviewer_request": {
+      "max_output_tokens": 512,
+      "temperature": 0,
+      "reasoning": null
+    }
+  },
+  "cost": {
+    "mode": "report_only",
+    "report_interval_usd": "10.00",
+    "automatic_retries": 4
+  },
+  "execution": {
+    "maximum_provider_attempts": 5,
+    "transport_uncertainty_circuit": 3,
+    "primary_device": "cpu",
+    "cpu_threads": 1,
+    "capacity_intersection": {
+      "context_tokens": 128,
+      "criterion_tokens": 96
+    },
+    "schemas": {
+      "plan": "phase4e-comparison-plan.v1",
+      "packet": "phase4e-comparison-packet.v1",
+      "worker_input": "phase4e-comparison-worker-input.v1",
+      "worker_result": "phase4e-comparison-score-backend.v1",
+      "result": "phase4e-comparison-result.v1"
+    }
+  },
+  "underpowered_threshold": 10
+}
