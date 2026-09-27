@@ -1411,6 +1411,55 @@ def test_publish_fails_closed_on_nested_raw_content(tmp_path: Path) -> None:
         comparison._validate_publishable_result(result)
 
 
+def test_public_safe_accepts_safetensors_dependency_key() -> None:
+    comparison._assert_public_safe(
+        {
+            "primary_comparison": {
+                "candidate": {"dependency_versions": {"safetensors": "0.5.0"}},
+                "control": {"dependency_versions": {"safetensors": "0.5.0"}},
+            }
+        }
+    )
+    with pytest.raises(comparison.ComparisonError, match="forbidden field"):
+        comparison._assert_public_safe({"metadata": {"safetensors": "0.5.0"}})
+    with pytest.raises(comparison.ComparisonError, match="forbidden field"):
+        comparison._assert_public_safe(
+            {
+                "primary_comparison": {
+                    "candidate": {"dependency_versions": {"safetensors_version": "0.5.0"}}
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "tensor",
+        "raw_tensor",
+        "absolute_path",
+        "provider_api_key_hash",
+        "selected_criterion_ids",
+        "score_vectors",
+        "runstate",
+        "presecret",
+    ),
+)
+def test_public_safe_rejects_forbidden_key_substrings_and_compositions(key: str) -> None:
+    with pytest.raises(comparison.ComparisonError, match="forbidden field"):
+        comparison._assert_public_safe({key: "value"})
+
+
+@pytest.mark.parametrize("label", ("score_vectors", "selected_criterion_ids"))
+def test_publish_rejects_unknown_slice_labels(label: str) -> None:
+    result = _comparison_result_fixture()
+    result["evidence_mode"] = "live_verified"
+    axes = result["primary_comparison"]["candidate"]["slices"]["axes"]
+    axes["distractor_overlap"][label] = comparison._build_slice_result(1, 2)
+    with pytest.raises(comparison.ComparisonError, match="publishable axes"):
+        comparison._validate_publishable_result(result)
+
+
 def test_publish_rejects_absolute_path_in_allowlisted_field(tmp_path: Path) -> None:
     result = _comparison_result_fixture()
     result["evidence_mode"] = "live_verified"
@@ -2141,11 +2190,17 @@ def test_publish_ordered_create_or_byte_identical_from_live_evaluator_chain(
     assert published["primary_comparison"]["candidate"]["accuracy"]["correct"] == 150
     assert published["primary_comparison"]["control"]["accuracy"]["correct"] == 200
     assert published["provenance"]["training_checkpoint_sha256"] == "4" * 64
+    assert any(
+        "model family and prompt family" in item
+        and "in-distribution for Saracura but not necessarily for Laya" in item
+        for item in published["limitations"]
+    )
     assert "phase4e4-status-binding:scored:" in readme_en.read_text(encoding="utf-8")
     assert "aggregate result" in readme_en.read_text(encoding="utf-8")
     assert "resultado agregado" in readme_pt.read_text(encoding="utf-8")
     markdown = pub_md.read_text(encoding="utf-8")
     assert markdown.startswith("---\ntitle: Phase 4E.4 blind comparison result\n")
+    assert "in-distribution for Saracura but not necessarily for Laya" in markdown
     for field in (
         "kind:",
         "area:",

@@ -3567,7 +3567,9 @@ def run_publish(
         "primary_comparison": private_raw["primary_comparison"],
         "candidate_device_observations": private_raw["candidate_device_observations"],
         "limitations": [
-            "Synthetic comparison records share the training author/reviewer model family.",
+            "The author/reviewer model family and prompt family are both shared with training "
+            "generation; this synthetic comparison is in-distribution for Saracura but not "
+            "necessarily for Laya.",
             "The common workload is restricted to Saracura's 128-context and "
             "96-criterion-token envelope, not Laya's larger envelope.",
             "This is descriptive research evidence, not a superiority, calibration, "
@@ -3671,17 +3673,23 @@ def _validate_slice_tree(summary: Mapping[str, Any]) -> None:
         "axes",
     }:
         raise ComparisonError("publishable slices")
+    expected_labels = {
+        "locale": set(LOCALES),
+        "domain": set(DOMAINS),
+        "scenario": set(SCENARIO_CODES),
+        "option_count": {str(value) for value in OPTION_COUNTS},
+    }
     for dimension in ("locale", "domain", "scenario", "option_count"):
         cells = slices[dimension]
-        if not isinstance(cells, dict):
+        if not isinstance(cells, dict) or not set(cells).issubset(expected_labels[dimension]):
             raise ComparisonError("publishable slices")
         for cell in cells.values():
             _validate_accuracy_cell(cell)
     axes = slices["axes"]
     if not isinstance(axes, dict) or set(axes) != set(AXES):
         raise ComparisonError("publishable axes")
-    for cells in axes.values():
-        if not isinstance(cells, dict):
+    for axis, cells in axes.items():
+        if not isinstance(cells, dict) or not set(cells).issubset(set(AXES[axis])):
             raise ComparisonError("publishable axes")
         for cell in cells.values():
             _validate_accuracy_cell(cell)
@@ -3864,15 +3872,24 @@ def _validate_publishable_result(value: Mapping[str, Any]) -> None:
         raise ComparisonError("candidate device observations are not implemented")
 
 
-def _assert_public_safe(value: object) -> None:
+def _is_public_safetensors_dependency_key(key: str, parent_keys: tuple[str, ...]) -> bool:
+    return key.casefold() == "safetensors" and parent_keys in {
+        ("primary_comparison", "candidate", "dependency_versions"),
+        ("primary_comparison", "control", "dependency_versions"),
+    }
+
+
+def _assert_public_safe(value: object, *, _parent_keys: tuple[str, ...] = ()) -> None:
     forbidden_keys = {
         "instruction",
         "state",
         "criteria",
         "selected_criterion_id",
+        "score_vector",
         "raw_scores",
         "logits",
         "tensor",
+        "safetensors",
         "reservation_id",
         "request_id",
         "response_id",
@@ -3887,14 +3904,18 @@ def _assert_public_safe(value: object) -> None:
     }
     if isinstance(value, dict):
         for key, child in value.items():
-            folded = key.casefold()
-            if folded in forbidden_keys or any(marker in folded for marker in forbidden_keys):
+            if not isinstance(key, str):
                 raise ComparisonError("public projection contains a forbidden field")
-            _assert_public_safe(child)
+            folded = key.casefold()
+            if not _is_public_safetensors_dependency_key(key, _parent_keys) and any(
+                marker in folded for marker in forbidden_keys
+            ):
+                raise ComparisonError("public projection contains a forbidden field")
+            _assert_public_safe(child, _parent_keys=(*_parent_keys, key.casefold()))
         return
     if isinstance(value, list):
         for child in value:
-            _assert_public_safe(child)
+            _assert_public_safe(child, _parent_keys=_parent_keys)
         return
     if isinstance(value, str):
         if (
