@@ -360,6 +360,10 @@ nunca trunca a entrada. O JSON da policy pode permanecer no source
 distribution, mas não entra no wheel; os JSONL fictícios de entrada e feedback
 ficam fora dos dois arquivos.
 
+Um smoke operacional sintético com 8 itens confirmou apenas a execução local; a
+concordância observada não demonstra qualidade do modelo nem prontidão. Consulte
+o [resultado do smoke da Fase 4F.1](action/phase4f1-shadow-evaluation-result.md).
+
 ## Licença
 
 Apache License 2.0. Consulte [LICENSE](../LICENSE).

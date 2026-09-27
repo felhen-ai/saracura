@@ -380,6 +380,10 @@ operator smoke with the verified tokenizer, and the runner never truncates
 input. The JSON policy may appear in the source distribution but is not in the
 wheel; fictional JSONL inputs and feedback remain excluded from both archives.
 
+An 8-item synthetic operator smoke confirmed local execution only; its observed
+agreement is not evidence of model quality or readiness. See the [Phase 4F.1
+smoke result](docs/action/phase4f1-shadow-evaluation-result.md).
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
