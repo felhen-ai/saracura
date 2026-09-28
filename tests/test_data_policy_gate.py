@@ -14,7 +14,13 @@ from benchmarks.data_policy_registry import (
     IDENTITY,
     MINIMUMS,
     bundled_registry_path,
+    bundled_registry_v2_path,
+    bundled_registry_v3_path,
+    bundled_registry_v4_path,
     load_registry,
+    load_registry_v2,
+    load_registry_v3,
+    load_registry_v4,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -43,6 +49,58 @@ def payload() -> dict[str, Any]:
 def assert_rejected(candidate: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="invalid data policy registry"):
         load_registry(json.dumps(candidate).encode())
+
+
+def test_bundled_registry_generations_remain_independently_valid() -> None:
+    load_registry(bundled_registry_path().read_bytes())
+    load_registry_v2(bundled_registry_v2_path().read_bytes())
+    load_registry_v3(bundled_registry_v3_path().read_bytes())
+    registry = load_registry_v4(bundled_registry_v4_path().read_bytes())
+    assert [item.id for item in registry.exceptions] == ["phase5d_faq_bacen_external_control"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_revision", "a" * 40),
+        ("bcb_license", "Apache-2.0"),
+        ("derivative_license_state", "ODbL-1.0"),
+        ("privacy_review_state", "reviewed"),
+        ("training_authorized", True),
+        ("calibration_authorized", True),
+        ("redistribution_authorized", True),
+    ],
+)
+def test_phase5d_exception_rejects_identity_rights_and_authorization_drift(
+    field: str, value: object
+) -> None:
+    candidate = json.loads(bundled_registry_v4_path().read_text())
+    candidate["exceptions"][0][field] = value
+    with pytest.raises(ValueError, match="invalid phase 5d registry v4"):
+        load_registry_v4(json.dumps(candidate))
+
+
+def test_phase5d_registry_rejects_duplicates_unknown_fields_and_predecessor_drift() -> None:
+    raw = (
+        bundled_registry_v4_path()
+        .read_text()
+        .replace(
+            '"schema_version": "training-data-source-policies.v4",',
+            '"schema_version": "training-data-source-policies.v4",'
+            '"schema_version": "training-data-source-policies.v4",',
+            1,
+        )
+    )
+    with pytest.raises(ValueError):
+        load_registry_v4(raw)
+    candidate = json.loads(bundled_registry_v4_path().read_text())
+    candidate["unexpected"] = True
+    with pytest.raises(ValueError):
+        load_registry_v4(json.dumps(candidate))
+    candidate = json.loads(bundled_registry_v4_path().read_text())
+    candidate["predecessor_v3_sha256"] = "0" * 64
+    with pytest.raises(ValueError):
+        load_registry_v4(json.dumps(candidate))
 
 
 def test_bundled_registry_has_exact_eight_ids_and_no_approvals() -> None:

@@ -37,6 +37,7 @@ Saracura is a standalone, local-first typed decision engine. This repository mus
 - The public Phase 4F.1 `ShadowRunner` is a local, read-only evaluator over caller-selected minimized state and an editable `ShadowPolicy`. It has no Gmail, Outlook, IMAP, browser, provider, or network adapter and performs no mailbox reads or mutations. Decisions are content-free, uncalibrated, abstained rankings with `automation_allowed=false`; ranking weights are not confidence. Feedback is descriptive evaluation only and must not be reused for training, retrieval, prompt optimization, or calibration. A provider-specific mailbox adapter remains outside the public increment and requires a separately reviewed private Phase 4F.2.
 - Boolean, ordinal, other dynamic-label product paths, HTTP serving, training, model downloads, public checkpoint publication, calibration, confidence thresholds, and private adapters are out of scope until their own reviewed increments.
 - The deterministic fixture backend is test infrastructure, not a model and not evidence of decision quality.
+- The checkout-only Phase 5D FAQ benchmark is an aggregate external control over the pinned `MTEB-BR/faq-bacen` derivative. It may read only the explicit caller cache, must not redistribute rows or emit raw text, and cannot authorize training, calibration, automation, or a general superiority claim.
 - No result authorizes automation. Calibration status `verified_for_research` only describes compatibility with the declared research protocol.
 
 ## Development

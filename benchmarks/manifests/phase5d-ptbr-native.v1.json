@@ -1,0 +1,22 @@
+{
+  "schema_version": "phase5d-ptbr-faq-bacen-protocol.v1",
+  "benchmark_id": "phase5d-ptbr-faq-bacen",
+  "dataset": {
+    "repository": "MTEB-BR/faq-bacen",
+    "revision": "076d89a68a8b8d2f14e3161631c416ffe29b8463",
+    "config": "default",
+    "split": "test",
+    "files": {
+      "corpus/test-00000-of-00001.parquet": {"sha256":"378c43e9126a31419680d66c4e43a178a66c8da45a98f64b89af94afb6ecd3e0","rows":1673,"columns":["_id","title","text"]},
+      "queries/test-00000-of-00001.parquet": {"sha256":"5467fc92f2387b436526b609463cdb7f2251fb684667ac9fb4f589aba2e528c0","rows":373,"columns":["_id","text"]},
+      "qrels/test-00000-of-00001.parquet": {"sha256":"17c173c566e5e021a4ead335717e97927f925df4f82994ccf4a987aeb8a6affc","rows":373,"columns":["query-id","corpus-id","score"]}
+    },
+    "cardinalities": {"corpus":1673,"queries":373,"qrels":373,"unique_gold_corpus_ids":372}
+  },
+  "rights": {"bcb_source_license":"ODbL-1.0","upstream_repository_license":"Apache-2.0","derivative_dataset_card_license":"not_declared","redistribution":"rows_forbidden_aggregate_only"},
+  "privacy": {"state":"publisher_open_data_statement_no_record_review"},
+  "selection": {"seed":"saracura-phase5d-faq-bacen-v1","normalization":"unicode_nfc_strip_collapse_whitespace","snippet_codepoints":120,"query_order":"utf8_id_lexicographic","distractor_order":"sha256_u64be_length_prefixed_utf8_segments","distractors":3,"gold_position":"row_index_mod_4","distinct_snippets_required":true},
+  "plan": {"fields":["query_id","query_sha256","ordered_choice_ids","ordered_choice_snippet_sha256","gold_position"],"canonicalization":"RFC8785","sha256":"089a83874ed0cc57da45eb143f4b6f6494125dbfabddb660f8e7ca5105175f6f","rows":373,"gold_position_counts":[94,93,93,93]},
+  "request": {"api_version":"v1alpha1","mode":"research","locale":"pt-BR","domain":"finance","state_key":"pergunta","question_id":"resposta","instruction":"Escolha a alternativa que começa a responder corretamente à pergunta.","choice_ids":["a","b","c","d"],"julia_workflow":"universal-choice@phase5c-julia.v1","saracura_workflow":"universal-choice@phase4e-saracura-ranker.v1","expected_saracura_state_capacity_rejects":5},
+  "baselines": {"chance_accuracy":0.25,"lexical":{"normalization":"NFC_casefold_unicode_alphanumeric_no_underscore","minimum_token_codepoints":4,"score":"unique_query_token_overlap","tie_break":"earliest_choice","correct":265,"planned":373,"accuracy":0.710455764075067}}
+}

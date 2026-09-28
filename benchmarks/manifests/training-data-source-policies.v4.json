@@ -1,0 +1,28 @@
+{
+  "schema_version": "training-data-source-policies.v4",
+  "predecessor_v3_sha256": "93036f786a13c740af860ebfdd4c9c0240b6eeeb89d44f3409d562b52d05a697",
+  "exceptions": [
+    {
+      "id": "phase5d_faq_bacen_external_control",
+      "workflow_revision": "phase5d-ptbr-faq-bacen.v1",
+      "source_policy_id": "mteb-br-faq-bacen",
+      "source_repository": "MTEB-BR/faq-bacen",
+      "source_revision": "076d89a68a8b8d2f14e3161631c416ffe29b8463",
+      "bcb_source_url": "https://dadosabertos.bcb.gov.br/dataset/perguntas-e-respostas-banco-central-do-brasil",
+      "bcb_license": "ODbL-1.0",
+      "upstream_repository": "Itau-Unibanco/FAQ_BACEN",
+      "upstream_license": "Apache-2.0",
+      "derivative_license_state": "not_declared_in_dataset_card",
+      "privacy_review_state": "publisher_open_data_statement_no_record_review",
+      "allowed_uses": ["aggregate_external_control"],
+      "retention": "caller_controlled_local_cache_only",
+      "aggregate_output_only": true,
+      "training_authorized": false,
+      "calibration_authorized": false,
+      "redistribution_authorized": false,
+      "row_publication_authorized": false,
+      "quality_claims_allowed": false,
+      "automation_authorized": false
+    }
+  ]
+}

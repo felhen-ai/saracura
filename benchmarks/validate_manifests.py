@@ -13,6 +13,7 @@ from typing import Any, NamedTuple
 from benchmarks.data_policy_registry import load_registry as load_data_policy_registry
 from benchmarks.data_policy_registry import load_registry_v2 as load_data_policy_registry_v2
 from benchmarks.data_policy_registry import load_registry_v3 as load_data_policy_registry_v3
+from benchmarks.data_policy_registry import load_registry_v4 as load_data_policy_registry_v4
 from benchmarks.encoder_registry import load_registry as load_encoder_registry
 from benchmarks.first_party_gate import validate_protocol_bytes
 from benchmarks.saracura_universal_comparison import (
@@ -111,6 +112,14 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "training-data-source-policies.v3":
         load_data_policy_registry_v3(raw)
+        return
+    if schema_version == "training-data-source-policies.v4":
+        load_data_policy_registry_v4(raw)
+        return
+    if schema_version == "phase5d-ptbr-faq-bacen-protocol.v1":
+        from benchmarks.ptbr_native.models import load_protocol_manifest
+
+        load_protocol_manifest(raw)
         return
     if schema_version == "phase4e-protocol-pilot-policy.v1":
         validate_pilot_policy(path)
@@ -1418,6 +1427,15 @@ def validate_committed_phase5b_report(repository: Path | None = None) -> None:
     _assert_public_sanitized(report, ())
 
 
+def validate_committed_phase5d_reports(repository: Path | None = None) -> None:
+    """Bind every committed Phase 5D report to this checkout."""
+    root = repository or Path(__file__).resolve().parents[1]
+    from benchmarks.ptbr_native.runner import verify_report
+
+    for path in sorted((root / "benchmarks/results").glob("phase5d-ptbr-faq-bacen-*-cpu.json")):
+        verify_report(path)
+
+
 def main() -> int:
     manifest_directory = Path(__file__).parent / "manifests"
     manifests = sorted(manifest_directory.glob("*.json"))
@@ -1426,6 +1444,7 @@ def main() -> int:
     for path in manifests:
         validate_routed_manifest(path)
     validate_committed_phase5b_report()
+    validate_committed_phase5d_reports()
     print(f"validated {len(manifests)} routed manifest(s)")
     return 0
 

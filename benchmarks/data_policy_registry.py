@@ -682,6 +682,66 @@ class RegistryV3(BaseModel):
         return self
 
 
+class Phase5DFaqBacenExternalControl(BaseModel):
+    """Narrow, evaluation-only authorization for the pinned FAQ derivative."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: Literal["phase5d_faq_bacen_external_control"]
+    workflow_revision: Literal["phase5d-ptbr-faq-bacen.v1"]
+    source_policy_id: Literal["mteb-br-faq-bacen"]
+    source_repository: Literal["MTEB-BR/faq-bacen"]
+    source_revision: Literal["076d89a68a8b8d2f14e3161631c416ffe29b8463"]
+    bcb_source_url: Literal[
+        "https://dadosabertos.bcb.gov.br/dataset/perguntas-e-respostas-banco-central-do-brasil"
+    ]
+    bcb_license: Literal["ODbL-1.0"]
+    upstream_repository: Literal["Itau-Unibanco/FAQ_BACEN"]
+    upstream_license: Literal["Apache-2.0"]
+    derivative_license_state: Literal["not_declared_in_dataset_card"]
+    privacy_review_state: Literal["publisher_open_data_statement_no_record_review"]
+    allowed_uses: list[Literal["aggregate_external_control"]]
+    retention: Literal["caller_controlled_local_cache_only"]
+    aggregate_output_only: Literal[True]
+    training_authorized: Literal[False]
+    calibration_authorized: Literal[False]
+    redistribution_authorized: Literal[False]
+    row_publication_authorized: Literal[False]
+    quality_claims_allowed: Literal[False]
+    automation_authorized: Literal[False]
+
+    @model_validator(mode="after")
+    def exact_use(self) -> Phase5DFaqBacenExternalControl:
+        if self.allowed_uses != ["aggregate_external_control"]:
+            raise ValueError("Phase 5D external-control use is fixed")
+        return self
+
+
+class RegistryV4(BaseModel):
+    """Create-only Phase 5D registry; v1-v3 remain immutable inputs."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal["training-data-source-policies.v4"]
+    predecessor_v3_sha256: Literal[
+        "93036f786a13c740af860ebfdd4c9c0240b6eeeb89d44f3409d562b52d05a697"
+    ]
+    exceptions: list[Phase5DFaqBacenExternalControl] = Field(min_length=1, max_length=1)
+
+    @model_validator(mode="after")
+    def exact_predecessor_and_exception(self) -> RegistryV4:
+        import hashlib
+
+        if (
+            hashlib.sha256(bundled_registry_v3_path().read_bytes()).hexdigest()
+            != self.predecessor_v3_sha256
+        ):
+            raise ValueError("v4 must bind the immutable v3 registry")
+        if [exception.id for exception in self.exceptions] != [
+            "phase5d_faq_bacen_external_control"
+        ]:
+            raise ValueError("v4 must contain exactly the Phase 5D exception")
+        return self
+
+
 _PHASE3B_EXCEPTION = {
     "id": "synthetic_experiment",
     "workflow_revision": "phase3b-synthetic-research-training.v2",
@@ -750,6 +810,14 @@ def load_registry_v3(raw: bytes | str) -> RegistryV3:
         raise ValueError("invalid phase 4e registry v3") from None
 
 
+def load_registry_v4(raw: bytes | str) -> RegistryV4:
+    try:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+        return RegistryV4.model_validate(payload)
+    except (ValueError, TypeError):
+        raise ValueError("invalid phase 5d registry v4") from None
+
+
 def bundled_registry_path() -> Path:
     return Path(__file__).parent / "manifests" / "training-data-source-policies.v1.json"
 
@@ -760,6 +828,10 @@ def bundled_registry_v2_path() -> Path:
 
 def bundled_registry_v3_path() -> Path:
     return Path(__file__).parent / "manifests" / "training-data-source-policies.v3.json"
+
+
+def bundled_registry_v4_path() -> Path:
+    return Path(__file__).parent / "manifests" / "training-data-source-policies.v4.json"
 
 
 def load_bundled_registry() -> Registry:
@@ -774,23 +846,32 @@ def load_bundled_registry_v3() -> RegistryV3:
     return load_registry_v3(bundled_registry_v3_path().read_bytes())
 
 
+def load_bundled_registry_v4() -> RegistryV4:
+    return load_registry_v4(bundled_registry_v4_path().read_bytes())
+
+
 __all__ = [
     "Phase4EUniversalSyntheticException",
     "Phase4EUniversalSyntheticExceptionV2",
     "Phase4EUniversalSyntheticExceptionV3",
+    "Phase5DFaqBacenExternalControl",
     "Policy",
     "ProtocolPilot",
     "Registry",
     "RegistryV2",
     "RegistryV3",
+    "RegistryV4",
     "SyntheticExperimentException",
     "bundled_registry_path",
     "bundled_registry_v2_path",
     "bundled_registry_v3_path",
+    "bundled_registry_v4_path",
     "load_bundled_registry",
     "load_bundled_registry_v2",
     "load_bundled_registry_v3",
+    "load_bundled_registry_v4",
     "load_registry",
     "load_registry_v2",
     "load_registry_v3",
+    "load_registry_v4",
 ]
