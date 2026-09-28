@@ -342,20 +342,32 @@ def _read_proc_cmdline(pid: int, proc_root: Path = Path("/proc")) -> str:
 
 
 def _read_proc_environ(pid: int, proc_root: Path = Path("/proc")) -> tuple[dict[str, str], bool]:
-    raw = (proc_root / str(pid) / "environ").read_bytes().decode("utf-8", "strict")
+    raw = (proc_root / str(pid) / "environ").read_bytes()
+    if not raw or not raw.endswith(b"\0") or raw.endswith(b"\0\0"):
+        raise EvidenceBlocked("proc environ framing is malformed")
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceBlocked("proc environ contains invalid UTF-8") from error
+    body = text[:-1]
+    items = body.split("\0")
+    if any(item == "" for item in items):
+        raise EvidenceBlocked("proc environ has an empty interior entry")
     result: dict[str, str] = {}
     secret_present = False
-    for item in raw.split("\0"):
+    for item in items:
         if "=" not in item:
-            continue
+            raise EvidenceBlocked("proc environ entry is malformed")
         key, value = item.split("=", 1)
+        if key == "":
+            raise EvidenceBlocked("proc environ has an empty key")
+        if key in result:
+            raise EvidenceBlocked("proc environ has duplicate keys")
         if key == "KEV_API_KEY":
             secret_present = bool(value)
-            if secret_present:
-                result[key] = "<nonempty>"
+            result[key] = "<nonempty>" if secret_present else ""
         else:
             result[key] = value
-    del raw
     return result, secret_present
 
 
@@ -632,9 +644,11 @@ def validate_runtime_identity(
     )
     checkpoint = identity_read(Path(expected_checkpoint).resolve, strict=True)
     process_cwd = identity_read(read_cwd, proc / "cwd")
-    if process_cwd != capsule_root and capsule_root not in process_cwd.parents:
-        raise EvidenceBlocked("candidate working directory escapes capsule root")
-    module_path = identity_read((capsule_root / "kev" / "serve.py").resolve, strict=True)
+    if process_cwd != capsule_root:
+        raise EvidenceBlocked("candidate working directory is not the capsule root")
+    module_path = identity_read(
+        (capsule_root / "payload" / "source" / "kev" / "kev" / "serve.py").resolve, strict=True
+    )
     fallback = identity_read(Path(args["--fallback"]).resolve, strict=True)
     if any(
         path != capsule_root and capsule_root not in path.parents
@@ -643,10 +657,19 @@ def validate_runtime_identity(
         raise EvidenceBlocked("candidate module/checkpoint/fallback escapes capsule root")
     if not module_path.is_file() or checkpoint != fallback:
         raise EvidenceBlocked("candidate module or checkpoint/fallback identity mismatch")
+    for entry in identity_read(lambda: tuple(capsule_root.iterdir())):
+        if entry.name == "kev" or entry.name.startswith("kev."):
+            raise EvidenceBlocked("capsule root has a top-level kev entry that shadows the module")
     environ, secret_present = identity_read(read_environ, pid, proc_root)
-    required = {
+    required: dict[str, str] = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "127.0.0.1,localhost",
         "KEV_BACKEND": "torch",
         "KEV_DTYPE": "bf16",
         "KEV_MERGE": "0",
@@ -657,21 +680,25 @@ def validate_runtime_identity(
         "KEV_PREFIX_CACHE": "4",
         "KEV_PREFIX_MIN_TOKENS": "0",
         "KEV_PREFIX_MAX_TOKENS": "65536",
+        "HOME": f"{capsule_root}/derived",
+        "XDG_CACHE_HOME": f"{capsule_root}/cache",
+        "HF_HOME": f"{capsule_root}/hf-home",
+        "HUGGINGFACE_HUB_CACHE": f"{capsule_root}/hf-home/hub",
+        "TRANSFORMERS_CACHE": f"{capsule_root}/cache",
+        "TORCH_HOME": f"{capsule_root}/cache",
+        "TRITON_CACHE_DIR": f"{capsule_root}/cache",
+        "TMPDIR": f"{capsule_root}/tmp",
+        "PYTHONPYCACHEPREFIX": f"{capsule_root}/cache",
+        "KEV_BENCHMARK_OUTPUT": f"{capsule_root}/reports",
+        "PYTHONPATH": f"{capsule_root}/payload/source/kev",
+        "KEV_API_KEY": "<nonempty>",
     }
-    if any(environ.get(key) != value for key, value in required.items()) or not secret_present:
-        raise EvidenceBlocked("candidate environment identity mismatch")
-    allowed_kev = {key for key in required if key.startswith("KEV_")} | {"KEV_API_KEY"}
-    if {key for key in environ if key.startswith("KEV_")} != allowed_kev:
-        raise EvidenceBlocked("candidate KEV environment does not match the exact allowlist")
-    if any(
-        key not in allowed_kev
-        and key not in required
-        and re.search(r"proxy|token|credential|password|api_key|secret", key, re.I)
-        for key in environ
+    if (
+        set(environ.keys()) != set(required.keys())
+        or any(environ.get(key) != value for key, value in required.items())
+        or not secret_present
     ):
-        raise EvidenceBlocked("candidate environment contains a proxy or credential channel")
-    if any(key.startswith("PYTHON") for key in environ):
-        raise EvidenceBlocked("candidate Python import environment contains overrides")
+        raise EvidenceBlocked("candidate environment identity mismatch")
     inode = identity_read(read_socket, pid, direct_upstream_port, proc_root, host)
     if gateway_url is None:
         raise EvidenceBlocked("gateway URL required for CPU attribution")
