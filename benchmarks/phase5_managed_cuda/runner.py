@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import threading
 import time
@@ -415,6 +416,133 @@ def _get_listen_socket_inode(
     return inode
 
 
+def _validate_python_entry(
+    argv0: str,
+    *,
+    pid: int,
+    proc_root: Path,
+    path_stat_reader: Callable[[Path, bool], Any] = lambda path, follow: (
+        path.stat() if follow else path.lstat()
+    ),
+    symlink_reader: Callable[[Path], str] = os.readlink,
+    proc_exe_reader: Callable[[int, Path], str] = lambda process_id, root: os.readlink(
+        root / str(process_id) / "exe"
+    ),
+    approved_system_roots: tuple[Path, ...] = (Path("/usr/bin"), Path("/usr/local/bin")),
+) -> tuple[Path, Path]:
+    """Validate lexical capsule entry and its bounded kernel executable identity."""
+    entry = Path(argv0)
+    if (
+        not entry.is_absolute()
+        or str(entry) != argv0
+        or argv0.startswith("//")
+        or any(part in (".", "..") for part in argv0.split("/"))
+    ):
+        raise EvidenceBlocked("Python argv0 must be normalized absolute path")
+    roots = [parent for parent in entry.parents if re.fullmatch(r"[0-9a-f]{64}", parent.name)]
+    if len(roots) != 1:
+        raise EvidenceBlocked("Python argv0 requires exactly one content-addressed capsule root")
+    capsule = roots[0]
+    if entry != capsule / "environment/bin/python":
+        raise EvidenceBlocked("Python argv0 is not the exact capsule environment/bin/python entry")
+
+    def metadata(path: Path, *, follow: bool, directory: bool = False) -> Any:
+        try:
+            info = path_stat_reader(path, follow)
+        except OSError as error:
+            raise EvidenceBlocked("Python executable path metadata is unavailable") from error
+        mode = info.st_mode
+        if info.st_uid != 0 or (not stat.S_ISLNK(mode) and mode & (stat.S_IWGRP | stat.S_IWOTH)):
+            raise EvidenceBlocked("Python executable path is not root-owned and non-writable")
+        if directory and (not stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            raise EvidenceBlocked("capsule ancestor is not a real directory")
+        return info
+
+    try:
+        resolved_capsule = capsule.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise EvidenceBlocked("capsule root is not a real normalized directory") from error
+    if resolved_capsule != capsule:
+        raise EvidenceBlocked("capsule root is not a real normalized directory")
+    for current in (capsule, capsule / "environment", capsule / "environment/bin"):
+        metadata(current, follow=False, directory=True)
+
+    try:
+        entry_info = metadata(entry, follow=False)
+    except EvidenceBlocked:
+        raise
+    target = entry
+    was_symlink = stat.S_ISLNK(entry_info.st_mode)
+    if was_symlink:
+        visited: set[Path] = set()
+        for hop in range(9):
+            if target in visited:
+                raise EvidenceBlocked("Python symlink chain loops")
+            visited.add(target)
+            try:
+                link_stat = metadata(target, follow=False)
+            except EvidenceBlocked:
+                raise
+            if not stat.S_ISLNK(link_stat.st_mode):
+                break
+            if hop == 8:
+                raise EvidenceBlocked("Python symlink chain exceeds eight hops")
+            try:
+                raw_target = symlink_reader(target)
+            except OSError as error:
+                raise EvidenceBlocked("Python symlink target is unavailable") from error
+            next_target = Path(raw_target)
+            unresolved = next_target if next_target.is_absolute() else target.parent / next_target
+            if (
+                str(next_target) != raw_target
+                or raw_target.startswith("//")
+                or any(part in (".", "..") for part in str(unresolved).split("/"))
+            ):
+                raise EvidenceBlocked("Python symlink target is not normalized")
+            target = unresolved
+            allowed = (capsule / "environment/bin", *approved_system_roots)
+            if not any(target == root or root in target.parents for root in allowed):
+                if target.is_absolute() and any(
+                    prefix in target.parents for prefix in (Path("/usr"), Path("/usr/local"))
+                ):
+                    raise EvidenceBlocked("Python symlink target uses an unapproved system prefix")
+                raise EvidenceBlocked("Python symlink target escapes approved executable roots")
+    else:
+        target = entry
+
+    allowed_system = tuple(Path(root) for root in approved_system_roots)
+    if (
+        was_symlink
+        and not any(target == root or root in target.parents for root in allowed_system)
+        and (target != entry or capsule not in target.parents)
+    ):
+        raise EvidenceBlocked("Python final target is outside approved system prefixes")
+    final_info = metadata(target, follow=True)
+    if not stat.S_ISREG(final_info.st_mode) or not final_info.st_mode & 0o111:
+        raise EvidenceBlocked("Python final target is not a regular executable")
+    if was_symlink and not any(target == root or root in target.parents for root in allowed_system):
+        raise EvidenceBlocked("Python symlink final target is outside approved system prefixes")
+    try:
+        proc_exe_raw = proc_exe_reader(pid, proc_root)
+        proc_exe = Path(proc_exe_raw)
+        proc_info = path_stat_reader(proc_root / str(pid) / "exe", True)
+    except OSError as error:
+        raise EvidenceBlocked("proc executable identity is unavailable") from error
+    if (
+        not proc_exe.is_absolute()
+        or str(proc_exe) != proc_exe_raw
+        or proc_exe_raw.startswith("//")
+        or any(part in (".", "..") for part in proc_exe_raw.split("/"))
+    ):
+        raise EvidenceBlocked("proc executable path is not normalized absolute path")
+    if proc_exe != target or (final_info.st_dev, final_info.st_ino) != (
+        proc_info.st_dev,
+        proc_info.st_ino,
+    ):
+        raise EvidenceBlocked("Python final target does not match proc executable path and inode")
+    return capsule, target
+
+
 def validate_runtime_identity(
     pid: int,
     expected_checkpoint: str,
@@ -432,6 +560,14 @@ def validate_runtime_identity(
     environ_reader: Callable[[int, Path], tuple[dict[str, str], bool]] | None = None,
     cwd_reader: Callable[[Path], Path] | None = None,
     socket_reader: Callable[[int, int, Path, str], int] | None = None,
+    path_stat_reader: Callable[[Path, bool], Any] = lambda path, follow: (
+        path.stat() if follow else path.lstat()
+    ),
+    symlink_reader: Callable[[Path], str] = os.readlink,
+    proc_exe_reader: Callable[[int, Path], str] = lambda process_id, root: os.readlink(
+        root / str(process_id) / "exe"
+    ),
+    approved_system_roots: tuple[Path, ...] = (Path("/usr/bin"), Path("/usr/local/bin")),
 ) -> dict[str, Any]:
     """Fail closed on command/environment/capsule/socket/CPU identity mismatch."""
     if not Path(expected_checkpoint).is_absolute():
@@ -485,14 +621,16 @@ def validate_runtime_identity(
         raise EvidenceBlocked("candidate command identity mismatch")
     if flags != [item for pair in expected.items() for item in pair]:
         raise EvidenceBlocked("candidate command ordering differs from the pinned argv")
-    executable = identity_read(Path(argv[0]).resolve, strict=True)
+    capsule_root, _executable = _validate_python_entry(
+        argv[0],
+        pid=pid,
+        proc_root=proc_root,
+        path_stat_reader=path_stat_reader,
+        symlink_reader=symlink_reader,
+        proc_exe_reader=proc_exe_reader,
+        approved_system_roots=approved_system_roots,
+    )
     checkpoint = identity_read(Path(expected_checkpoint).resolve, strict=True)
-    capsule_roots = [
-        parent for parent in executable.parents if re.fullmatch(r"[0-9a-f]{64}", parent.name)
-    ]
-    if len(capsule_roots) != 1:
-        raise EvidenceBlocked("Python executable is outside a unique content-addressed capsule")
-    capsule_root = capsule_roots[0]
     process_cwd = identity_read(read_cwd, proc / "cwd")
     if process_cwd != capsule_root and capsule_root not in process_cwd.parents:
         raise EvidenceBlocked("candidate working directory escapes capsule root")
@@ -500,9 +638,9 @@ def validate_runtime_identity(
     fallback = identity_read(Path(args["--fallback"]).resolve, strict=True)
     if any(
         path != capsule_root and capsule_root not in path.parents
-        for path in (executable, checkpoint, fallback, module_path)
+        for path in (checkpoint, fallback, module_path)
     ):
-        raise EvidenceBlocked("candidate executable/module/checkpoint escapes capsule root")
+        raise EvidenceBlocked("candidate module/checkpoint/fallback escapes capsule root")
     if not module_path.is_file() or checkpoint != fallback:
         raise EvidenceBlocked("candidate module or checkpoint/fallback identity mismatch")
     environ, secret_present = identity_read(read_environ, pid, proc_root)

@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +16,7 @@ from benchmarks.phase5_managed_cuda.runner import (
     HttpResult,
     ResourceMonitor,
     _nvidia_sample,
+    _validate_python_entry,
     execute_matrix,
     request_json,
     run_oversize_probes,
@@ -253,19 +255,24 @@ def test_runtime_identity_rejects_missing_pid() -> None:
 
 
 def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_path: Any) -> None:
-    from pathlib import Path
-
     capsule = tmp_path / ("a" * 64)
-    executable = capsule / "bin/python"
+    executable = capsule / "environment/bin/python"
     module = capsule / "kev/serve.py"
     checkpoint = capsule / "checkpoint"
+    system_root = tmp_path / "approved-python"
+    system_root.mkdir()
+    final_python = system_root / "python3.12"
     proc_root = tmp_path / "proc"
     process = proc_root / "321"
     executable.parent.mkdir(parents=True)
     module.parent.mkdir(parents=True)
     process.mkdir(parents=True)
     (process / "cwd").symlink_to(capsule, target_is_directory=True)
-    executable.write_text("", encoding="utf-8")
+    final_python.write_text("python", encoding="utf-8")
+    final_python.chmod(0o755)
+    (executable.parent / "python3").symlink_to(final_python)
+    executable.symlink_to("python3")
+    (process / "exe").symlink_to(final_python)
     module.write_text("", encoding="utf-8")
     checkpoint.write_text("", encoding="utf-8")
     command = [
@@ -320,6 +327,7 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
         getuid=lambda: process.stat().st_uid,
         geteuid=lambda: 1000,
         proc_root=proc_root,
+        **_identity_test_seams(executable, approved_system_roots=(system_root,)),
         transport=transport,
         stat_reader=lambda _pid, _root: {"starttime": 99, "utime": next(ticks), "stime": 1},
         socket_reader=socket_reader,
@@ -361,11 +369,6 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
             )
         },
         {"cwd_reader": lambda *_args: (_ for _ in ()).throw(PermissionError("/private/proc/cwd"))},
-        {
-            "cmdline_reader": lambda *_args: (
-                "\0".join([str(capsule / "vanished/bin/python"), *command[1:]]) + "\0"
-            )
-        },
     ]
     for boundary in failure_boundaries:
         injected = {"stat_reader": valid_stat, "socket_reader": socket_reader} | boundary
@@ -377,6 +380,7 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
                 getuid=lambda: process.stat().st_uid,
                 geteuid=lambda: 1000,
                 proc_root=proc_root,
+                **_identity_test_seams(executable, approved_system_roots=(system_root,)),
                 transport=transport,
                 **injected,
             )
@@ -390,6 +394,7 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(executable),
             cmdline_reader=lambda *_args: "\0".join([*command[:-2], "--unknown", "x"]) + "\0",
             stat_reader=lambda *_args: {"starttime": 99, "utime": 1, "stime": 1},
             socket_reader=socket_reader,
@@ -485,7 +490,7 @@ def test_fixed_nvidia_smi_sample_attributes_pid_and_device_memory() -> None:
 
 def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
     capsule = tmp_path / ("a" * 64)
-    executable = capsule / "bin/python"
+    executable = capsule / "environment/bin/python"
     module = capsule / "kev/serve.py"
     checkpoint = capsule / "checkpoint"
     proc_root = tmp_path / "proc"
@@ -494,7 +499,9 @@ def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
     module.parent.mkdir(parents=True)
     process.mkdir(parents=True)
     (process / "cwd").symlink_to(capsule, target_is_directory=True)
+    (process / "exe").symlink_to(executable)
     executable.write_text("", encoding="utf-8")
+    executable.chmod(0o755)
     module.write_text("", encoding="utf-8")
     checkpoint.write_text("", encoding="utf-8")
     command = [
@@ -527,6 +534,265 @@ def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
     }
     (process / "cmdline").write_bytes("\0".join(command).encode() + b"\0")
     return environment, command, process, proc_root
+
+
+def _identity_test_seams(
+    executable: Any,
+    *,
+    proc_exe: Any | None = None,
+    approved_system_roots: tuple[Any, ...] | None = None,
+) -> dict[str, Any]:
+    final_python = executable.resolve()
+
+    def path_stat(path: Any, follow: bool) -> Any:
+        info = (
+            final_python.stat() if path.name == "exe" else (path.stat() if follow else path.lstat())
+        )
+        return SimpleNamespace(
+            st_uid=0,
+            st_mode=info.st_mode,
+            st_dev=info.st_dev,
+            st_ino=info.st_ino,
+        )
+
+    seams = {
+        "path_stat_reader": path_stat,
+        "proc_exe_reader": lambda _pid, _root: str(proc_exe or final_python),
+    }
+    if approved_system_roots is not None:
+        return {
+            **seams,
+            "approved_system_roots": approved_system_roots,
+        }
+    return seams
+
+
+def test_python_entry_accepts_real_two_hop_venv_symlink(tmp_path: Any) -> None:
+    capsule = tmp_path / ("b" * 64)
+    entry = capsule / "environment/bin/python"
+    system = tmp_path / "system/usr/bin"
+    system.mkdir(parents=True)
+    (capsule / "environment/bin").mkdir(parents=True)
+    target = system / "python3.12"
+    target.write_text("python", encoding="utf-8")
+    target.chmod(0o755)
+    (entry.parent / "python3").symlink_to(target)
+    entry.symlink_to("python3")
+    proc = tmp_path / "proc"
+    (proc / "42").mkdir(parents=True)
+    executable_info = target.stat()
+
+    def path_stat(path: Any, follow: bool) -> Any:
+        info = target.stat() if path.name == "exe" else (path.stat() if follow else path.lstat())
+        return SimpleNamespace(
+            st_uid=0, st_mode=info.st_mode, st_dev=info.st_dev, st_ino=info.st_ino
+        )
+
+    capsule_root, resolved = _validate_python_entry(
+        str(entry),
+        pid=42,
+        proc_root=proc,
+        path_stat_reader=path_stat,
+        proc_exe_reader=lambda *_: str(target),
+        approved_system_roots=(system,),
+    )
+    assert capsule_root == capsule
+    assert resolved == target
+    assert executable_info.st_ino == target.stat().st_ino
+
+
+def test_python_entry_accepts_eight_real_symlink_hops(tmp_path: Any) -> None:
+    capsule = tmp_path / ("f" * 64)
+    entry = capsule / "environment/bin/python"
+    system = tmp_path / "system/usr/bin"
+    system.mkdir(parents=True)
+    entry.parent.mkdir(parents=True)
+    target = system / "python3"
+    target.write_text("python", encoding="utf-8")
+    target.chmod(0o755)
+    for index in range(7):
+        link = entry.parent / f"hop{index}"
+        link.symlink_to(f"hop{index + 1}" if index < 6 else target)
+    entry.symlink_to("hop0")
+    proc = tmp_path / "proc"
+    (proc / "44").mkdir(parents=True)
+
+    def path_stat(path: Any, follow: bool) -> Any:
+        info = target.stat() if path.name == "exe" else (path.stat() if follow else path.lstat())
+        return SimpleNamespace(
+            st_uid=0, st_mode=info.st_mode, st_dev=info.st_dev, st_ino=info.st_ino
+        )
+
+    _, resolved = _validate_python_entry(
+        str(entry),
+        pid=44,
+        proc_root=proc,
+        path_stat_reader=path_stat,
+        proc_exe_reader=lambda *_: str(target),
+        approved_system_roots=(system,),
+    )
+    assert resolved == target
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        ("relative", "normalized absolute path"),
+        ("dotdot", "normalized absolute path"),
+        ("double_slash", "normalized absolute path"),
+        ("missing_root", "exactly one content-addressed"),
+        ("multiple_roots", "exactly one content-addressed"),
+        ("wrong_entry", "exact capsule environment/bin/python"),
+        ("symlink_capsule", "real normalized directory"),
+        ("symlink_environment", "real directory"),
+        ("symlink_bin", "real directory"),
+        ("writable_capsule", "root-owned and non-writable"),
+        ("groupwrite_environment", "root-owned and non-writable"),
+        ("worldwrite_bin", "root-owned and non-writable"),
+        ("nonroot_capsule", "root-owned and non-writable"),
+        ("nonroot_environment", "root-owned and non-writable"),
+        ("nonroot_bin", "root-owned and non-writable"),
+        ("dangling", "metadata is unavailable"),
+        ("loop", "loops"),
+        ("too_many", "exceeds eight hops"),
+        ("escape", "escapes approved executable roots"),
+        ("non_normalized_hop", "symlink target is not normalized"),
+        ("unapproved", "unapproved system prefix"),
+        ("non_executable", "not a regular executable"),
+        ("writable_target", "root-owned and non-writable"),
+        ("groupwrite_target", "root-owned and non-writable"),
+        ("worldwrite_target", "root-owned and non-writable"),
+        ("nonroot_target", "root-owned and non-writable"),
+        ("nonregular_target", "not a regular executable"),
+        ("proc_path", "does not match proc executable path and inode"),
+        ("proc_inode", "does not match proc executable path and inode"),
+        ("proc_non_normalized", "proc executable path is not normalized"),
+    ],
+)
+def test_python_entry_rejects_unsafe_identity_branches(
+    tmp_path: Any, failure: str, reason: str
+) -> None:
+    capsule = tmp_path / ("c" * 64)
+    entry = capsule / "environment/bin/python"
+    system = tmp_path / "approved"
+    system.mkdir()
+    (capsule / "environment/bin").mkdir(parents=True)
+    proc = tmp_path / "proc"
+    (proc / "43").mkdir(parents=True)
+    target = system / "python"
+    target.write_text("python", encoding="utf-8")
+    target.chmod(0o755)
+    proc_target = target
+    if failure == "non_executable":
+        target.chmod(0o644)
+    elif failure == "writable_target":
+        target.chmod(0o777)
+    elif failure == "groupwrite_target":
+        target.chmod(0o770)
+    elif failure == "worldwrite_target":
+        target.chmod(0o757)
+    elif failure == "nonregular_target":
+        target.unlink()
+        target.mkdir()
+    if failure == "dangling":
+        entry.symlink_to(system / "missing")
+    elif failure == "loop":
+        first, second = entry.parent / "one", entry.parent / "two"
+        entry.symlink_to("one")
+        first.symlink_to("two")
+        second.symlink_to("one")
+    elif failure == "too_many":
+        for index in range(9):
+            (entry.parent / f"hop{index}").symlink_to(f"hop{index + 1}" if index < 8 else target)
+        entry.symlink_to("hop0")
+    elif failure == "escape":
+        outside = tmp_path / "outside"
+        outside.write_text("python", encoding="utf-8")
+        outside.chmod(0o755)
+        entry.symlink_to(outside)
+    elif failure == "unapproved":
+        entry.symlink_to("/usr/sbin/python")
+    elif failure == "non_normalized_hop":
+        entry.symlink_to("./python")
+    elif failure in {
+        "non_executable",
+        "writable_target",
+        "groupwrite_target",
+        "worldwrite_target",
+        "nonroot_target",
+        "nonregular_target",
+        "proc_path",
+        "proc_inode",
+    }:
+        entry.symlink_to(target)
+    else:
+        entry.write_text("python", encoding="utf-8")
+        entry.chmod(0o755)
+    if failure == "symlink_capsule":
+        real_capsule = tmp_path / ("e" * 64)
+        capsule.rename(real_capsule)
+        capsule.symlink_to(real_capsule, target_is_directory=True)
+    elif failure == "symlink_environment":
+        environment = capsule / "environment"
+        environment.rename(capsule / "environment-real")
+        environment.symlink_to(capsule / "environment-real", target_is_directory=True)
+    elif failure == "symlink_bin":
+        bin_directory = capsule / "environment/bin"
+        bin_directory.rename(capsule / "environment/bin-real")
+        bin_directory.symlink_to(capsule / "environment/bin-real", target_is_directory=True)
+
+    def path_stat(path: Any, follow: bool) -> Any:
+        info = target.stat() if path.name == "exe" else (path.stat() if follow else path.lstat())
+        if path.name == "exe" and failure == "proc_inode":
+            info = SimpleNamespace(
+                st_mode=info.st_mode,
+                st_dev=info.st_dev,
+                st_ino=info.st_ino + 1,
+            )
+        nonroot_paths = {
+            "nonroot_capsule": capsule,
+            "nonroot_environment": capsule / "environment",
+            "nonroot_bin": capsule / "environment/bin",
+        }
+        uid = 1000 if path == nonroot_paths.get(failure) or failure == "nonroot_target" else 0
+        mode = info.st_mode
+        writable_paths = {
+            "writable_capsule": capsule,
+            "groupwrite_environment": capsule / "environment",
+            "worldwrite_bin": capsule / "environment/bin",
+        }
+        if path == writable_paths.get(failure):
+            mode |= 0o020 if failure == "groupwrite_environment" else 0o002
+        return SimpleNamespace(st_uid=uid, st_mode=mode, st_dev=info.st_dev, st_ino=info.st_ino)
+
+    argv0 = str(entry)
+    if failure == "relative":
+        argv0 = "relative/python"
+    elif failure == "dotdot":
+        argv0 = str(entry.parent / ".." / "bin/python")
+    elif failure == "double_slash":
+        argv0 = "/" + str(entry)
+    elif failure == "missing_root":
+        argv0 = str(tmp_path / "ordinary/environment/bin/python")
+    elif failure == "multiple_roots":
+        nested = capsule / ("d" * 64) / "environment/bin/python"
+        argv0 = str(nested)
+    elif failure == "wrong_entry":
+        argv0 = str(entry.parent / "python3")
+    elif failure == "proc_path":
+        proc_target = system / "other-python"
+    elif failure == "proc_non_normalized":
+        proc_target = system / ".." / "approved/python"
+
+    with pytest.raises(EvidenceBlocked, match=reason):
+        _validate_python_entry(
+            argv0,
+            pid=43,
+            proc_root=proc,
+            path_stat_reader=path_stat,
+            proc_exe_reader=lambda *_: str(proc_target),
+            approved_system_roots=(system,),
+        )
 
 
 @pytest.mark.parametrize(
@@ -569,6 +835,7 @@ def test_runtime_identity_rejects_duplicate_flags_and_unapproved_environment(
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(Path(command[0])),
             cmdline_reader=lambda *_: "\0".join(raw_command) + "\0",
             environ_reader=lambda *_: (environment, True),
             stat_reader=stat_reader,
@@ -603,6 +870,7 @@ def test_runtime_identity_rejects_capsule_escape_or_disagreement(
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(Path(command[0])),
             cmdline_reader=lambda *_: "\0".join(altered) + "\0",
             environ_reader=lambda *_: (environment, True),
             stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
@@ -627,6 +895,7 @@ def test_runtime_identity_rejects_external_cwd_shadow_module(tmp_path: Any) -> N
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(Path(command[0])),
             environ_reader=lambda *_: (environment, True),
             stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
             socket_reader=lambda *_: 17,
@@ -650,6 +919,7 @@ def test_runtime_identity_normalizes_unavailable_process_cwd(tmp_path: Any, fail
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(Path(command[0])),
             environ_reader=lambda *_: (environment, True),
             cwd_reader=missing_cwd,
         )
@@ -680,6 +950,7 @@ def test_runtime_identity_requires_unique_stable_socket_ownership(
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(Path(command[0])),
             environ_reader=lambda *_: (environment, True),
             stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
             socket_reader=socket_reader,
@@ -702,6 +973,7 @@ def test_runtime_identity_rejects_pid_owner_or_starttime_transition(
             getuid=lambda: process.stat().st_uid,
             geteuid=lambda: 1000,
             proc_root=proc_root,
+            **_identity_test_seams(Path(command[0])),
             environ_reader=lambda *_: (environment, True),
             owner_reader=(lambda _path: next(owners)) if transition == "owner" else None,
             stat_reader=lambda *_: {"starttime": next(starts), "utime": 1, "stime": 1},

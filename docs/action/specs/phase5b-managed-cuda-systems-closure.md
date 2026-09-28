@@ -136,9 +136,11 @@ must have `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `KEV_BACKEND=torch`,
 `KEV_DTYPE=bf16`, `KEV_MERGE=0`, `KEV_FUSED=0`, `KEV_CUDA_GRAPHS=0`,
 `KEV_DATE_FACTS=0`, `KEV_LORA_SCALE=1`, `KEV_PREFIX_CACHE=4`,
 `KEV_PREFIX_MIN_TOKENS=0` and `KEV_PREFIX_MAX_TOKENS=65536`. `KEV_API_KEY`
-must be present and non-empty, but its value is never retained. The executable,
-module source, checkpoint and fallback must resolve below the same
-content-addressed capsule root. The two public descriptors remain in the exact
+must be present and non-empty, but its value is never retained. The lexical
+executable entry, module source, checkpoint and fallback must belong to the
+same content-addressed capsule root. Only the executable entry has the narrow
+system-Python resolution exception defined below; module, checkpoint and
+fallback still resolve below the capsule. The two public descriptors remain in the exact
 clean Saracura archive and are bound to that runtime by their matching immutable
 identities and digests; they are not copied into the private capsule. Unknown `KEV_*` entries
 or a divergent command, identity, lock binding or path fail identity.
@@ -322,12 +324,67 @@ because no v3 successor is emitted.
 
 P1 ends only after PR checks are green, the PR is merged and `main` is green.
 
+#### Live identity correction after P1
+
+The first P2 attempt from merged P1 bytes stopped before issuing measured
+requests because `Path(argv[0]).resolve()` followed the venv `bin/python`
+symlink to its system-Python target before locating the capsule. Runtime
+identity instead anchors the content-addressed capsule in a normalized absolute
+lexical `argv[0]` entry. `.` and `..` components, empty or relative entries and
+more than one 64-lowercase-hex ancestor fail closed. The capsule root must equal
+its own resolved path, and every component from it through `environment/bin`
+must be a real root-owned directory that is not group- or world-writable.
+
+The lexical entry is exactly `environment/bin/python`. It may be a root-owned,
+non-group/world-writable regular executable inside that capsule, or the single
+launcher-compatible symlink exception at that same path. The symlink entry may
+resolve through at most eight hops, such as
+`python -> python3 -> /usr/bin/python3 -> python3.X`, only while
+each hop stays below the real capsule `environment/bin`, `/usr/bin` or
+`/usr/local/bin`. Each absolute or relative hop target is normalized against
+its containing directory before containment is evaluated; ambiguous, looping
+or escaping chains fail closed. The final target must be a root-owned regular executable
+below `/usr/bin` or `/usr/local/bin` and must not be group- or world-writable.
+For both regular and symlink entries, the final target must equal the live
+`/proc/<pid>/exe` target by normalized path and device/inode identity. A
+deleted or replaced executable fails closed. No module,
+checkpoint, fallback or other capsule path receives this escape.
+
+Production defaults for allowed system prefixes are fixed. Narrow internal
+test seams may substitute path metadata, symlink reads, proc-exe evidence and
+approved roots only to make every branch falsifiable; they do not become CLI or
+public API inputs. Regression tests use a real two-hop venv-style symlink and
+assert a distinct failure reason for relative or non-normalized entry, missing
+or multiple capsule roots, symlinked/writable/non-root capsule ancestors, wrong
+entry name, dangling/looping/escaping hops, unapproved prefix, non-root,
+group/world-writable, non-regular or non-executable target, and proc-exe
+mismatch. The blocked first attempt stays private and does not publish a
+systems report or candidate-manifest successor. P2 is retried only from a new
+exact clean `main` archive after this correction is reviewed, merged and green.
+
+The live capsule was checked read-only before implementation: `/srv`,
+`/srv/models` and `/srv/models/saracura` are root-owned `0755`; the exact
+content-addressed root, `environment` and `environment/bin` are root-owned
+`0555`; its `python` entry points to `/usr/bin/python3.12`; `/usr` and
+`/usr/bin` are root-owned `0755`; and the final Python is a root-owned regular
+`0755` executable. This proves the deployed topology satisfies the corrected
+ancestor and final-target invariants before another lease is attempted.
+
 ### P2 — live systems evidence
 
-From the exact clean P1 `main` commit, establish the external managed-CUDA
+From the exact clean reviewed `main` commit containing P1 and any prerequisite
+runner correction, establish the external managed-CUDA
 lease, run the host-local benchmark, close the lease on every path and verify
 the protected workload is restored. Keep raw evidence private. Add only the
 sanitized report, its manifest binding and the candidate-manifest successor.
+
+A runner preflight failure before any measured request is not a candidate P2
+outcome when operator evidence attributes it to a defect in the benchmark
+itself rather than to the candidate runtime. Preserve that attempt privately,
+close and restore the protected workload, correct and re-review the runner, and
+restart P2 from the new exact clean `main` archive. This exception cannot
+reclassify a candidate-attributed identity mismatch from reviewed runner bytes,
+which retains the normal disposition rules below.
 
 If the run returns `continue` or `conditional`, the successor applies that
 exact disposition while retaining only `candidate_for_evaluation`; conditional
@@ -362,14 +419,19 @@ Gate A remains `not_met` in every P2 outcome.
    binds a later Kev disposition to the exact systems report, protocol, v2
    predecessor and unchanged readiness manifest, and cannot encode
    `conditional` without the mandatory adapter-guard marker.
-9. P1 is merged and green before P2 executes from its exact clean `main` SHA;
-   the operator creates a `git archive` of that SHA, records its digest and
-   runs those exact bytes host-locally.
+9. P1 and every prerequisite runner correction are merged and green before P2
+   executes from the resulting exact clean `main` SHA; the operator creates a
+   `git archive` of that SHA, records its digest and runs those exact bytes
+   host-locally. A benchmark-defect preflight attempt remains private evidence,
+   not a candidate disposition.
 10. P2 closes the external lease and proves protected-workload restoration even
    on benchmark failure or interruption; a preemption receipt overrides all
    provisional failures to `blocked_evidence` before publication.
 11. Candidate promotion never changes public-readiness Gate A, calibration,
    production or automation claims.
+12. Offline runtime-identity regression tests use a real two-hop venv-style
+    Python symlink and assert distinct rejection reasons for every unsafe
+    lexical entry, ancestor, hop, final target and `/proc/<pid>/exe` mismatch.
 
 ## Validation
 
