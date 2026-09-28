@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from benchmarks.ptbr_native.protocol import (
     lexical_tokens,
     percentile,
 )
-from benchmarks.ptbr_native.runner import verify_report
+from benchmarks.ptbr_native.runner import atomic_write_report, verify_report
 from saracura.backends.julia import (
     JULIA_CHECKPOINT_SHA256,
     JULIA_MODEL_ID,
@@ -200,6 +201,17 @@ def test_report_recomputes_metrics_and_rejects_sensitive_content() -> None:
         load_report(json.dumps(sensitive))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("valid", 0), ("correct", 94), ("planned_top1_accuracy", 1.0)],
+)
+def test_report_rejects_inconsistent_position_metrics(field: str, value: object) -> None:
+    payload = valid_report()
+    payload["by_gold_position"][0][field] = value
+    with pytest.raises(ValueError, match="invalid Phase 5D"):
+        load_report(json.dumps(payload))
+
+
 def test_report_accounts_rejects_and_errors_against_plan() -> None:
     payload = valid_report()
     payload["counts"] = {
@@ -213,6 +225,7 @@ def test_report_accounts_rejects_and_errors_against_plan() -> None:
     payload["planned_top1_accuracy"] = 200 / 373
     payload["coverage"] = 368 / 373
     payload["valid_top1_accuracy"] = 200 / 368
+    payload["by_gold_position"][0]["valid"] = 89
     payload["rejection_categories"] = {
         "request_capacity": 3,
         "backend_capacity": 0,
@@ -258,3 +271,36 @@ def test_offline_verifier_binds_filename_manifest_code_and_model(
     report.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="manifest digest"):
         verify_report(report)
+
+
+def test_report_publication_is_atomic_create_if_absent(tmp_path: Path) -> None:
+    report = load_report(json.dumps(valid_report()))
+    output = tmp_path / "result.json"
+    atomic_write_report(output, report)
+    original = output.read_bytes()
+    with pytest.raises(FileExistsError):
+        atomic_write_report(output, report)
+    assert output.read_bytes() == original
+    assert list(tmp_path.glob(".*.tmp-*")) == []
+
+
+def test_report_publication_cleans_temporary_after_fsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = load_report(json.dumps(valid_report()))
+    output = tmp_path / "result.json"
+    real_fsync = os.fsync
+    calls = 0
+
+    def fail_first_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("simulated interruption")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_first_fsync)
+    with pytest.raises(OSError, match="simulated interruption"):
+        atomic_write_report(output, report)
+    assert not output.exists()
+    assert list(tmp_path.glob(".*.tmp-*")) == []

@@ -7,6 +7,7 @@ import importlib
 import importlib.metadata
 import os
 import platform
+import secrets
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -302,13 +303,27 @@ def atomic_write_report(path: Path, report: BenchmarkReport) -> None:
     if not path.is_absolute() or not path.parent.is_dir():
         raise ValueError("output must be an absolute path in an existing directory")
     raw = canonical_json_bytes(cast(JsonValue, report.model_dump(mode="json"))) + b"\n"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    descriptor = os.open(path, flags, 0o644)
+    temporary = path.with_name(f".{path.name}.tmp-{secrets.token_hex(8)}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     try:
-        os.write(descriptor, raw)
-        os.fsync(descriptor)
+        try:
+            view = memoryview(raw)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short report write")
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
-        os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def verify_report(path: Path) -> BenchmarkReport:

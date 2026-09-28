@@ -203,6 +203,19 @@ class BenchmarkReport(ClosedModel):
         expected_positions = (94, 93, 93, 93)
         if tuple(item.planned for item in self.by_gold_position) != expected_positions:
             raise ValueError("position totals drifted")
+        for item in self.by_gold_position:
+            if not 0 <= item.correct <= item.valid <= item.planned:
+                raise ValueError("position counts are inconsistent")
+            if not math.isclose(
+                item.planned_top1_accuracy,
+                item.correct / item.planned,
+                abs_tol=1e-15,
+            ):
+                raise ValueError("position accuracy is inconsistent")
+        if sum(item.valid for item in self.by_gold_position) != counts.valid:
+            raise ValueError("position valid counts do not match the global count")
+        if sum(item.correct for item in self.by_gold_position) != counts.correct:
+            raise ValueError("position correct counts do not match the global count")
         if not math.isclose(self.planned_top1_accuracy, counts.correct / 373, abs_tol=1e-15):
             raise ValueError("planned accuracy is inconsistent")
         if not math.isclose(self.coverage, counts.valid / 373, abs_tol=1e-15):
