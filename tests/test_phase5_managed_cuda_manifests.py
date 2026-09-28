@@ -398,3 +398,126 @@ def test_v3_end_to_end_rejects_gate_a_drift_and_blocked_successor(tmp_path: Path
     blocked_manifest, _ = _bound_v3_repository(blocked_root, "blocked_evidence")
     with pytest.raises(ValueError, match="must not publish"):
         validate_phase5_candidate_manifest_v3(blocked_manifest, repository=blocked_root)
+
+
+def _bound_failure_v3_repository(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
+    import shutil
+
+    root = Path(__file__).parents[1]
+    protocol_relative = "benchmarks/manifests/phase5-managed-cuda-systems.v1.json"
+    readiness_relative = "benchmarks/manifests/phase5-public-readiness.v1.json"
+    report_relative = "benchmarks/results/phase5b-kev4b-managed-cuda-systems.json"
+    protocol_path = tmp_path / protocol_relative
+    readiness_path = tmp_path / readiness_relative
+    report_path = tmp_path / report_relative
+    manifest_path = tmp_path / "benchmarks/manifests/phase5-open-model-candidates.v3.json"
+    protocol_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(root / protocol_relative, protocol_path)
+    shutil.copyfile(root / readiness_relative, readiness_path)
+    report: dict[str, object] = {
+        "schema_version": "phase5b-managed-cuda-failure-report.v1",
+        "report_kind": "incomplete_execution",
+        "stage": "runtime_identity",
+        "classification": "reject_local",
+        "evidence_code": "candidate_invalid_response",
+        "operator_preempted": False,
+        "protected_workload_restored": True,
+        "disposition": "reject_local",
+        "scope_exclusions": [
+            "quality",
+            "calibration",
+            "production",
+            "automation",
+            "runtime_registration",
+            "readiness_gate_a",
+        ],
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    v2_path = root / "benchmarks/manifests/phase5-open-model-candidates.v2.json"
+    v2 = json.loads(v2_path.read_text(encoding="utf-8"))
+    candidates = [{**candidate, "mitigation_markers": []} for candidate in v2["candidates"]]
+    kev = next(candidate for candidate in candidates if candidate["id"] == "kev-4b")
+    kev["disposition"] = "reject_local"
+    kev["allowed_claims"] = []
+    manifest: dict[str, object] = {
+        "schema_version": "phase5-open-model-candidates.v3",
+        "reviewed_at": "2026-09-28",
+        "supersedes_manifest_sha256": hashlib.sha256(v2_path.read_bytes()).hexdigest(),
+        "allowed_dispositions": [*v2["allowed_dispositions"], "blocked_evidence"],
+        "candidate_claim_vocabulary": v2["candidate_claim_vocabulary"],
+        "candidates": candidates,
+        "systems_report_path": report_relative,
+        "systems_report_digest": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        "protocol_path": protocol_relative,
+        "protocol_digest": hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
+        "readiness_manifest_path": readiness_relative,
+        "readiness_manifest_sha256": hashlib.sha256(readiness_path.read_bytes()).hexdigest(),
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest_path, report_path, manifest
+
+
+def test_v3_binds_eligible_failure_report(tmp_path: Path) -> None:
+    from benchmarks.validate_manifests import validate_phase5_candidate_manifest_v3
+
+    manifest, _report, _payload = _bound_failure_v3_repository(tmp_path)
+    validate_phase5_candidate_manifest_v3(manifest, repository=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "rejection_source", "expected_message"),
+    [
+        ("classification", "binding_gate", "failure report is not eligible"),
+        ("disposition", "closed_model", "validation error for PublicFailureReport"),
+        ("evidence_code", "binding_gate", "failure report is not eligible"),
+        ("operator_preempted", "binding_gate", "failure report is not eligible"),
+        ("preemption_precedence", "closed_model", "validation error for PublicFailureReport"),
+        ("protected_workload_restored", "binding_gate", "failure report is not eligible"),
+        ("restoration_precedence", "closed_model", "validation error for PublicFailureReport"),
+        ("malformed", "closed_model", "validation error for PublicFailureReport"),
+        ("blocked", "binding_gate", "failure report is not eligible"),
+        ("unknown_schema", "binding_gate", "bound report schema is not recognized"),
+    ],
+)
+def test_v3_rejects_ineligible_failure_report_raw_json(
+    tmp_path: Path, mutation: str, rejection_source: str, expected_message: str
+) -> None:
+    from benchmarks.validate_manifests import validate_phase5_candidate_manifest_v3
+
+    manifest_path, report_path, manifest = _bound_failure_v3_repository(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if mutation == "classification":
+        report["classification"] = "blocked_evidence"
+        report["disposition"] = "blocked_evidence"
+    elif mutation == "disposition":
+        report["disposition"] = "blocked_evidence"
+    elif mutation == "evidence_code":
+        report["evidence_code"] = "unexpected_execution_failure"
+    elif mutation == "operator_preempted":
+        report["operator_preempted"] = True
+        report["disposition"] = "blocked_evidence"
+    elif mutation == "preemption_precedence":
+        report["operator_preempted"] = True
+    elif mutation == "protected_workload_restored":
+        report["protected_workload_restored"] = False
+        report["disposition"] = "blocked_evidence"
+    elif mutation == "restoration_precedence":
+        report["protected_workload_restored"] = False
+    elif mutation == "malformed":
+        report["unexpected"] = True
+    elif mutation == "blocked":
+        report["classification"] = "blocked_evidence"
+        report["evidence_code"] = "transport_or_sampling_failure"
+        report["operator_preempted"] = True
+        report["disposition"] = "blocked_evidence"
+    else:
+        report["schema_version"] = "phase5b-managed-cuda-unrecognized-report.v1"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    manifest["systems_report_digest"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected_message) as excinfo:
+        validate_phase5_candidate_manifest_v3(manifest_path, repository=tmp_path)
+    rejected_by_closed_model = "PublicFailureReport" in str(excinfo.value)
+    assert rejected_by_closed_model == (rejection_source == "closed_model")

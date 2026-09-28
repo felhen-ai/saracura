@@ -456,6 +456,14 @@ persisted instead of escaping without a provisional artifact. P2 restarts only
 from a new clean `main` archive after this correction is independently
 reviewed, merged and green.
 
+#### Live failure-report binding correction after the fourth P2 attempt
+
+The fourth P2 attempt used the reviewed response contract, attributed the gateway control to the stable candidate process and atomically recorded a candidate-invalid response because the returned probabilities did not sum to one. The official operator then closed the lease without preemption and proved that the protected clinical workload was restored. Finalization therefore produced the closed, sanitized `phase5b-managed-cuda-failure-report.v1` with disposition `reject_local`.
+
+The committed-manifest validator nevertheless attempted to parse every bound report only as `phase5b-managed-cuda-systems-report.v1`. That contradicts the existing P1/P2 contract: an attributed early `reject_local` is intentionally a failure report and must still bind a v3 successor, while `blocked_evidence` must not publish one. This is a public binding-validator defect, not a reason to fabricate the uncollected 240-request systems fields or to rerun the candidate.
+
+The validator must discriminate the two already closed public report schemas. The full systems-report path keeps its current provenance checks unchanged. The failure-report path is eligible for a bound v3 successor only when its classification and disposition are both `reject_local`, its evidence code is exactly `candidate_invalid_response`, operator preemption is false and protected-workload restoration is true. Its exact bytes remain bound by `systems_report_digest`; the manifest must also bind the exact protocol, v2 predecessor and unchanged readiness manifest. `allowed_claims` and `mitigation_markers` remain empty. Any `blocked_evidence`, preempted, unrestored, malformed or unknown report stays ineligible for v3. Tests must cover both report schemas, every failure-report eligibility gate and the unchanged prohibition on `blocked_evidence` successors before the two P2 data artifacts are committed. Negative preemption, restoration and evidence-code cases must mutate raw JSON on disk so tests prove whether the closed report model or the binding gate rejects each inconsistency; an unknown report schema must also fail at the binding boundary.
+
 ### P2 — live systems evidence
 
 From the exact clean reviewed `main` commit containing P1 and any prerequisite
@@ -531,6 +539,7 @@ Gate A remains `not_met` in every P2 outcome.
     `reject_local` provisional only after post-control attribution succeeds;
     identity drift or absent CPU attribution instead creates
     `blocked_evidence` before returning failure.
+15. The v3 binding validator discriminates the two closed public report schemas. A failure report can publish a successor only when classification and disposition are `reject_local`, evidence code is `candidate_invalid_response`, the operator was not preempted and the protected workload was restored; raw-JSON regression tests cover every gate, malformed input, unknown schemas and the continued prohibition on a `blocked_evidence` successor.
 
 ## Validation
 
