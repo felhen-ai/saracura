@@ -14,10 +14,13 @@ from pydantic import JsonValue
 
 from saracura.backends import (
     DeterministicFixtureBackend,
+    JuliaBackend,
     MiniLMRoutingBackend,
     SaracuraUniversalBackend,
+    SystemOneBackend,
 )
 from saracura.backends.base import BackendCapabilities
+from saracura.backends.julia import JULIA_MODEL_REVISION, JULIA_WORKFLOW_REVISION
 from saracura.backends.saracura_universal import (
     SaracuraBackendError,
     VerifiedSaracuraCapsule,
@@ -95,6 +98,29 @@ _SARACURA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
 )
 
 
+_SYSTEMONE_PREVALIDATION_CAPABILITIES = BackendCapabilities(
+    execution_tier="universal",
+    decision_types=frozenset({"choice"}),
+    max_questions=10,
+    max_criteria=20,
+    execution_boundary="loopback-systemone-v1",
+    cold_warm_semantics="not-loaded",
+    quality_claims=False,
+    dynamic_workflows=frozenset({("universal-choice", "phase5c-systemone.v1")}),
+)
+
+_JULIA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
+    execution_tier="universal",
+    decision_types=frozenset({"choice"}),
+    max_questions=10,
+    max_criteria=20,
+    execution_boundary="direct-local-julia-1-cpu",
+    cold_warm_semantics="resident-after-first-request",
+    quality_claims=False,
+    dynamic_workflows=frozenset({("universal-choice", JULIA_WORKFLOW_REVISION)}),
+)
+
+
 class _ArgumentFailure(ValueError):
     """A parser failure rendered through the normal JSON error envelope."""
 
@@ -137,6 +163,78 @@ def _add_laya_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-snapshot", type=Path)
 
 
+def _add_systemone_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--endpoint", type=str, required=False)
+    parser.add_argument("--model-id", type=str, required=False)
+    parser.add_argument("--model-revision", type=str, required=False)
+    parser.add_argument("--checkpoint-sha256", type=str, required=False)
+
+
+def _require_systemone_arguments(values: argparse.Namespace) -> SystemOneBackend:
+    if any(
+        getattr(values, name, None) is None
+        for name in ("endpoint", "model_id", "model_revision", "checkpoint_sha256")
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            (
+                "System One requires --endpoint, --model-id, --model-revision,"
+                " and --checkpoint-sha256."
+            ),
+            "/",
+        )
+    if getattr(values, "calibration", None) is not None or any(
+        getattr(values, name, None) is not None
+        for name in (
+            "encoder_snapshot",
+            "training_manifest",
+            "checkpoint",
+            "training_capsule",
+            "device",
+            "model_snapshot",
+        )
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "System One commands reject all other backend arguments.",
+            "/backend",
+        )
+    return SystemOneBackend(
+        endpoint=values.endpoint,
+        model_id=values.model_id,
+        model_revision=values.model_revision,
+        checkpoint_sha256=values.checkpoint_sha256,
+    )
+
+
+def _require_julia_arguments(values: argparse.Namespace) -> JuliaBackend:
+    if values.model_snapshot is None or values.device != "cpu":
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "Julia commands require --model-snapshot and --device cpu.",
+            "/backend",
+        )
+    if values.calibration is not None or any(
+        getattr(values, name, None) is not None
+        for name in (
+            "encoder_snapshot",
+            "training_manifest",
+            "checkpoint",
+            "training_capsule",
+            "endpoint",
+            "model_id",
+            "model_revision",
+            "checkpoint_sha256",
+        )
+    ):
+        raise SaracuraError(
+            ErrorCode.REQUEST_INVALID,
+            "Julia commands reject arguments for other backends.",
+            "/backend",
+        )
+    return JuliaBackend(model_snapshot=values.model_snapshot, device=values.device)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _NonExitingArgumentParser(prog="saracura")
     commands = parser.add_subparsers(
@@ -148,7 +246,14 @@ def _parser() -> argparse.ArgumentParser:
     decide = commands.add_parser("decide", help="run a local research-only backend")
     decide.add_argument(
         "--backend",
-        choices=("fixture", "minilm-routing", "laya-universal", "saracura-universal"),
+        choices=(
+            "fixture",
+            "minilm-routing",
+            "laya-universal",
+            "saracura-universal",
+            "systemone",
+            "julia",
+        ),
         default="fixture",
     )
     decide.add_argument("--request", type=Path, required=True)
@@ -156,6 +261,7 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("--timing", action="store_true")
     _add_minilm_arguments(decide)
     _add_laya_arguments(decide)
+    _add_systemone_arguments(decide)
 
     describe = commands.add_parser(
         "describe-backend",
@@ -347,6 +453,7 @@ def _prevalidate_request(
     *,
     execution_tier: Literal["compiled", "universal"],
     capabilities: BackendCapabilities | None = None,
+    expected_model_revision: str | None = None,
 ) -> tuple[Any, bytes]:
     """Validate every request-only gate before optional backend construction."""
 
@@ -410,6 +517,13 @@ def _prevalidate_request(
             # Model identity is intentionally deferred.  The next Saracura
             # step must verify the sealed capsule, then compare its candidate.
             validate_saracura_request_structure(request)
+        elif expected_model_revision is not None:
+            if request.model != expected_model_revision:
+                raise SaracuraError(
+                    ErrorCode.MODEL_NOT_FOUND,
+                    "The immutable model revision is not available.",
+                    "/model",
+                )
         else:
             candidate = load_laya_candidate()
             if request.model != candidate.model_revision:
@@ -630,6 +744,70 @@ def _run_laya_decide(values: argparse.Namespace) -> int:
         public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Local input could not be read.", "/")
     except Exception:
         public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Unexpected internal error.", "/")
+    _print_error(public)
+    return 2
+
+
+def _run_systemone_decide(values: argparse.Namespace) -> int:
+    """Run the System One loopback adapter lane."""
+
+    try:
+        backend = _require_systemone_arguments(values)
+        request, _state_payload = _prevalidate_request(
+            values.request,
+            execution_tier="universal",
+            capabilities=_SYSTEMONE_PREVALIDATION_CAPABILITIES,
+            expected_model_revision=backend.model.revision,
+        )
+        response = DecisionEngine(
+            backend=backend,
+            workflows=default_workflows(),
+            calibrations={},
+        ).decide(request, include_timing=values.timing)
+        print(response.model_dump_json(indent=2, exclude_none=False))
+        return 0
+    except FileNotFoundError:
+        public = SaracuraError(ErrorCode.REQUEST_INVALID, "Input file was not found.", "/")
+    except SaracuraError as error:
+        public = error
+    except OSError:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Local input could not be read.", "/")
+    except Exception:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Unexpected internal error.", "/")
+    _print_error(public)
+    return 2
+
+
+def _run_julia_decide(values: argparse.Namespace) -> int:
+    """Run the pinned Julia-1 checkpoint directly on local CPU."""
+
+    backend: JuliaBackend | None = None
+    try:
+        request, _state_payload = _prevalidate_request(
+            values.request,
+            execution_tier="universal",
+            capabilities=_JULIA_PREVALIDATION_CAPABILITIES,
+            expected_model_revision=JULIA_MODEL_REVISION,
+        )
+        backend = _require_julia_arguments(values)
+        response = DecisionEngine(
+            backend=backend,
+            workflows=default_workflows(),
+            calibrations={},
+        ).decide(request, include_timing=values.timing)
+        print(response.model_dump_json(indent=2, exclude_none=False))
+        return 0
+    except FileNotFoundError:
+        public = SaracuraError(ErrorCode.REQUEST_INVALID, "Input file was not found.", "/")
+    except SaracuraError as error:
+        public = error
+    except OSError:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Local input could not be read.", "/")
+    except Exception:
+        public = SaracuraError(ErrorCode.INTERNAL_ERROR, "Unexpected internal error.", "/")
+    finally:
+        if backend is not None:
+            backend.close()
     _print_error(public)
     return 2
 
@@ -920,6 +1098,10 @@ def main(argv: list[str] | None = None) -> int:
                 return _run_laya_decide(values)
             if values.backend == "saracura-universal":
                 return _run_saracura_decide(values)
+            if values.backend == "systemone":
+                return _run_systemone_decide(values)
+            if values.backend == "julia":
+                return _run_julia_decide(values)
             if values.calibration is None:
                 raise SaracuraError(
                     ErrorCode.REQUEST_INVALID,

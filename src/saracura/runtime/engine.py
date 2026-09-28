@@ -204,6 +204,62 @@ def _probabilities(scores: dict[str, float], temperature: float) -> dict[str, fl
     return {key: value / denominator for key, value in exponentials.items()}
 
 
+def _validate_normalized_distribution(
+    question: ChoiceQuestion, probabilities: dict[str, float]
+) -> None:
+    if not probabilities:
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "System One adapter returned an empty normalized distribution.",
+            "/questions/" + question.id,
+        )
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0.0 <= value <= 1.0
+        for value in probabilities.values()
+    ):
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "System One adapter returned non-finite or out-of-range normalized probabilities.",
+            "/questions/" + question.id,
+        )
+    if abs(math.fsum(probabilities.values()) - 1.0) > NUMERIC_ISOLATION_ABSOLUTE_TOLERANCE:
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "System One adapter normalized probabilities do not sum to one.",
+            "/questions/" + question.id,
+        )
+
+
+def _validate_selected_choice(
+    question: ChoiceQuestion,
+    probabilities: dict[str, float],
+    selected_choice: str | None,
+) -> str:
+    if selected_choice is None:
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "System One adapter did not return a selected choice.",
+            "/questions/" + question.id,
+        )
+    if selected_choice not in probabilities:
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "System One adapter selected choice is not a known option.",
+            "/questions/" + question.id,
+        )
+    max_probability = max(probabilities.values())
+    if abs(probabilities[selected_choice] - max_probability) > NUMERIC_ISOLATION_ABSOLUTE_TOLERANCE:
+        raise SaracuraError(
+            ErrorCode.BACKEND_UNAVAILABLE,
+            "System One adapter selected choice does not match the maximum probability.",
+            "/questions/" + question.id,
+        )
+    return selected_choice
+
+
 class DecisionEngine:
     def __init__(
         self,
@@ -295,12 +351,20 @@ class DecisionEngine:
                 raw_scores = {
                     criterion.id: scored.raw_scores[criterion.id] for criterion in question.criteria
                 }
-                probabilities = _probabilities(raw_scores, temperature=1.0)
+                if scored.normalized_probabilities is not None:
+                    probabilities = scored.normalized_probabilities
+                    _validate_normalized_distribution(question, probabilities)
+                    value = _validate_selected_choice(
+                        question, probabilities, scored.selected_choice
+                    )
+                else:
+                    probabilities = _probabilities(raw_scores, temperature=1.0)
+                    value = max(probabilities, key=probabilities.__getitem__)
                 answers.append(
                     Answer(
                         question_id=question.id,
                         type="choice",
-                        value=max(probabilities, key=probabilities.__getitem__),
+                        value=value,
                         raw_scores=raw_scores,
                         probabilities=probabilities,
                         status="uncalibrated",
