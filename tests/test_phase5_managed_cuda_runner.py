@@ -34,7 +34,9 @@ def _valid_response(payload: dict[str, Any]) -> bytes:
     questions = payload["questions"]
     answers = {
         key: {
+            "type": "choice",
             "choice": sorted(item["criteria"])[0],
+            "confidence": 0.5,
             "probabilities": {
                 criterion: 1.0 if index == 0 else 0.0
                 for index, criterion in enumerate(sorted(item["criteria"]))
@@ -80,6 +82,46 @@ def test_success_response_is_exact_and_validated() -> None:
         )
     with pytest.raises(CandidateRejected):
         validate_response(b'{"model":"kev-latest","model":"kev-latest"}', question_ids={"q"})
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_type",
+        "missing_choice",
+        "missing_confidence",
+        "missing_probabilities",
+        "extra",
+        "wrong_type",
+        "bool",
+        "string",
+        "nan",
+        "infinity",
+        "negative",
+        "above_one",
+    ],
+)
+def test_choice_answer_contract_rejects_field_and_confidence_drift(mutation: str) -> None:
+    payload = {"questions": {"q": {"criteria": {"a": "A"}}}}
+    response = json.loads(_valid_response(payload))
+    answer = response["answers"]["q"]
+    if mutation.startswith("missing_"):
+        del answer[mutation.removeprefix("missing_")]
+    elif mutation == "extra":
+        answer["extra"] = 1
+    elif mutation == "wrong_type":
+        answer["type"] = "rank"
+    else:
+        answer["confidence"] = {
+            "bool": True,
+            "string": "0.5",
+            "nan": float("nan"),
+            "infinity": float("inf"),
+            "negative": -0.1,
+            "above_one": 1.1,
+        }[mutation]
+    with pytest.raises(CandidateRejected):
+        validate_response(json.dumps(response).encode(), question_ids={"q"})
 
 
 def test_http_transport_sends_no_auth_and_does_not_follow_redirects() -> None:
@@ -256,7 +298,12 @@ def test_runtime_identity_rejects_missing_pid() -> None:
         )
 
 
-def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_path: Any) -> None:
+@pytest.mark.parametrize(
+    "post_failure", [None, "candidate", "starttime", "cpu", "owner", "socket", "gone"]
+)
+def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(
+    tmp_path: Any, post_failure: str | None
+) -> None:
     capsule = tmp_path / ("a" * 64)
     executable = capsule / "environment/bin/python"
     module = capsule / "payload" / "source" / "kev" / "kev" / "serve.py"
@@ -326,31 +373,63 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
     (process / "environ").write_bytes(
         b"\0".join(f"{key}={value}".encode() for key, value in environment.items()) + b"\0"
     )
-    ticks = iter((1, 2))
     socket_calls: list[int] = []
     transport_calls: list[tuple[str, dict[str, Any]]] = []
 
     def transport(url: str, payload: dict[str, Any], *, timeout: float) -> HttpResult:
         transport_calls.append((url, payload))
-        return HttpResult(200, {}, _valid_response(payload), 1.0)
+        response = json.loads(_valid_response(payload))
+        if post_failure is not None:
+            response["answers"][next(iter(response["answers"]))]["confidence"] = True
+        return HttpResult(200, {}, json.dumps(response).encode(), 1.0)
 
     def socket_reader(pid: int, port: int, root: Path, host: str) -> int:
         socket_calls.append(port)
         assert pid == 321 and root == proc_root and host == "127.0.0.1"
-        return 17
+        return 18 if post_failure == "socket" and len(socket_calls) > 1 else 17
 
-    observed = validate_runtime_identity(
-        pid=321,
-        expected_checkpoint=str(checkpoint),
-        gateway_url="http://127.0.0.1:8181",
-        getuid=lambda: process.stat().st_uid,
-        geteuid=lambda: 1000,
-        proc_root=proc_root,
-        **_identity_test_seams(executable, approved_system_roots=(system_root,)),
-        transport=transport,
-        stat_reader=lambda _pid, _root: {"starttime": 99, "utime": next(ticks), "stime": 1},
-        socket_reader=socket_reader,
-    )
+    starts = iter((99, 100) if post_failure == "starttime" else (99, 99))
+    cpu = iter((1, 1) if post_failure == "cpu" else (1, 2))
+    owners = iter((process.stat().st_uid, process.stat().st_uid + 1))
+    stat_calls = 0
+
+    def stat_reader(_pid: int, _root: Path) -> dict[str, int]:
+        nonlocal stat_calls
+        stat_calls += 1
+        if post_failure == "gone" and stat_calls == 2:
+            raise FileNotFoundError("process disappeared")
+        return {"starttime": next(starts), "utime": next(cpu), "stime": 1}
+
+    def owner_reader(_path: Path) -> int:
+        return int(next(owners)) if post_failure == "owner" else process.stat().st_uid
+
+    def call() -> dict[str, Any]:
+        return validate_runtime_identity(
+            pid=321,
+            expected_checkpoint=str(checkpoint),
+            gateway_url="http://127.0.0.1:8181",
+            getuid=lambda: process.stat().st_uid,
+            geteuid=lambda: 1000,
+            proc_root=proc_root,
+            **_identity_test_seams(executable, approved_system_roots=(system_root,)),
+            owner_reader=owner_reader,
+            transport=transport,
+            stat_reader=stat_reader,
+            socket_reader=socket_reader,
+        )
+
+    if post_failure is None:
+        observed = call()
+    elif post_failure == "candidate":
+        with pytest.raises(CandidateRejected, match="confidence must be finite"):
+            call()
+        assert socket_calls == [8182, 8182]
+        assert stat_calls == 2
+        return
+    else:
+        with pytest.raises(EvidenceBlocked):
+            call()
+        return
     assert observed == {
         "cmdline_valid": True,
         "environment_valid": True,

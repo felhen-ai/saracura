@@ -332,6 +332,7 @@ def test_execute_binds_exact_descriptor_bytes_before_runtime_actions(
     ("failure", "expected_stage", "expected_classification"),
     [
         ("identity", "runtime_identity", "blocked_evidence"),
+        ("identity_candidate", "runtime_identity", "reject_local"),
         ("identity_missing", "runtime_identity", "blocked_evidence"),
         ("identity_inaccessible", "runtime_identity", "blocked_evidence"),
         ("identity_oserror", "runtime_identity", "blocked_evidence"),
@@ -409,7 +410,9 @@ def test_execute_persists_finalizable_blocked_failure_for_each_mandatory_stage(
                 for question_id, question in payload["questions"].items():
                     options = list(question["criteria"])
                     answers[question_id] = {
+                        "type": "choice",
                         "choice": options,
+                        "confidence": 0.5,
                         "probabilities": {
                             option: 1.0 if index == 0 else 0.0
                             for index, option in enumerate(options)
@@ -459,6 +462,8 @@ def test_execute_persists_finalizable_blocked_failure_for_each_mandatory_stage(
         return type("Response", (), {"status": status})()
 
     def identity_result(**_kwargs: Any) -> Any:
+        if failure == "identity_candidate":
+            raise CandidateRejected("answer schema is invalid")
         if failure == "identity":
             raise EvidenceBlocked("injected identity drift")
         if failure == "identity_missing":
@@ -543,6 +548,8 @@ def test_execute_persists_finalizable_blocked_failure_for_each_mandatory_stage(
     assert blocked.stage == expected_stage
     assert blocked.classification == expected_classification
     assert blocked.evidence_code
+    if failure == "identity_candidate":
+        assert blocked.evidence_code == "candidate_invalid_response"
     if failure == "candidate_invalid_list":
         assert monitor_stops == monitor_count == 1
         assert blocked.evidence_code == "candidate_invalid_response"
