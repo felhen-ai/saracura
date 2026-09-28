@@ -426,6 +426,36 @@ benchmark-defect attempts remain private and produce no
 systems report or candidate-manifest successor. P2 restarts only from another
 new clean `main` archive after this correction is reviewed, merged and green.
 
+#### Live response-contract correction after the third private attempt
+
+The next P2 retry passed executable, module, environment, socket and ownership
+identity and reached the gateway attribution control, but the client rejected
+the first valid Kev Choice answer as `answer schema is invalid`. The immutable
+source contract emits each Choice answer with exactly four fields:
+`type="choice"`, `choice`, `confidence` and `probabilities`. The runner fixture
+and validator had incorrectly modeled only the latter two fields. This is a
+benchmark-contract defect, not candidate evidence, so the attempt remains
+private and produces no systems report or candidate-manifest successor.
+
+The corrected validator accepts exactly those four fields, requires the type
+literal `choice`, validates `confidence` as a finite numeric value in `[0,1]`,
+and retains the existing exact question/option identity, probability simplex,
+choice membership, usage and latency checks. Missing, extra, mistyped,
+non-finite or out-of-range fields fail closed. The real-contract positive
+fixture is pinned to the immutable `to_answers` Choice shape rather than to a
+historical fake.
+
+Candidate rejection during the gateway attribution control is retained while
+the runner completes the post-control identity proof. It becomes
+`reject_local` with `candidate_invalid_response` only after stable PID
+starttime, positive CPU delta, same owner and same LISTEN socket prove that the
+invalid answer came from the candidate. PID or socket drift, disappearance or
+missing CPU attribution takes precedence and remains `blocked_evidence` with
+`identity_invalid_or_changed`. The selected result is then atomically
+persisted instead of escaping without a provisional artifact. P2 restarts only
+from a new clean `main` archive after this correction is independently
+reviewed, merged and green.
+
 ### P2 — live systems evidence
 
 From the exact clean reviewed `main` commit containing P1 and any prerequisite
@@ -494,6 +524,13 @@ Gate A remains `not_met` in every P2 outcome.
     malformed or invalid-UTF-8 entries, invalid NUL framing, divergent
     capsule-derived paths, cwd shadowing and module escape before measured
     work; a versioned fixture asserts parity with the 30-key launcher map.
+14. Response-contract tests reproduce the immutable Kev Choice answer with
+    exactly `type`, `choice`, `confidence` and `probabilities`; they reject
+    missing, extra, mistyped, non-finite and out-of-range fields, and a
+    candidate rejection during attribution creates a closed private
+    `reject_local` provisional only after post-control attribution succeeds;
+    identity drift or absent CPU attribution instead creates
+    `blocked_evidence` before returning failure.
 
 ## Validation
 

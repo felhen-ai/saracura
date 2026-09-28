@@ -216,7 +216,10 @@ def execute(
                 gateway_url=gateway_url,
             )
         ).model_dump()
-    except (EvidenceBlocked, ValidationError, OSError) as error:
+    except (EvidenceBlocked, CandidateRejected, ValidationError, OSError) as error:
+        if isinstance(error, CandidateRejected):
+            persist_failure(stage, error)
+            raise
         blocked = (
             error
             if isinstance(error, EvidenceBlocked)

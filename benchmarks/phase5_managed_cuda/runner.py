@@ -150,8 +150,22 @@ def _validate_response(
     if set(value["answers"]) != question_ids:
         raise CandidateRejected("response question ids do not match request")
     for question_id, answer in value["answers"].items():
-        if not isinstance(answer, dict) or set(answer) != {"choice", "probabilities"}:
+        if not isinstance(answer, dict) or set(answer) != {
+            "type",
+            "choice",
+            "confidence",
+            "probabilities",
+        }:
             raise CandidateRejected("answer schema is invalid")
+        confidence = answer["confidence"]
+        if (
+            type(confidence) not in (float, int)
+            or not math.isfinite(confidence)
+            or not 0 <= confidence <= 1
+        ):
+            raise CandidateRejected("confidence must be finite and in [0,1]")
+        if answer["type"] != "choice":
+            raise CandidateRejected("answer type must be choice")
         probabilities = answer["probabilities"]
         if not isinstance(probabilities, dict) or not probabilities:
             raise CandidateRejected("probabilities must be a non-empty object")
@@ -710,11 +724,15 @@ def validate_runtime_identity(
     )
     if result.status != 200:
         raise EvidenceBlocked("gateway attribution control did not return HTTP 200")
-    validate_response(
-        result.body,
-        question_ids={q.id for q in control.questions},
-        question_options=_question_options(convert_fixture_to_wire(control)),
-    )
+    candidate_rejection: CandidateRejected | None = None
+    try:
+        validate_response(
+            result.body,
+            question_ids={q.id for q in control.questions},
+            question_options=_question_options(convert_fixture_to_wire(control)),
+        )
+    except CandidateRejected as error:
+        candidate_rejection = error
     after = identity_read(read_stat, pid, proc_root)
     if (
         before["starttime"] != after["starttime"]
@@ -727,6 +745,8 @@ def validate_runtime_identity(
         or identity_read(read_socket, pid, direct_upstream_port, proc_root, host) != inode
     ):
         raise EvidenceBlocked("candidate ownership or LISTEN socket changed")
+    if candidate_rejection is not None:
+        raise candidate_rejection
     return {
         "cmdline_valid": True,
         "environment_valid": True,
