@@ -1,0 +1,18 @@
+{
+  "classification": "reject_local",
+  "disposition": "reject_local",
+  "evidence_code": "candidate_invalid_response",
+  "operator_preempted": false,
+  "protected_workload_restored": true,
+  "report_kind": "incomplete_execution",
+  "schema_version": "phase5b-managed-cuda-failure-report.v1",
+  "scope_exclusions": [
+    "quality",
+    "calibration",
+    "production",
+    "automation",
+    "runtime_registration",
+    "readiness_gate_a"
+  ],
+  "stage": "runtime_identity"
+}

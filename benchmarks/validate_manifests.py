@@ -1273,23 +1273,40 @@ def _validate_phase5_v3_bindings(payload: dict[str, Any], path: Path, repository
 
     report_path = references["systems_report_path"]
     report = _load_closed_json(report_path)
-    from benchmarks.phase5_managed_cuda.models import PublicSystemsReport
+    from benchmarks.phase5_managed_cuda.models import PublicFailureReport, PublicSystemsReport
 
-    parsed_report = PublicSystemsReport.model_validate(report)
+    schema_version = report.get("schema_version")
+    if schema_version == "phase5b-managed-cuda-systems-report.v1":
+        parsed_report: PublicFailureReport | PublicSystemsReport = (
+            PublicSystemsReport.model_validate(report)
+        )
+    elif schema_version == "phase5b-managed-cuda-failure-report.v1":
+        parsed_report = PublicFailureReport.model_validate(report)
+    else:
+        raise ValueError(f"{path}: bound report schema is not recognized")
     protocol_path = references["protocol_path"]
     validate_phase5_managed_cuda_systems_protocol(protocol_path)
     protocol = _load_closed_json(protocol_path)
-    expected_report_bindings = {
-        "protocol_digest": hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
-        "acquisition_descriptor_sha256": protocol["acquisition_descriptor_sha256"],
-        "managed_runtime_descriptor_sha256": protocol["managed_runtime_descriptor_sha256"],
-        "fixture_digest": protocol["fixture_digest"],
-    }
-    if any(
-        getattr(parsed_report, field) != expected
-        for field, expected in expected_report_bindings.items()
+    if isinstance(parsed_report, PublicSystemsReport):
+        expected_report_bindings = {
+            "protocol_digest": hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
+            "acquisition_descriptor_sha256": protocol["acquisition_descriptor_sha256"],
+            "managed_runtime_descriptor_sha256": protocol["managed_runtime_descriptor_sha256"],
+            "fixture_digest": protocol["fixture_digest"],
+        }
+        if any(
+            getattr(parsed_report, field) != expected
+            for field, expected in expected_report_bindings.items()
+        ):
+            raise ValueError(f"{path}: report provenance differs from the exact protocol bytes")
+    elif not (
+        parsed_report.classification == "reject_local"
+        and parsed_report.disposition == "reject_local"
+        and parsed_report.evidence_code == "candidate_invalid_response"
+        and not parsed_report.operator_preempted
+        and parsed_report.protected_workload_restored
     ):
-        raise ValueError(f"{path}: report provenance differs from the exact protocol bytes")
+        raise ValueError(f"{path}: failure report is not eligible for a v3 successor")
     readiness_path = references["readiness_manifest_path"]
     validate_phase5_readiness_manifest(readiness_path)
     readiness = _load_closed_json(readiness_path)
@@ -1345,7 +1362,7 @@ def _validate_phase5_v3_bindings(payload: dict[str, Any], path: Path, repository
         ):
             raise ValueError(f"{path}: Kev immutable identity and metadata must match v2")
     if candidate.get("disposition") != parsed_report.disposition:
-        raise ValueError(f"{path}: candidate disposition must equal the bound systems report")
+        raise ValueError(f"{path}: candidate disposition must equal the bound report")
     claims = candidate.get("allowed_claims")
     markers = candidate.get("mitigation_markers")
     if not isinstance(claims, list) or not isinstance(markers, list):
