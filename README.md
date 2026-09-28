@@ -24,13 +24,13 @@ sensitivity: public
 
 [English](README.md) | [Português (Brasil)](docs/README.pt-BR.md)
 
-Saracura is a PT-BR-first, local-first research engine for typed decisions at volume. Its architectural thesis is simple: encode one state once, then answer many calibrated questions with low incremental cost.
+Saracura is an open decision runtime and model lab for local, high-throughput workflows, with a PT-BR-first benchmark and pluggable decision backends.
 
-> One state. Many calibrated decisions. Open and local.
+> One typed API. Pluggable research backends. Evidence before claims.
 
 This repository is currently a **research-only alpha**. It does not contain trained weights, does not claim decision quality, and must not be used as an automation or authorization gate. The included deterministic fixture backend exists only to exercise the contract and runtime invariants.
 
-PT-BR-first means Brazilian Portuguese is the first language for examples, data governance, annotation, and evaluation. It does not mean this alpha already ships a PT-BR-optimized checkpoint. The API and architecture remain language-neutral so the same evidence protocol can expand to English and other languages. A Portuguese translation of this README is available at [docs/README.pt-BR.md](docs/README.pt-BR.md).
+PT-BR-first means Brazilian Portuguese is the first language for examples, data governance, annotation, and evaluation. It does not mean this alpha already ships a checkpoint with measured PT-BR quality. The API and architecture remain language-neutral so the same evidence protocol can expand to English and other languages. A Portuguese translation of this README is available at [docs/README.pt-BR.md](docs/README.pt-BR.md).
 
 English is the canonical language for technical documentation. The quickstart, public examples, and PT-BR evaluation materials are also maintained in Brazilian Portuguese where applicable.
 
@@ -51,9 +51,9 @@ English is the canonical language for technical documentation. The quickstart, p
 
 Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels outside the exact Phase 4D and Phase 4E Choice workflows, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, calibration, confidence thresholds, public checkpoint publication, or production automation. The installed Saracura-owned backend is opt-in, synthetic-only and research-only; it requires an operator-provided verified MiniLM snapshot and sealed training capsule, returns uncalibrated abstained ranking weights, and never authorizes automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
 
-## Two-tier research architecture
+## Phase 5 direction and two-tier research architecture
 
-Saracura is pursuing one typed decision API with two execution tiers. The experimental `universal` tier is intended to accept new Choice schemas without requiring users to adopt predefined model packs or task-specific heads. The optional `compiled` tier specializes stable, high-volume decisions when that optimization is justified. The first universal implementation remains experimental, no model is production-approved, and results do not authorize automation. TypeSafe/Jev is a benchmark and design reference, not a Saracura runtime dependency or fallback. See [ADR 0001](docs/decisions/0001-two-tier-decision-architecture.md).
+Saracura preserves one typed decision API with a pluggable `universal` tier for new Choice schemas and an optional `compiled` tier for stable, repeated high-volume workflows. The current `saracura-universal-ranker.v0` is a historical MiniLM bi-encoder projection ranker, not the presumed product foundation and not a parameter-count claim. Phase 5 evaluates evidence-supported open candidates before any new checkpoint training. TypeSafe/Jev remains an independent external control, never a runtime dependency or fallback. No candidate is production-approved, calibrated for a declared protocol, or authorized to automate. See [ADR 0001](docs/decisions/0001-two-tier-decision-architecture.md) and [ADR 0002](docs/decisions/0002-open-model-runtime-and-readiness.md).
 
 ## Install and verify
 

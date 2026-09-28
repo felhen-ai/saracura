@@ -1,0 +1,78 @@
+{
+  "schema_version": "phase5-open-model-candidates.v1",
+  "reviewed_at": "2026-09-27",
+  "allowed_dispositions": [
+    "historical_baseline",
+    "planned_acquisition",
+    "external_control",
+    "comparison_only"
+  ],
+  "candidate_claim_vocabulary": [
+    "historical_research_baseline",
+    "candidate_for_evaluation",
+    "external_product_control",
+    "comparison_reference"
+  ],
+  "candidates": [
+    {
+      "id": "saracura-universal-ranker-v0",
+      "display_name": "Saracura universal ranker v0",
+      "disposition": "historical_baseline",
+      "architecture_class": "bi_encoder_projection_ranker",
+      "source_url": "https://github.com/felhen-ai/saracura",
+      "declared_license": "unknown",
+      "license_review": "not_applicable_private_baseline",
+      "revision": null,
+      "revision_state": "private_verified",
+      "local_execution": "historical_only",
+      "evidence_authority": "private_quality_observation",
+      "allowed_claims": ["historical_research_baseline"],
+      "notes": "Historical MiniLM bi-encoder projection ranker retained only as bounded research context."
+    },
+    {
+      "id": "kev-4b",
+      "display_name": "Kev-4B",
+      "disposition": "planned_acquisition",
+      "architecture_class": "pointer_head_causal_lm",
+      "source_url": "https://huggingface.co/jaredpalmer/kev-4b",
+      "declared_license": "unknown",
+      "license_review": "pending",
+      "revision": null,
+      "revision_state": "unpinned",
+      "local_execution": "planned",
+      "evidence_authority": "upstream_claims_only",
+      "allowed_claims": ["candidate_for_evaluation"],
+      "notes": "Candidate acquisition remains subject to pinned revision and license review."
+    },
+    {
+      "id": "jev",
+      "display_name": "TypeSafe Jev",
+      "disposition": "external_control",
+      "architecture_class": "native_remote",
+      "source_url": "https://typesafe.ai",
+      "declared_license": "unknown",
+      "license_review": "external_service",
+      "revision": null,
+      "revision_state": "external_service",
+      "local_execution": "not_applicable",
+      "evidence_authority": "external_control_only",
+      "allowed_claims": ["external_product_control"],
+      "notes": "External product control is not a Saracura runtime dependency or fallback."
+    },
+    {
+      "id": "shisa-de-1",
+      "display_name": "Shisa DE-1",
+      "disposition": "comparison_only",
+      "architecture_class": "constrained_causal_lm",
+      "source_url": "https://huggingface.co/shisa-ai/shisa-de-1",
+      "declared_license": "unknown",
+      "license_review": "pending",
+      "revision": null,
+      "revision_state": "comparison_reference",
+      "local_execution": "not_supported",
+      "evidence_authority": "comparison_context_only",
+      "allowed_claims": ["comparison_reference"],
+      "notes": "Heavyweight open reference remains outside the initial local execution lane."
+    }
+  ]
+}

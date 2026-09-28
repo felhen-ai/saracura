@@ -37,7 +37,7 @@ class SnapshotConflictError(ValueError):
 
 def cache_root() -> Path:
     """Resolve the private cache only when an acquisition operation needs it."""
-    from platformdirs import user_cache_path  # type: ignore[import-not-found]
+    from platformdirs import user_cache_path  # type: ignore[import-not-found,unused-ignore]
 
     return Path(str(user_cache_path("saracura"))) / "universal-local"
 

@@ -1,0 +1,76 @@
+{
+  "schema_version": "phase5-public-readiness.v1",
+  "claim_vocabulary": [
+    "research_only",
+    "usable_developer_preview",
+    "third_party_checkpoint_supported",
+    "saracura_owned_checkpoint",
+    "ptbr_measured",
+    "bilingual_measured",
+    "calibrated_for_declared_protocol",
+    "comparative_claim_for_declared_task",
+    "external_submission_ready",
+    "production_ready",
+    "automation_authorized"
+  ],
+  "gates": [
+    {
+      "id": "gate_a_developer_preview",
+      "status": "not_met",
+      "required_evidence": [
+        "clean_machine_install",
+        "pinned_license_reviewed_acquisition",
+        "public_dev_quality_report",
+        "local_systems_report",
+        "offline_ci_contract",
+        "public_ptbr_en_examples",
+        "non_automation_safety_contract"
+      ],
+      "allowed_claims": [
+        "research_only",
+        "usable_developer_preview",
+        "third_party_checkpoint_supported"
+      ],
+      "forbidden_claims": [
+        "saracura_owned_checkpoint",
+        "ptbr_measured",
+        "bilingual_measured",
+        "calibrated_for_declared_protocol",
+        "comparative_claim_for_declared_task",
+        "external_submission_ready",
+        "production_ready",
+        "automation_authorized"
+      ]
+    },
+    {
+      "id": "gate_b_saracura_checkpoint",
+      "status": "not_met",
+      "required_evidence": [
+        "clean_machine_install",
+        "pinned_license_reviewed_acquisition",
+        "public_dev_quality_report",
+        "local_systems_report",
+        "offline_ci_contract",
+        "public_ptbr_en_examples",
+        "non_automation_safety_contract",
+        "saracura_owned_checkpoint",
+        "sealed_ptbr_test",
+        "sealed_bilingual_test",
+        "disjoint_calibration_test",
+        "clean_external_submission_bundle"
+      ],
+      "allowed_claims": [
+        "research_only",
+        "usable_developer_preview",
+        "third_party_checkpoint_supported",
+        "saracura_owned_checkpoint",
+        "ptbr_measured",
+        "bilingual_measured",
+        "calibrated_for_declared_protocol",
+        "comparative_claim_for_declared_task",
+        "external_submission_ready"
+      ],
+      "forbidden_claims": ["production_ready", "automation_authorized"]
+    }
+  ]
+}

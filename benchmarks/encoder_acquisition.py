@@ -29,9 +29,9 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 
 def _cache_root() -> Path:
-    from platformdirs import user_cache_path  # type: ignore[import-not-found]
+    from platformdirs import user_cache_path  # type: ignore[import-not-found,unused-ignore]
 
-    return cast(Path, user_cache_path("saracura")) / "encoders"
+    return cast(Path, user_cache_path("saracura")) / "encoders"  # type: ignore[redundant-cast,unused-ignore]
 
 
 def snapshot_path(candidate: Candidate, root: Path | None = None) -> Path:

@@ -23,6 +23,7 @@ related:
   - docs/action/specs/phase4c2-local-candidate-adapters.md
   - docs/action/specs/phase4c3c-typesafe-response-contract-recovery.md
   - docs/action/specs/phase4c4-architecture-decision.md
+  - docs/decisions/0002-open-model-runtime-and-readiness.md
 supersedes: []
 supersededBy: []
 sensitivity: public

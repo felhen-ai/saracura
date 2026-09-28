@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
+import subprocess
+import sys
 import urllib.request
 from contextlib import nullcontext
 from pathlib import Path
@@ -387,9 +388,17 @@ def test_download_requires_exact_content_length(
 
 
 def test_default_environment_proof_does_not_import_optional_local_stack() -> None:
-    for module in ("torch", "transformers", "tokenizers", "safetensors", "platformdirs", "psutil"):
-        assert module not in __import__("sys").modules
-        assert importlib.util.find_spec(module) is None or module not in __import__("sys").modules
+    code = (
+        "import sys; from benchmarks.universal_local import "
+        "acquisition, conformance, registry, runner; "
+        "print(*(name in sys.modules for name in "
+        "('torch','transformers','tokenizers','safetensors','platformdirs','psutil')))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False False False False False False"
 
 
 def test_universal_local_is_checkout_only_and_excluded_from_package() -> None:

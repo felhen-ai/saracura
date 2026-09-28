@@ -121,3 +121,70 @@ def test_phase4f1_smoke_result_is_bound_and_conservative_in_both_readmes() -> No
     assert "action/phase4f1-shadow-evaluation-result.md" in portuguese
     for private_value in ("/Volumes/", "/Users/", "Felhen", "checkpoint.safetensors"):
         assert private_value not in report
+
+
+def test_phase5_positioning_is_bounded_and_readme_parity_is_preserved() -> None:
+    root = Path(__file__).parents[1]
+    english = (root / "README.md").read_text(encoding="utf-8")
+    portuguese = (root / "docs/README.pt-BR.md").read_text(encoding="utf-8")
+    adr = (root / "docs/decisions/0002-open-model-runtime-and-readiness.md").read_text(
+        encoding="utf-8"
+    )
+
+    english_overview = english.split("## Phase 5 direction and two-tier research architecture", 1)[
+        1
+    ].split("## Install and verify", 1)[0]
+    portuguese_overview = portuguese.split(
+        "## Direção da Fase 5 e arquitetura de pesquisa em duas camadas", 1
+    )[1].split("## Instalação e validação", 1)[0]
+
+    for document, overview, required, forbidden in (
+        (
+            english,
+            english_overview,
+            (
+                "open decision runtime and model lab",
+                "pluggable",
+                "MiniLM bi-encoder projection ranker",
+                "not a parameter-count claim",
+                "No candidate is production-approved",
+            ),
+            ("Jev replacement", "fastest decision model", "production-ready", "PT-BR optimized"),
+        ),
+        (
+            portuguese,
+            portuguese_overview,
+            (
+                "runtime aberto de decisões e laboratório de modelos",
+                "plugável",
+                "ranker histórico de projeção bi-encoder MiniLM",
+                "alegação de número de parâmetros",
+                "Nenhum candidato está aprovado para produção",
+            ),
+            (
+                "substituto do Jev",
+                "modelo de decisão mais rápido",
+                "pronto para produção",
+                "otimizado para PT-BR",
+            ),
+        ),
+    ):
+        for phrase in required:
+            assert phrase in document
+        for phrase in forbidden:
+            assert phrase not in overview
+
+    assert "unqualified" not in adr
+    assert "Gate A" in adr and "Gate B" in adr
+    assert "no runtime effect" in adr
+    assert "automation authorization" in adr
+
+    english_opening = english.split("## Current scope", 1)[0]
+    portuguese_opening = portuguese.split("## Escopo atual", 1)[0]
+    for stale_claim in ("answer many calibrated questions", "One state. Many calibrated decisions"):
+        assert stale_claim not in english_opening
+    for stale_claim in (
+        "responder muitas perguntas calibradas",
+        "Um estado. Muitas decisões calibradas",
+    ):
+        assert stale_claim not in portuguese_opening
