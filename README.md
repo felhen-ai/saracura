@@ -136,6 +136,19 @@ declares Apache-2.0; the pinned MTEB-BR dataset card does not declare a license.
 The BCB portal says its open-data catalog excludes personal or restricted
 records, but Saracura has not performed a row-level privacy review.
 
+The first Apple Silicon CPU run produced the following planned-set results:
+
+| Backend | Correct / planned | Planned accuracy | Coverage | Rejected |
+| --- | ---: | ---: | ---: | ---: |
+| Julia-1 | 128 / 373 | 34.32% | 98.66% | 5 backend-capacity cases |
+| Saracura-owned ranker | 103 / 373 | 27.61% | 98.66% | 5 request-capacity cases |
+| Frozen lexical baseline | 265 / 373 | 71.05% | 100% | 0 |
+
+Both model-backed results are only modestly above chance and substantially
+below the lexical baseline. That is negative quality evidence, not a
+superiority claim. The committed aggregate reports preserve exact model, code,
+protocol, latency, and rejection provenance without dataset rows.
+
 ```bash
 uv sync --locked --dev --extra ptbr-benchmark
 uv pip install -e /absolute/path/to/Julia-1

@@ -126,6 +126,21 @@ não declara licença. O portal do BCB informa que o catálogo aberto exclui
 registros pessoais ou restritos, mas o Saracura não fez revisão de privacidade
 registro por registro.
 
+A primeira execução em CPU Apple Silicon produziu estes resultados sobre todo o
+conjunto planejado:
+
+| Backend | Acertos / planejados | Acurácia planejada | Cobertura | Rejeitados |
+| --- | ---: | ---: | ---: | ---: |
+| Julia-1 | 128 / 373 | 34,32% | 98,66% | 5 casos de capacidade do backend |
+| Ranker próprio do Saracura | 103 / 373 | 27,61% | 98,66% | 5 casos de capacidade da requisição |
+| Baseline lexical fixo | 265 / 373 | 71,05% | 100% | 0 |
+
+Os dois resultados apoiados por modelo ficam apenas modestamente acima do
+acaso e muito abaixo do baseline lexical. Isso é evidência negativa de
+qualidade, não uma alegação de superioridade. Os relatórios agregados
+versionados preservam a procedência exata de modelo, código, protocolo,
+latência e rejeições sem incluir registros do dataset.
+
 ```bash
 uv sync --locked --dev --extra ptbr-benchmark
 uv pip install -e /path/absoluto/para/Julia-1
