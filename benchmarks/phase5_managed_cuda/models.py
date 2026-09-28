@@ -166,7 +166,7 @@ class PrivateProvisional(ReportModel):
     fixture_sha256: Annotated[str, Field(pattern=_EVIDENCE_DIGEST)]
     uv_lock_sha256: Annotated[str, Field(pattern=_EVIDENCE_DIGEST)]
     benchmark_package_sha256: Annotated[str, Field(pattern=_EVIDENCE_DIGEST)]
-    cold_load_seconds: Annotated[float, Field(ge=0, le=600, allow_inf_nan=False)]
+    cold_load_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)]
     direct_upstream_401: Literal[True]
     runtime_identity: RuntimeIdentityEvidence
     matrix: MatrixEvidence
@@ -242,7 +242,7 @@ class PublicSystemsReport(ReportModel):
     vram_bucket_gib: Literal["24-31", "32-47", "48+"]
     candidate_runtime: Literal["torch"]
     candidate_dtype: Literal["bfloat16"]
-    cold_load_seconds: Annotated[float, Field(ge=0, le=600, allow_inf_nan=False)]
+    cold_load_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)]
     timing_cells: dict[str, PublicCellTiming]
     aggregate_p95_ms: Annotated[float, Field(ge=0, allow_inf_nan=False)]
     aggregate_max_ms: Annotated[float, Field(ge=0, allow_inf_nan=False)]

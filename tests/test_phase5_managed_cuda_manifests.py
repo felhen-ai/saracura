@@ -50,6 +50,18 @@ def test_phase5_managed_cuda_protocol_has_workload_counts() -> None:
     assert proto["workload_counts"]["en"]["q50"] == 20
 
 
+def test_phase5_managed_cuda_protocol_binds_exact_report_schema(tmp_path: Path) -> None:
+    from benchmarks.validate_manifests import validate_phase5_managed_cuda_systems_protocol
+
+    source = Path(__file__).parents[1] / "benchmarks/manifests/phase5-managed-cuda-systems.v1.json"
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["report_schema"] = "phase5b-managed-cuda-systems-report.v2"
+    changed = tmp_path / "systems-protocol.json"
+    changed.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="report_schema is not the frozen public report schema"):
+        validate_phase5_managed_cuda_systems_protocol(changed)
+
+
 def test_phase5_managed_cuda_protocol_probe_sizes() -> None:
     root = Path(__file__).parents[1]
     proto_path = root / "benchmarks" / "manifests" / "phase5-managed-cuda-systems.v1.json"
@@ -123,6 +135,17 @@ def test_phase5_v3_schema_accepts_only_nullable_result_bindings() -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     try:
         validate_phase5_candidate_manifest_v3(path)
+        schema_only_candidates = cast(list[dict[str, object]], payload["candidates"])
+        kev = next(item for item in schema_only_candidates if item["id"] == "kev-4b")
+        kev["disposition"] = "conditional"
+        kev["allowed_claims"] = ["candidate_for_evaluation"]
+        kev["mitigation_markers"] = ["state_size_guard_required"]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError, match="exact semantic copy of v2"):
+            validate_phase5_candidate_manifest_v3(path)
+        kev["disposition"] = "reviewed_acquisition"
+        kev["allowed_claims"] = ["candidate_for_evaluation"]
+        kev["mitigation_markers"] = []
         payload["systems_report_digest"] = "a" * 64
         path.write_text(json.dumps(payload), encoding="utf-8")
         with pytest.raises(ValueError, match="both null or both set"):
@@ -331,6 +354,27 @@ def test_v3_end_to_end_rejects_conditional_claim_marker_drift(
         kev["allowed_claims"] = []
     else:
         kev["allowed_claims"] = ["candidate_for_evaluation", "comparison_reference"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        validate_phase5_candidate_manifest_v3(manifest, repository=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("candidate_id", "field", "value", "message"),
+    [
+        ("kev-4b", "revision", "0" * 40, "Kev immutable identity"),
+        ("jev", "display_name", "Changed external control", "non-Kev candidate jev"),
+    ],
+)
+def test_v3_bound_promotion_rejects_predecessor_identity_drift(
+    tmp_path: Path, candidate_id: str, field: str, value: str, message: str
+) -> None:
+    from benchmarks.validate_manifests import validate_phase5_candidate_manifest_v3
+
+    manifest, payload = _bound_v3_repository(tmp_path, "conditional")
+    candidates = cast(list[dict[str, object]], payload["candidates"])
+    candidate = next(item for item in candidates if item["id"] == candidate_id)
+    candidate[field] = value
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         validate_phase5_candidate_manifest_v3(manifest, repository=tmp_path)

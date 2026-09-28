@@ -147,6 +147,21 @@ def test_matrix_blocks_transport_and_protocol_failures() -> None:
         )
 
 
+@pytest.mark.parametrize("probe", ["matrix", "oversize"])
+def test_list_valued_choice_is_controlled_candidate_rejection(probe: str) -> None:
+    def fake_post(_url: str, payload: dict[str, Any], *, timeout: float) -> HttpResult:
+        response = json.loads(_valid_response(payload))
+        first = next(iter(response["answers"].values()))
+        first["choice"] = []
+        return HttpResult(200, {}, json.dumps(response).encode(), 1.0)
+
+    with pytest.raises(CandidateRejected, match="selected option must be a string"):
+        if probe == "matrix":
+            execute_matrix("http://127.0.0.1:8181", post=fake_post)
+        else:
+            run_oversize_probes("http://127.0.0.1:8181", 60, post=fake_post)
+
+
 def test_supplemental_probes_measure_all_pinned_comparisons() -> None:
     paths: list[str] = []
 
@@ -249,6 +264,7 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
     executable.parent.mkdir(parents=True)
     module.parent.mkdir(parents=True)
     process.mkdir(parents=True)
+    (process / "cwd").symlink_to(capsule, target_is_directory=True)
     executable.write_text("", encoding="utf-8")
     module.write_text("", encoding="utf-8")
     checkpoint.write_text("", encoding="utf-8")
@@ -323,6 +339,49 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
     assert transport_calls[0][0] == "http://127.0.0.1:8181/v1/systemone"
     assert "locale" not in transport_calls[0][1]
     assert "private-secret" not in json.dumps(observed)
+
+    def valid_stat(_pid: int, _root: Path) -> dict[str, int]:
+        return {"starttime": 99, "utime": 1, "stime": 1}
+
+    failure_boundaries: list[dict[str, Any]] = [
+        {
+            "stat_reader": lambda *_args: (_ for _ in ()).throw(
+                FileNotFoundError("/private/proc/stat")
+            )
+        },
+        {
+            "cmdline_reader": lambda *_args: (_ for _ in ()).throw(
+                PermissionError("/private/proc/cmdline")
+            )
+        },
+        {"environ_reader": lambda *_args: (_ for _ in ()).throw(OSError("/private/proc/environ"))},
+        {
+            "cwd_reader": lambda *_args: (_ for _ in ()).throw(
+                FileNotFoundError("/private/proc/cwd")
+            )
+        },
+        {"cwd_reader": lambda *_args: (_ for _ in ()).throw(PermissionError("/private/proc/cwd"))},
+        {
+            "cmdline_reader": lambda *_args: (
+                "\0".join([str(capsule / "vanished/bin/python"), *command[1:]]) + "\0"
+            )
+        },
+    ]
+    for boundary in failure_boundaries:
+        injected = {"stat_reader": valid_stat, "socket_reader": socket_reader} | boundary
+        with pytest.raises(EvidenceBlocked) as failure:
+            validate_runtime_identity(
+                pid=321,
+                expected_checkpoint=str(checkpoint),
+                gateway_url="http://127.0.0.1:8181",
+                getuid=lambda: process.stat().st_uid,
+                geteuid=lambda: 1000,
+                proc_root=proc_root,
+                transport=transport,
+                **injected,
+            )
+        assert str(failure.value) == "candidate runtime identity became unavailable"
+
     with pytest.raises(EvidenceBlocked):
         validate_runtime_identity(
             pid=321,
@@ -434,6 +493,7 @@ def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
     executable.parent.mkdir(parents=True)
     module.parent.mkdir(parents=True)
     process.mkdir(parents=True)
+    (process / "cwd").symlink_to(capsule, target_is_directory=True)
     executable.write_text("", encoding="utf-8")
     module.write_text("", encoding="utf-8")
     checkpoint.write_text("", encoding="utf-8")
@@ -469,7 +529,17 @@ def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
     return environment, command, process, proc_root
 
 
-@pytest.mark.parametrize("failure", ["duplicate_flag", "unknown_kev", "provider_env", "proxy_env"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "duplicate_flag",
+        "unknown_kev",
+        "provider_env",
+        "proxy_env",
+        "pythonpath",
+        "pythonhome",
+    ],
+)
 def test_runtime_identity_rejects_duplicate_flags_and_unapproved_environment(
     tmp_path: Any, failure: str
 ) -> None:
@@ -480,6 +550,10 @@ def test_runtime_identity_rejects_duplicate_flags_and_unapproved_environment(
         environment["OPENAI_API_KEY"] = "private-provider-token"
     elif failure == "proxy_env":
         environment["HTTPS_PROXY"] = "http://private-proxy.invalid"
+    elif failure == "pythonpath":
+        environment["PYTHONPATH"] = "/external/imports"
+    elif failure == "pythonhome":
+        environment["PYTHONHOME"] = "/external/python"
     raw_command = command[:]
     if failure == "duplicate_flag":
         raw_command[9] = "--run"
@@ -535,6 +609,51 @@ def test_runtime_identity_rejects_capsule_escape_or_disagreement(
             socket_reader=lambda *_: 17,
             transport=lambda _url, payload, **_kw: HttpResult(200, {}, _valid_response(payload), 1),
         )
+
+
+def test_runtime_identity_rejects_external_cwd_shadow_module(tmp_path: Any) -> None:
+    environment, command, process, proc_root = _runtime_case(tmp_path)
+    external_cwd = tmp_path / "external-cwd"
+    shadow = external_cwd / "kev/serve.py"
+    shadow.parent.mkdir(parents=True)
+    shadow.write_text("# shadow module", encoding="utf-8")
+    (process / "cwd").unlink()
+    (process / "cwd").symlink_to(external_cwd, target_is_directory=True)
+    with pytest.raises(EvidenceBlocked, match="working directory escapes capsule root"):
+        validate_runtime_identity(
+            321,
+            command[4],
+            gateway_url="http://127.0.0.1:8181",
+            getuid=lambda: process.stat().st_uid,
+            geteuid=lambda: 1000,
+            proc_root=proc_root,
+            environ_reader=lambda *_: (environment, True),
+            stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
+            socket_reader=lambda *_: 17,
+            transport=lambda _url, payload, **_kw: HttpResult(200, {}, _valid_response(payload), 1),
+        )
+
+
+@pytest.mark.parametrize("failure", ["missing", "inaccessible"])
+def test_runtime_identity_normalizes_unavailable_process_cwd(tmp_path: Any, failure: str) -> None:
+    environment, command, process, proc_root = _runtime_case(tmp_path)
+    error_type = FileNotFoundError if failure == "missing" else PermissionError
+
+    def missing_cwd(_path: Any) -> Any:
+        raise error_type("/private/proc/321/cwd")
+
+    with pytest.raises(EvidenceBlocked) as error:
+        validate_runtime_identity(
+            321,
+            command[4],
+            gateway_url="http://127.0.0.1:8181",
+            getuid=lambda: process.stat().st_uid,
+            geteuid=lambda: 1000,
+            proc_root=proc_root,
+            environ_reader=lambda *_: (environment, True),
+            cwd_reader=missing_cwd,
+        )
+    assert str(error.value) == "candidate runtime identity became unavailable"
 
 
 @pytest.mark.parametrize("socket_state", ["missing", "shared", "ambiguous"])
@@ -690,6 +809,34 @@ def test_sampler_rejects_swap_reset_pid_change_and_reports_candidate_swap() -> N
         sample_resources(
             99, swap_reader=lambda: 0, **(base | {"owner_reader": lambda _pid: next(owners)})
         )
+
+
+def test_sampler_uses_transient_candidate_swap_peak_after_recovery() -> None:
+    swaps: list[int] = []
+
+    def proc_reader(_pid: int) -> dict[str, int]:
+        value = 100 if not swaps else 2 * 1024**3 + 100 if len(swaps) == 1 else 100
+        swaps.append(value)
+        return {"VmRSS": 1, "VmHWM": 1, "VmSwap": value}
+
+    evidence = sample_resources(
+        99,
+        duration_seconds=0.55,
+        proc_reader=proc_reader,
+        gpu_reader=lambda pid: {
+            "started": time.monotonic(),
+            "ended": time.monotonic() + 0.01,
+            "duration_ms": 10.0,
+            "compute_pids": [pid],
+            "candidate_gpu_mib": 1.0,
+            "device_total_mib": 24576.0,
+        },
+        owner_reader=lambda _pid: 1000,
+        identity_reader=lambda _pid: {"starttime": 7},
+        swap_reader=lambda: 0,
+    )
+    assert len(swaps) >= 3 and swaps[0] == swaps[-1] == 100
+    assert evidence["candidate_swap_delta_bytes"] == 2 * 1024**3
 
 
 def test_sampler_blocks_procfs_and_nvidia_cadence_gaps() -> None:

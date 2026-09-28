@@ -1038,6 +1038,8 @@ def validate_phase5_managed_cuda_systems_protocol(path: Path) -> None:
         raise ValueError(f"{path}: unsupported schema version")
     if payload["candidate_id"] != "kev-4b":
         raise ValueError(f"{path}: candidate_id must be kev-4b")
+    if payload["report_schema"] != "phase5b-managed-cuda-systems-report.v1":
+        raise ValueError(f"{path}: report_schema is not the frozen public report schema")
     expected_wire = {
         "model": "kev-latest",
         "questions_shape": "mapping_by_question_id",
@@ -1264,6 +1266,7 @@ def _validate_phase5_v3_bindings(payload: dict[str, Any], path: Path, repository
             raise ValueError(f"{path}: {digest_key} does not match exact referenced bytes")
         references[path_key] = candidate_path
     if not references:
+        _validate_phase5_v3_schema_only_copy(payload, path)
         return
     if len(references) != 3:
         raise ValueError(f"{path}: report, protocol and readiness bindings are all required")
@@ -1319,6 +1322,28 @@ def _validate_phase5_v3_bindings(payload: dict[str, Any], path: Path, repository
     if len(kev_matches) != 1:
         raise ValueError(f"{path}: exactly one Kev-4B candidate is required")
     candidate = kev_matches[0]
+    v2_path = Path(__file__).parent / "manifests" / "phase5-open-model-candidates.v2.json"
+    v2_candidates = _load_closed_json(v2_path)["candidates"]
+    predecessor_by_id = {entry["id"]: entry for entry in v2_candidates}
+    successor_by_id = {entry["id"]: entry for entry in candidates}
+    if len(successor_by_id) != len(candidates) or set(successor_by_id) != set(predecessor_by_id):
+        raise ValueError(f"{path}: bound v3 candidate identities must match the v2 predecessor")
+    for candidate_id, predecessor in predecessor_by_id.items():
+        successor = successor_by_id[candidate_id]
+        expected = {**predecessor, "mitigation_markers": []}
+        if candidate_id != "kev-4b":
+            if successor != expected:
+                raise ValueError(
+                    f"{path}: non-Kev candidate {candidate_id} must copy v2 semantics exactly"
+                )
+            continue
+        mutable_promotion_fields = {"disposition", "allowed_claims", "mitigation_markers"}
+        if set(successor) != set(expected) or any(
+            successor[field] != value
+            for field, value in expected.items()
+            if field not in mutable_promotion_fields
+        ):
+            raise ValueError(f"{path}: Kev immutable identity and metadata must match v2")
     if candidate.get("disposition") != parsed_report.disposition:
         raise ValueError(f"{path}: candidate disposition must equal the bound systems report")
     claims = candidate.get("allowed_claims")
@@ -1337,6 +1362,22 @@ def _validate_phase5_v3_bindings(payload: dict[str, Any], path: Path, repository
         raise ValueError(f"{path}: blocked_evidence must not publish a v3 successor")
     elif parsed_report.disposition == "continue":
         raise ValueError(f"{path}: v1 managed CUDA protocol cannot emit continue")
+
+
+def _validate_phase5_v3_schema_only_copy(payload: dict[str, Any], path: Path) -> None:
+    """Allow a schema-only v3 only when it preserves v2 candidate semantics."""
+    v2_path = Path(__file__).parent / "manifests" / "phase5-open-model-candidates.v2.json"
+    v2 = _load_closed_json(v2_path)
+    expected_dispositions = [*v2["allowed_dispositions"], "blocked_evidence"]
+    if payload["allowed_dispositions"] != expected_dispositions:
+        raise ValueError(f"{path}: unbound v3 cannot change the v2 disposition vocabulary")
+    if payload["candidate_claim_vocabulary"] != v2["candidate_claim_vocabulary"]:
+        raise ValueError(f"{path}: unbound v3 cannot change the v2 claim vocabulary")
+    expected_candidates = [
+        {**candidate, "mitigation_markers": []} for candidate in v2["candidates"]
+    ]
+    if payload["candidates"] != expected_candidates:
+        raise ValueError(f"{path}: unbound v3 must be an exact semantic copy of v2")
 
 
 def validate_committed_phase5b_report(repository: Path | None = None) -> None:

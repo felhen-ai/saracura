@@ -112,6 +112,23 @@ def validate_response(
     question_options: Mapping[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """Validate exact pinned successful raw Kev shape and probability simplex."""
+    try:
+        return _validate_response(
+            body, question_ids=question_ids, question_options=question_options
+        )
+    except CandidateRejected:
+        raise
+    except (TypeError, KeyError, IndexError, AttributeError, OverflowError, ValueError) as error:
+        raise CandidateRejected("response schema is malformed") from error
+
+
+def _validate_response(
+    body: bytes,
+    *,
+    question_ids: set[str],
+    question_options: Mapping[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    """Implementation behind the controlled malformed-response boundary."""
 
     def exact_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         output: dict[str, Any] = {}
@@ -137,6 +154,8 @@ def validate_response(
         probabilities = answer["probabilities"]
         if not isinstance(probabilities, dict) or not probabilities:
             raise CandidateRejected("probabilities must be a non-empty object")
+        if not isinstance(answer["choice"], str):
+            raise CandidateRejected("selected option must be a string")
         if question_options is not None and set(probabilities) != question_options[question_id]:
             raise CandidateRejected("response option ids do not match request criteria")
         values = list(probabilities.values())
@@ -411,27 +430,38 @@ def validate_runtime_identity(
     owner_reader: Callable[[Path], int] | None = None,
     cmdline_reader: Callable[[int, Path], str] | None = None,
     environ_reader: Callable[[int, Path], tuple[dict[str, str], bool]] | None = None,
+    cwd_reader: Callable[[Path], Path] | None = None,
     socket_reader: Callable[[int, int, Path, str], int] | None = None,
 ) -> dict[str, Any]:
     """Fail closed on command/environment/capsule/socket/CPU identity mismatch."""
+    if not Path(expected_checkpoint).is_absolute():
+        raise EvidenceBlocked("expected checkpoint must be an absolute path")
     if geteuid() == 0:
         raise EvidenceBlocked("runner refuses root")
     if direct_upstream_port != 8182:
         raise EvidenceBlocked("direct upstream port must remain 8182")
     proc = proc_root / str(pid)
     read_owner = owner_reader or (lambda path: path.stat().st_uid)
+
+    def identity_read(reader: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        try:
+            return reader(*args, **kwargs)
+        except OSError as error:
+            raise EvidenceBlocked("candidate runtime identity became unavailable") from error
+
     try:
         initial_owner = read_owner(proc)
-    except (FileNotFoundError, PermissionError) as error:
+    except OSError as error:
         raise EvidenceBlocked("candidate PID is missing or inaccessible") from error
     if initial_owner != getuid():
         raise EvidenceBlocked("candidate PID is not owned by invoking user")
     read_stat = stat_reader or _read_proc_stat
     read_cmdline = cmdline_reader or _read_proc_cmdline
     read_environ = environ_reader or _read_proc_environ
+    read_cwd = cwd_reader or (lambda path: path.resolve(strict=True))
     read_socket = socket_reader or _get_listen_socket_inode
-    before = read_stat(pid, proc_root)
-    raw = read_cmdline(pid, proc_root)
+    before = identity_read(read_stat, pid, proc_root)
+    raw = identity_read(read_cmdline, pid, proc_root)
     argv = [item for item in raw.split("\0") if item]
     if len(argv) != 11 or argv[1:3] != ["-m", "kev.serve"]:
         raise EvidenceBlocked("candidate command is not capsule Python -m kev.serve")
@@ -455,16 +485,19 @@ def validate_runtime_identity(
         raise EvidenceBlocked("candidate command identity mismatch")
     if flags != [item for pair in expected.items() for item in pair]:
         raise EvidenceBlocked("candidate command ordering differs from the pinned argv")
-    executable = Path(argv[0]).resolve(strict=True)
-    checkpoint = Path(expected_checkpoint).resolve(strict=True)
+    executable = identity_read(Path(argv[0]).resolve, strict=True)
+    checkpoint = identity_read(Path(expected_checkpoint).resolve, strict=True)
     capsule_roots = [
         parent for parent in executable.parents if re.fullmatch(r"[0-9a-f]{64}", parent.name)
     ]
     if len(capsule_roots) != 1:
         raise EvidenceBlocked("Python executable is outside a unique content-addressed capsule")
     capsule_root = capsule_roots[0]
-    module_path = (capsule_root / "kev" / "serve.py").resolve(strict=True)
-    fallback = Path(args["--fallback"]).resolve(strict=True)
+    process_cwd = identity_read(read_cwd, proc / "cwd")
+    if process_cwd != capsule_root and capsule_root not in process_cwd.parents:
+        raise EvidenceBlocked("candidate working directory escapes capsule root")
+    module_path = identity_read((capsule_root / "kev" / "serve.py").resolve, strict=True)
+    fallback = identity_read(Path(args["--fallback"]).resolve, strict=True)
     if any(
         path != capsule_root and capsule_root not in path.parents
         for path in (executable, checkpoint, fallback, module_path)
@@ -472,7 +505,7 @@ def validate_runtime_identity(
         raise EvidenceBlocked("candidate executable/module/checkpoint escapes capsule root")
     if not module_path.is_file() or checkpoint != fallback:
         raise EvidenceBlocked("candidate module or checkpoint/fallback identity mismatch")
-    environ, secret_present = read_environ(pid, proc_root)
+    environ, secret_present = identity_read(read_environ, pid, proc_root)
     required = {
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
@@ -499,7 +532,9 @@ def validate_runtime_identity(
         for key in environ
     ):
         raise EvidenceBlocked("candidate environment contains a proxy or credential channel")
-    inode = read_socket(pid, direct_upstream_port, proc_root, host)
+    if any(key.startswith("PYTHON") for key in environ):
+        raise EvidenceBlocked("candidate Python import environment contains overrides")
+    inode = identity_read(read_socket, pid, direct_upstream_port, proc_root, host)
     if gateway_url is None:
         raise EvidenceBlocked("gateway URL required for CPU attribution")
     control = matrix()["en"]["q1"]
@@ -515,16 +550,16 @@ def validate_runtime_identity(
         question_ids={q.id for q in control.questions},
         question_options=_question_options(convert_fixture_to_wire(control)),
     )
-    after = read_stat(pid, proc_root)
+    after = identity_read(read_stat, pid, proc_root)
     if (
         before["starttime"] != after["starttime"]
         or after["utime"] + after["stime"] <= before["utime"] + before["stime"]
     ):
         raise EvidenceBlocked("candidate PID changed or received no gateway-attributed CPU work")
     if (
-        read_owner(proc) != initial_owner
+        identity_read(read_owner, proc) != initial_owner
         or initial_owner != getuid()
-        or read_socket(pid, direct_upstream_port, proc_root, host) != inode
+        or identity_read(read_socket, pid, direct_upstream_port, proc_root, host) != inode
     ):
         raise EvidenceBlocked("candidate ownership or LISTEN socket changed")
     return {
@@ -829,7 +864,11 @@ def sample_resources(
     host_swap_after = swap_reader()
     all_proc_samples = proc_samples + closing_proc
     all_gpu_samples = gpu_samples + closing_gpu
-    candidate_swap_delta = all_proc_samples[-1][1]["VmSwap"] - all_proc_samples[0][1]["VmSwap"]
+    baseline_swap = all_proc_samples[0][1]["VmSwap"]
+    sampled_swaps = [sample[1]["VmSwap"] for sample in all_proc_samples]
+    if any(value < baseline_swap for value in sampled_swaps):
+        raise EvidenceBlocked("negative swap delta or candidate VmSwap counter reset")
+    candidate_swap_delta = max(sampled_swaps) - baseline_swap
     host_swap_delta = host_swap_after - host_swap_before
     if candidate_swap_delta < 0 or host_swap_delta < 0:
         raise EvidenceBlocked("negative swap delta is ambiguous")

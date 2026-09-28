@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
 import platform
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -119,6 +118,8 @@ def execute(
     identity_validator: Any = validate_runtime_identity,
 ) -> Path:
     """Run identity, 240 requests, supplemental probes, and both resource windows."""
+    if not Path(expected_checkpoint).is_absolute():
+        raise ValueError("expected checkpoint must be an absolute path")
     gateway_url = validate_loopback_url(gateway_url)
     direct_upstream_url = validate_loopback_url(direct_upstream_url)
     if direct_upstream_url != "http://127.0.0.1:8182":
@@ -215,11 +216,11 @@ def execute(
                 gateway_url=gateway_url,
             )
         ).model_dump()
-    except (EvidenceBlocked, ValidationError) as error:
+    except (EvidenceBlocked, ValidationError, OSError) as error:
         blocked = (
             error
             if isinstance(error, EvidenceBlocked)
-            else EvidenceBlocked("validated runtime identity is incomplete")
+            else EvidenceBlocked("validated runtime identity is incomplete or unavailable")
         )
         persist_failure(stage, blocked)
         raise blocked from error
@@ -249,28 +250,46 @@ def execute(
     primary_resources: dict[str, Any] | None = None
     diagnostic_resources: dict[str, Any] | None = None
     diagnostic_monitor: Any | None = None
+    primary_stop_attempted = False
+    diagnostic_started = False
+    diagnostic_stop_attempted = False
+
+    def stop_primary() -> dict[str, Any]:
+        nonlocal primary_stop_attempted
+        if primary_stop_attempted:
+            raise EvidenceBlocked("primary resource monitor finalization was attempted twice")
+        primary_stop_attempted = True
+        return cast(dict[str, Any], primary_monitor.stop())
+
+    def stop_diagnostic() -> dict[str, Any]:
+        nonlocal diagnostic_stop_attempted
+        if diagnostic_monitor is None or not diagnostic_started or diagnostic_stop_attempted:
+            raise EvidenceBlocked("diagnostic resource monitor is not finalizable")
+        diagnostic_stop_attempted = True
+        return cast(dict[str, Any], diagnostic_monitor.stop())
 
     def finish_primary() -> None:
         nonlocal primary_resources, stage
         if primary_resources is None:
             previous_stage = stage
             stage = "resource_finalization"
-            primary_resources = primary_monitor.stop()
+            primary_resources = stop_primary()
             stage = previous_stage
 
     def diagnostic_request(call: Any) -> Any:
         nonlocal diagnostic_monitor, diagnostic_resources
-        nonlocal stage
+        nonlocal diagnostic_started, stage
         stage = "diagnostic_monitor_readiness"
         diagnostic_monitor = sampler_factory(pid, expected_identity=runtime_identity)
         diagnostic_monitor.start()
+        diagnostic_started = True
         stage = "oversize"
         try:
             return call()
         finally:
             previous_stage = stage
             stage = "resource_finalization"
-            diagnostic_resources = diagnostic_monitor.stop()
+            diagnostic_resources = stop_diagnostic()
             stage = previous_stage
 
     try:
@@ -288,10 +307,27 @@ def execute(
         stage = "resource_finalization"
         finish_primary()
     except (EvidenceBlocked, CandidateRejected) as error:
-        for monitor in (primary_monitor, diagnostic_monitor):
-            if monitor is not None:
-                with contextlib.suppress(BaseException):
-                    monitor.stop()
+        closing_blocker: EvidenceBlocked | None = None
+        if not primary_stop_attempted:
+            try:
+                stop_primary()
+            except EvidenceBlocked as closing_error:
+                closing_blocker = closing_error
+            except BaseException as closing_error:
+                closing_blocker = EvidenceBlocked("primary resource monitor finalization failed")
+                closing_blocker.__cause__ = closing_error
+        if diagnostic_started and not diagnostic_stop_attempted:
+            try:
+                stop_diagnostic()
+            except EvidenceBlocked as closing_error:
+                closing_blocker = closing_error
+            except BaseException as closing_error:
+                closing_blocker = EvidenceBlocked("diagnostic resource monitor finalization failed")
+                closing_blocker.__cause__ = closing_error
+        if closing_blocker is not None:
+            stage = "resource_finalization"
+            persist_failure(stage, closing_blocker)
+            raise closing_blocker from error
         persist_failure(stage, error)
         raise
     if primary_resources is None or diagnostic_resources is None:
