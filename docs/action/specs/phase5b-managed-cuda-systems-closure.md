@@ -97,8 +97,10 @@ immutable candidate and supply only these explicit local inputs:
 Only literal `127.0.0.1` endpoint hosts are accepted. The service PID
 must exist, be owned by the invoking user, and remain the same process for the
 entire run. The runner refuses root, arbitrary network endpoints, redirects,
-proxy inheritance, caller-supplied provider credentials and request-triggered
-downloads. The admission gateway injects its host-only upstream bearer; the
+inherited or divergent proxy configuration, caller-supplied provider
+credentials and request-triggered downloads. The candidate's exact closed
+environment includes only the fixed loopback proxy sink described below; it is
+not an egress path. The admission gateway injects its host-only upstream bearer; the
 runner sends no Authorization header to that gateway. The direct-upstream
 probe also sends no bearer and must receive HTTP 401. A missing URL, transport
 failure or any other status produces `blocked_evidence` or `reject_local` as
@@ -131,19 +133,48 @@ Before sending a request, the runner reads `/proc/<pid>/cmdline` and
 `/proc/<pid>/environ` for the same-user process. It compares in memory and
 never writes the raw values. The command must be the capsule Python running
 `-m kev.serve`, with `--run` and `--fallback` both equal to the expected
-checkpoint, and the expected host and direct-upstream port. The environment
-must have `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `KEV_BACKEND=torch`,
-`KEV_DTYPE=bf16`, `KEV_MERGE=0`, `KEV_FUSED=0`, `KEV_CUDA_GRAPHS=0`,
-`KEV_DATE_FACTS=0`, `KEV_LORA_SCALE=1`, `KEV_PREFIX_CACHE=4`,
-`KEV_PREFIX_MIN_TOKENS=0` and `KEV_PREFIX_MAX_TOKENS=65536`. `KEV_API_KEY`
-must be present and non-empty, but its value is never retained. The lexical
-executable entry, module source, checkpoint and fallback must belong to the
-same content-addressed capsule root. Only the executable entry has the narrow
-system-Python resolution exception defined below; module, checkpoint and
-fallback still resolve below the capsule. The two public descriptors remain in the exact
+checkpoint, and the expected host and direct-upstream port. Its initial exec
+environment is a closed 30-key map. `KEV_API_KEY` must be present and non-empty,
+but its value is replaced in memory by a fixed redacted marker and is never
+retained. The other fixed literal entries are `LANG=C.UTF-8`,
+`LC_ALL=C.UTF-8`,
+`PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`,
+`HTTP_PROXY=http://127.0.0.1:9`, `HTTPS_PROXY=http://127.0.0.1:9`,
+`NO_PROXY=127.0.0.1,localhost`, `KEV_BACKEND=torch`, `KEV_DTYPE=bf16`,
+`KEV_MERGE=0`, `KEV_FUSED=0`, `KEV_CUDA_GRAPHS=0`, `KEV_DATE_FACTS=0`,
+`KEV_LORA_SCALE=1`, `KEV_PREFIX_CACHE=4`, `KEV_PREFIX_MIN_TOKENS=0` and
+`KEV_PREFIX_MAX_TOKENS=65536`. The capsule-derived entries are exactly
+`HOME=<capsule>/derived`, `XDG_CACHE_HOME=<capsule>/cache`,
+`HF_HOME=<capsule>/hf-home`,
+`HUGGINGFACE_HUB_CACHE=<capsule>/hf-home/hub`,
+`TRANSFORMERS_CACHE=<capsule>/cache`, `TORCH_HOME=<capsule>/cache`,
+`TRITON_CACHE_DIR=<capsule>/cache`, `TMPDIR=<capsule>/tmp`,
+`PYTHONPYCACHEPREFIX=<capsule>/cache`,
+`KEV_BENCHMARK_OUTPUT=<capsule>/reports` and
+`PYTHONPATH=<capsule>/payload/source/kev`.
+
+The environment framing must contain exactly one final NUL terminator. The
+parser removes only that terminator, then rejects any empty interior entry, an
+empty key, a duplicate key or an entry without `=` before constructing the
+map. This prevents a later duplicate from hiding the value that the interpreter
+would resolve first. Invalid UTF-8 is an explicit identity failure rather than
+an uncaught exception. Missing, extra or divergent keys fail closed. The
+equality describes the immutable environment passed at exec; it does not claim
+to observe later in-process mutations of an environment mapping.
+
+The lexical executable entry, exact module source, checkpoint and fallback
+must belong to the same content-addressed capsule root. The module is exactly
+`<capsule>/payload/source/kev/kev/serve.py`, the process working directory is
+exactly the capsule root, and no top-level root entry may be named `kev` or
+start with `kev.` so the working directory cannot shadow the pinned
+`PYTHONPATH` module through a package, source, bytecode or extension module.
+Only the executable entry has the narrow system-Python resolution exception
+defined below; module, checkpoint and fallback still resolve below the capsule.
+The two public descriptors remain in the exact
 clean Saracura archive and are bound to that runtime by their matching immutable
-identities and digests; they are not copied into the private capsule. Unknown `KEV_*` entries
-or a divergent command, identity, lock binding or path fail identity.
+identities and digests; they are not copied into the private capsule. A
+divergent command, environment, identity, lock binding or path fails identity.
 
 The runner also proves request attribution. It maps the direct-upstream LISTEN
 socket inode from `/proc/net/tcp` to an fd owned by the exact candidate PID,
@@ -370,6 +401,31 @@ content-addressed root, `environment` and `environment/bin` are root-owned
 `0755` executable. This proves the deployed topology satisfies the corrected
 ancestor and final-target invariants before another lease is attempted.
 
+#### Live launcher identity correction after the second private attempt
+
+The next P2 retry from merged correction bytes also stopped before the first
+measured request. The executable gate passed, but the runner then looked for
+the simplified `<capsule>/kev/serve.py` fixture path. The immutable capsule
+instead contains the source at
+`<capsule>/payload/source/kev/kev/serve.py`, with the source directory bound by
+the launcher's exact `PYTHONPATH`. Read-only host evidence confirmed that the
+descriptor-aligned path is a root-owned `0444` regular file below a root-owned
+`0555` source directory and that the simplified path is absent.
+
+The same comparison found sequential blockers that would otherwise require
+more live retries: the launcher deliberately emits the two Python path entries,
+the fixed loopback proxy sink and the remaining cache/report paths enumerated
+above, while the runner still rejected every Python- or proxy-named entry and
+unknown `KEV_*` entries. Runtime identity therefore validates the complete
+30-key launcher map at once. A versioned test fixture records that complete
+map and a parity test checks the runner expectation against it. Regression
+fixtures reproduce the real module layout and exact environment; they reject
+each missing or changed key, every extra key, duplicate/interior-empty/
+malformed framing, invalid UTF-8, cwd shadowing and module escape. Both
+benchmark-defect attempts remain private and produce no
+systems report or candidate-manifest successor. P2 restarts only from another
+new clean `main` archive after this correction is reviewed, merged and green.
+
 ### P2 — live systems evidence
 
 From the exact clean reviewed `main` commit containing P1 and any prerequisite
@@ -432,6 +488,12 @@ Gate A remains `not_met` in every P2 outcome.
 12. Offline runtime-identity regression tests use a real two-hop venv-style
     Python symlink and assert distinct rejection reasons for every unsafe
     lexical entry, ancestor, hop, final target and `/proc/<pid>/exe` mismatch.
+13. Runtime-identity regression tests reproduce the immutable
+    `payload/source/kev/kev/serve.py` layout and the full closed 30-key launcher
+    environment; they reject missing, extra, changed, duplicate, empty,
+    malformed or invalid-UTF-8 entries, invalid NUL framing, divergent
+    capsule-derived paths, cwd shadowing and module escape before measured
+    work; a versioned fixture asserts parity with the 30-key launcher map.
 
 ## Validation
 

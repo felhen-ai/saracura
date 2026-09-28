@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from benchmarks.phase5_managed_cuda.runner import (
     HttpResult,
     ResourceMonitor,
     _nvidia_sample,
+    _read_proc_environ,
     _validate_python_entry,
     execute_matrix,
     request_json,
@@ -257,7 +259,7 @@ def test_runtime_identity_rejects_missing_pid() -> None:
 def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_path: Any) -> None:
     capsule = tmp_path / ("a" * 64)
     executable = capsule / "environment/bin/python"
-    module = capsule / "kev/serve.py"
+    module = capsule / "payload" / "source" / "kev" / "kev" / "serve.py"
     checkpoint = capsule / "checkpoint"
     system_root = tmp_path / "approved-python"
     system_root.mkdir()
@@ -290,8 +292,14 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
     ]
     (process / "cmdline").write_bytes("\0".join(command).encode() + b"\0")
     environment = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "127.0.0.1,localhost",
         "KEV_BACKEND": "torch",
         "KEV_DTYPE": "bf16",
         "KEV_MERGE": "0",
@@ -302,6 +310,17 @@ def test_runtime_identity_exact_command_environment_socket_and_gateway_cpu(tmp_p
         "KEV_PREFIX_CACHE": "4",
         "KEV_PREFIX_MIN_TOKENS": "0",
         "KEV_PREFIX_MAX_TOKENS": "65536",
+        "HOME": f"{capsule}/derived",
+        "XDG_CACHE_HOME": f"{capsule}/cache",
+        "HF_HOME": f"{capsule}/hf-home",
+        "HUGGINGFACE_HUB_CACHE": f"{capsule}/hf-home/hub",
+        "TRANSFORMERS_CACHE": f"{capsule}/cache",
+        "TORCH_HOME": f"{capsule}/cache",
+        "TRITON_CACHE_DIR": f"{capsule}/cache",
+        "TMPDIR": f"{capsule}/tmp",
+        "PYTHONPYCACHEPREFIX": f"{capsule}/cache",
+        "KEV_BENCHMARK_OUTPUT": f"{capsule}/reports",
+        "PYTHONPATH": f"{capsule}/payload/source/kev",
         "KEV_API_KEY": "private-secret",
     }
     (process / "environ").write_bytes(
@@ -491,7 +510,7 @@ def test_fixed_nvidia_smi_sample_attributes_pid_and_device_memory() -> None:
 def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
     capsule = tmp_path / ("a" * 64)
     executable = capsule / "environment/bin/python"
-    module = capsule / "kev/serve.py"
+    module = capsule / "payload" / "source" / "kev" / "kev" / "serve.py"
     checkpoint = capsule / "checkpoint"
     proc_root = tmp_path / "proc"
     process = proc_root / "321"
@@ -518,8 +537,14 @@ def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
         "8182",
     ]
     environment = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HF_HUB_OFFLINE": "1",
         "TRANSFORMERS_OFFLINE": "1",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "127.0.0.1,localhost",
         "KEV_BACKEND": "torch",
         "KEV_DTYPE": "bf16",
         "KEV_MERGE": "0",
@@ -530,6 +555,17 @@ def _runtime_case(tmp_path: Any) -> tuple[dict[str, str], list[str], Any, Any]:
         "KEV_PREFIX_CACHE": "4",
         "KEV_PREFIX_MIN_TOKENS": "0",
         "KEV_PREFIX_MAX_TOKENS": "65536",
+        "HOME": f"{capsule}/derived",
+        "XDG_CACHE_HOME": f"{capsule}/cache",
+        "HF_HOME": f"{capsule}/hf-home",
+        "HUGGINGFACE_HUB_CACHE": f"{capsule}/hf-home/hub",
+        "TRANSFORMERS_CACHE": f"{capsule}/cache",
+        "TORCH_HOME": f"{capsule}/cache",
+        "TRITON_CACHE_DIR": f"{capsule}/cache",
+        "TMPDIR": f"{capsule}/tmp",
+        "PYTHONPYCACHEPREFIX": f"{capsule}/cache",
+        "KEV_BENCHMARK_OUTPUT": f"{capsule}/reports",
+        "PYTHONPATH": f"{capsule}/payload/source/kev",
         "KEV_API_KEY": "private-secret",
     }
     (process / "cmdline").write_bytes("\0".join(command).encode() + b"\0")
@@ -859,7 +895,7 @@ def test_runtime_identity_rejects_capsule_escape_or_disagreement(
     elif escape == "fallback":
         altered[7] = str(outside)
     else:
-        module = tmp_path / ("a" * 64) / "kev/serve.py"
+        module = tmp_path / ("a" * 64) / "payload" / "source" / "kev" / "kev" / "serve.py"
         module.unlink()
         module.symlink_to(outside)
     with pytest.raises(EvidenceBlocked):
@@ -879,15 +915,22 @@ def test_runtime_identity_rejects_capsule_escape_or_disagreement(
         )
 
 
-def test_runtime_identity_rejects_external_cwd_shadow_module(tmp_path: Any) -> None:
+@pytest.mark.parametrize("cwd_kind", ["external", "capsule_child"])
+def test_runtime_identity_rejects_non_root_cwd(tmp_path: Any, cwd_kind: str) -> None:
     environment, command, process, proc_root = _runtime_case(tmp_path)
-    external_cwd = tmp_path / "external-cwd"
-    shadow = external_cwd / "kev/serve.py"
-    shadow.parent.mkdir(parents=True)
-    shadow.write_text("# shadow module", encoding="utf-8")
+    capsule = Path(command[0]).parents[2]
+    target_cwd = tmp_path / "external-cwd"
+    expected_reason = "working directory is not the capsule root"
+    if cwd_kind == "capsule_child":
+        target_cwd = capsule / "child"
+        target_cwd.mkdir()
+    else:
+        shadow = target_cwd / "kev/serve.py"
+        shadow.parent.mkdir(parents=True)
+        shadow.write_text("# shadow module", encoding="utf-8")
     (process / "cwd").unlink()
-    (process / "cwd").symlink_to(external_cwd, target_is_directory=True)
-    with pytest.raises(EvidenceBlocked, match="working directory escapes capsule root"):
+    (process / "cwd").symlink_to(target_cwd, target_is_directory=True)
+    with pytest.raises(EvidenceBlocked, match=expected_reason):
         validate_runtime_identity(
             321,
             command[4],
@@ -1385,4 +1428,437 @@ def test_sampling_rejects_restart_or_socket_drift_from_validated_identity() -> N
                     "socket_reader": lambda _pid, _port, _root, _host: next(inodes),
                 }
             ),
+        )
+
+
+def _complete_launcher_environment(capsule_root: Path) -> dict[str, str]:
+    return {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "KEV_BACKEND": "torch",
+        "KEV_DTYPE": "bf16",
+        "KEV_MERGE": "0",
+        "KEV_FUSED": "0",
+        "KEV_CUDA_GRAPHS": "0",
+        "KEV_DATE_FACTS": "0",
+        "KEV_LORA_SCALE": "1",
+        "KEV_PREFIX_CACHE": "4",
+        "KEV_PREFIX_MIN_TOKENS": "0",
+        "KEV_PREFIX_MAX_TOKENS": "65536",
+        "HOME": f"{capsule_root}/derived",
+        "XDG_CACHE_HOME": f"{capsule_root}/cache",
+        "HF_HOME": f"{capsule_root}/hf-home",
+        "HUGGINGFACE_HUB_CACHE": f"{capsule_root}/hf-home/hub",
+        "TRANSFORMERS_CACHE": f"{capsule_root}/cache",
+        "TORCH_HOME": f"{capsule_root}/cache",
+        "TRITON_CACHE_DIR": f"{capsule_root}/cache",
+        "TMPDIR": f"{capsule_root}/tmp",
+        "PYTHONPYCACHEPREFIX": f"{capsule_root}/cache",
+        "KEV_BENCHMARK_OUTPUT": f"{capsule_root}/reports",
+        "PYTHONPATH": f"{capsule_root}/payload/source/kev",
+        "KEV_API_KEY": "<nonempty>",
+    }
+
+
+def test_launcher_environment_fixture_has_exact_30_keys() -> None:
+    capsule = Path("/capsule/abcd1234" * 8)
+    env = _complete_launcher_environment(capsule)
+    assert len(env) == 30
+    assert set(env.keys()) == {
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "HF_HUB_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "KEV_BACKEND",
+        "KEV_DTYPE",
+        "KEV_MERGE",
+        "KEV_FUSED",
+        "KEV_CUDA_GRAPHS",
+        "KEV_DATE_FACTS",
+        "KEV_LORA_SCALE",
+        "KEV_PREFIX_CACHE",
+        "KEV_PREFIX_MIN_TOKENS",
+        "KEV_PREFIX_MAX_TOKENS",
+        "HOME",
+        "XDG_CACHE_HOME",
+        "HF_HOME",
+        "HUGGINGFACE_HUB_CACHE",
+        "TRANSFORMERS_CACHE",
+        "TORCH_HOME",
+        "TRITON_CACHE_DIR",
+        "TMPDIR",
+        "PYTHONPYCACHEPREFIX",
+        "KEV_BENCHMARK_OUTPUT",
+        "PYTHONPATH",
+        "KEV_API_KEY",
+    }
+    assert env["KEV_API_KEY"] == "<nonempty>"
+    assert env["PYTHONPATH"] == f"{capsule}/payload/source/kev"
+
+
+def test_launcher_environment_parity_with_runner_required_map(tmp_path: Any) -> None:
+    capsule = tmp_path / ("p" * 64)
+    env = _complete_launcher_environment(capsule)
+    proc_root = tmp_path / "proc"
+    process = proc_root / "1"
+    process.mkdir(parents=True)
+    raw = "\0".join(f"{k}={v}" for k, v in env.items()).encode("utf-8") + b"\0"
+    (process / "environ").write_bytes(raw)
+    environ, secret_present = _read_proc_environ(1, proc_root)
+    assert secret_present is True
+    assert environ == env
+    assert environ["KEV_API_KEY"] == "<nonempty>"
+    assert len(environ) == 30
+
+
+@pytest.mark.parametrize(
+    ("raw_bytes", "reason"),
+    [
+        (b"", "framing is malformed"),
+        (b"KEY=val", "framing is malformed"),
+        (b"KEY=val\0\0", "framing is malformed"),
+        (b"KEY=val1\0\0KEY=val2\0", "empty interior entry"),
+        (b"\0KEY2=val2\0", "empty interior entry"),
+        (b"\0", "empty interior entry"),
+        (b"KEY1=val1\0KEY2\0KEY3=val3\0", "malformed"),
+        (b"=val\0", "empty key"),
+        (b"KEY1=val1\0KEY1=val2\0", "duplicate"),
+        (
+            b"KEY=val1\0KEY=val2\0KEY3=val3\0KEY4=val4\0KEY5=val5\0KEY6=val6\0KEY7=val7\0KEY8=val8\0KEY9=val9\0KEY10=val10\0KEY11=val11\0KEY12=val12\0KEY13=val13\0KEY14=val14\0KEY15=val15\0KEY16=val16\0KEY17=val17\0KEY18=val18\0KEY19=val19\0KEY20=val20\0KEY21=val21\0KEY22=val22\0KEY23=val23\0KEY24=val24\0KEY25=val25\0KEY26=val26\0KEY27=val27\0KEY28=val28\0KEY29=val29\0KEY30=val30\0KEY31=val31\0KEY32=val32\0KEY33=val33\0KEY34=val34\0KEY35=val35\0KEY36=val36\0KEY37=val37\0KEY38=val38\0KEY39=val39\0KEY40=val40\0KEY41=val41\0KEY42=val42\0KEY43=val43\0KEY44=val44\0KEY45=val45\0KEY46=val46\0KEY47=val47\0KEY48=val48\0KEY49=val49\0KEY50=val50\0",
+            "duplicate",
+        ),
+    ],
+)
+def test_read_proc_environ_rejects_malformed_framing(
+    tmp_path: Any, raw_bytes: bytes, reason: str
+) -> None:
+    proc_root = tmp_path / "proc"
+    process = proc_root / "1"
+    process.mkdir(parents=True)
+    (process / "environ").write_bytes(raw_bytes)
+    with pytest.raises(EvidenceBlocked, match=reason):
+        _read_proc_environ(1, proc_root)
+
+
+def test_read_proc_environ_accepts_valid_30key_encoding(tmp_path: Any) -> None:
+    entries = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "KEV_BACKEND": "torch",
+        "KEV_DTYPE": "bf16",
+        "KEV_MERGE": "0",
+        "KEV_FUSED": "0",
+        "KEV_CUDA_GRAPHS": "0",
+        "KEV_DATE_FACTS": "0",
+        "KEV_LORA_SCALE": "1",
+        "KEV_PREFIX_CACHE": "4",
+        "KEV_PREFIX_MIN_TOKENS": "0",
+        "KEV_PREFIX_MAX_TOKENS": "65536",
+        "HOME": "/capsule/derived",
+        "XDG_CACHE_HOME": "/capsule/cache",
+        "HF_HOME": "/capsule/hf-home",
+        "HUGGINGFACE_HUB_CACHE": "/capsule/hf-home/hub",
+        "TRANSFORMERS_CACHE": "/capsule/cache",
+        "TORCH_HOME": "/capsule/cache",
+        "TRITON_CACHE_DIR": "/capsule/cache",
+        "TMPDIR": "/capsule/tmp",
+        "PYTHONPYCACHEPREFIX": "/capsule/cache",
+        "KEV_BENCHMARK_OUTPUT": "/capsule/reports",
+        "PYTHONPATH": "/capsule/payload/source/kev",
+    }
+    raw = "\0".join(f"{k}={v}" for k, v in entries.items()).encode("utf-8") + b"\0"
+    proc_root = tmp_path / "proc"
+    process = proc_root / "1"
+    process.mkdir(parents=True)
+    (process / "environ").write_bytes(raw)
+    result, secret_present = _read_proc_environ(1, proc_root)
+    assert secret_present is False
+    assert len(result) == 29
+    assert result == entries
+
+
+def test_read_proc_environ_accepts_kev_api_key_present(tmp_path: Any) -> None:
+    entries = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "KEV_BACKEND": "torch",
+        "KEV_DTYPE": "bf16",
+        "KEV_MERGE": "0",
+        "KEV_FUSED": "0",
+        "KEV_CUDA_GRAPHS": "0",
+        "KEV_DATE_FACTS": "0",
+        "KEV_LORA_SCALE": "1",
+        "KEV_PREFIX_CACHE": "4",
+        "KEV_PREFIX_MIN_TOKENS": "0",
+        "KEV_PREFIX_MAX_TOKENS": "65536",
+        "HOME": "/capsule/derived",
+        "XDG_CACHE_HOME": "/capsule/cache",
+        "HF_HOME": "/capsule/hf-home",
+        "HUGGINGFACE_HUB_CACHE": "/capsule/hf-home/hub",
+        "TRANSFORMERS_CACHE": "/capsule/cache",
+        "TORCH_HOME": "/capsule/cache",
+        "TRITON_CACHE_DIR": "/capsule/cache",
+        "TMPDIR": "/capsule/tmp",
+        "PYTHONPYCACHEPREFIX": "/capsule/cache",
+        "KEV_BENCHMARK_OUTPUT": "/capsule/reports",
+        "PYTHONPATH": "/capsule/payload/source/kev",
+        "KEV_API_KEY": "real-secret",
+    }
+    raw = "\0".join(f"{k}={v}" for k, v in entries.items()).encode("utf-8") + b"\0"
+    proc_root = tmp_path / "proc"
+    process = proc_root / "1"
+    process.mkdir(parents=True)
+    (process / "environ").write_bytes(raw)
+    result, secret_present = _read_proc_environ(1, proc_root)
+    assert secret_present is True
+    assert len(result) == 30
+    assert result["KEV_API_KEY"] == "<nonempty>"
+    assert all(v != "real-secret" for k, v in result.items() if k == "KEV_API_KEY")
+
+
+def test_read_proc_environ_rejects_invalid_utf8(tmp_path: Any) -> None:
+    raw = b"KEY=val\xc3\x28\0"
+    proc_root = tmp_path / "proc"
+    process = proc_root / "1"
+    process.mkdir(parents=True)
+    (process / "environ").write_bytes(raw)
+    with pytest.raises(EvidenceBlocked, match="invalid UTF-8"):
+        _read_proc_environ(1, proc_root)
+
+
+def test_runtime_identity_rejects_every_environment_drift(tmp_path: Any) -> None:
+    capsule = tmp_path / ("a" * 64)
+    executable = capsule / "environment/bin/python"
+    module = capsule / "payload" / "source" / "kev" / "kev" / "serve.py"
+    checkpoint = capsule / "checkpoint"
+    proc_root = tmp_path / "proc"
+    process = proc_root / "321"
+    executable.parent.mkdir(parents=True)
+    module.parent.mkdir(parents=True)
+    process.mkdir(parents=True)
+    (process / "cwd").symlink_to(capsule, target_is_directory=True)
+    final_python = tmp_path / "python3.12"
+    final_python.write_text("python", encoding="utf-8")
+    final_python.chmod(0o755)
+    (executable.parent / "python3").symlink_to(final_python)
+    executable.symlink_to("python3")
+    (process / "exe").symlink_to(final_python)
+    module.write_text("", encoding="utf-8")
+    checkpoint.write_text("", encoding="utf-8")
+    command = [
+        str(executable),
+        "-m",
+        "kev.serve",
+        "--run",
+        str(checkpoint),
+        "--fallback",
+        str(checkpoint),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8182",
+    ]
+    (process / "cmdline").write_bytes("\0".join(command).encode() + b"\0")
+
+    def validate(env: dict[str, str]) -> None:
+        validate_runtime_identity(
+            pid=321,
+            expected_checkpoint=str(checkpoint),
+            gateway_url="http://127.0.0.1:8181",
+            getuid=lambda: process.stat().st_uid,
+            geteuid=lambda: 1000,
+            proc_root=proc_root,
+            path_stat_reader=_make_path_stat_reader(tmp_path / "python3.12"),
+            proc_exe_reader=lambda *_: str(final_python),
+            approved_system_roots=(tmp_path,),
+            cmdline_reader=lambda *_: "\0".join(command) + "\0",
+            environ_reader=lambda *_: (env, True),
+            stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
+            socket_reader=lambda *_: 17,
+            transport=lambda *_a, **_kw: HttpResult(
+                200,
+                {},
+                b'{"model":"kev-latest","answers":{},"usage":{"input_tokens":1,"output_tokens":0},"latency_ms":1}',
+                1.0,
+            ),
+        )
+
+    canonical = _complete_launcher_environment(capsule)
+    for key in canonical:
+        missing = canonical.copy()
+        del missing[key]
+        with pytest.raises(EvidenceBlocked, match="environment identity mismatch"):
+            validate(missing)
+
+        changed = canonical.copy()
+        changed[key] = "<changed>"
+        with pytest.raises(EvidenceBlocked, match="environment identity mismatch"):
+            validate(changed)
+
+    extra = canonical | {"EXTRA_KEY": "drift"}
+    with pytest.raises(EvidenceBlocked, match="environment identity mismatch"):
+        validate(extra)
+
+
+def _make_path_stat_reader(final_target: Path) -> Callable[[Path, bool], Any]:
+    def reader(path: Path, follow: bool) -> Any:
+        info = (
+            final_target.stat() if path.name == "exe" else (path.stat() if follow else path.lstat())
+        )
+        return SimpleNamespace(
+            st_uid=0,
+            st_mode=info.st_mode,
+            st_dev=info.st_dev,
+            st_ino=info.st_ino,
+        )
+
+    return reader
+
+
+def test_runtime_identity_rejects_top_level_kev_shadow(tmp_path: Any) -> None:
+    capsule = tmp_path / ("a" * 64)
+    executable = capsule / "environment/bin/python"
+    module = capsule / "payload" / "source" / "kev" / "kev" / "serve.py"
+    checkpoint = capsule / "checkpoint"
+    proc_root = tmp_path / "proc"
+    process = proc_root / "321"
+    executable.parent.mkdir(parents=True)
+    module.parent.mkdir(parents=True)
+    process.mkdir(parents=True)
+    (process / "cwd").symlink_to(capsule, target_is_directory=True)
+    final_python = tmp_path / "python3.12"
+    final_python.write_text("python", encoding="utf-8")
+    final_python.chmod(0o755)
+    (executable.parent / "python3").symlink_to(final_python)
+    executable.symlink_to("python3")
+    (process / "exe").symlink_to(final_python)
+    module.write_text("", encoding="utf-8")
+    checkpoint.write_text("", encoding="utf-8")
+    command = [
+        str(executable),
+        "-m",
+        "kev.serve",
+        "--run",
+        str(checkpoint),
+        "--fallback",
+        str(checkpoint),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8182",
+    ]
+    (process / "cmdline").write_bytes("\0".join(command).encode() + b"\0")
+    top_kev = capsule / "kev"
+    top_kev.mkdir()
+    (top_kev / "serve.py").write_bytes(b"# shadow")
+
+    def transport(*_args: Any, **_kw: Any) -> Any:
+        return HttpResult(
+            200,
+            {},
+            b'{"model":"kev-latest","answers":{},"usage":{"input_tokens":1,"output_tokens":0},"latency_ms":1}',
+            1.0,
+        )
+
+    with pytest.raises(EvidenceBlocked, match="top-level kev entry"):
+        validate_runtime_identity(
+            pid=321,
+            expected_checkpoint=str(checkpoint),
+            gateway_url="http://127.0.0.1:8181",
+            getuid=lambda: process.stat().st_uid,
+            geteuid=lambda: 1000,
+            proc_root=proc_root,
+            path_stat_reader=_make_path_stat_reader(tmp_path / "python3.12"),
+            proc_exe_reader=lambda *_: str(final_python),
+            approved_system_roots=(tmp_path,),
+            cmdline_reader=lambda *_: "\0".join(command) + "\0",
+            environ_reader=lambda *_: (_complete_launcher_environment(capsule), True),
+            stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
+            socket_reader=lambda *_: 17,
+            transport=transport,
+        )
+
+
+def test_runtime_identity_rejects_top_level_kev_dot_shadow(tmp_path: Any) -> None:
+    capsule = tmp_path / ("a" * 64)
+    executable = capsule / "environment/bin/python"
+    module = capsule / "payload" / "source" / "kev" / "kev" / "serve.py"
+    checkpoint = capsule / "checkpoint"
+    proc_root = tmp_path / "proc"
+    process = proc_root / "321"
+    executable.parent.mkdir(parents=True)
+    module.parent.mkdir(parents=True)
+    process.mkdir(parents=True)
+    (process / "cwd").symlink_to(capsule, target_is_directory=True)
+    final_python = tmp_path / "python3.12"
+    final_python.write_text("python", encoding="utf-8")
+    final_python.chmod(0o755)
+    (executable.parent / "python3").symlink_to(final_python)
+    executable.symlink_to("python3")
+    (process / "exe").symlink_to(final_python)
+    module.write_text("", encoding="utf-8")
+    checkpoint.write_text("", encoding="utf-8")
+    command = [
+        str(executable),
+        "-m",
+        "kev.serve",
+        "--run",
+        str(checkpoint),
+        "--fallback",
+        str(checkpoint),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8182",
+    ]
+    (process / "cmdline").write_bytes("\0".join(command).encode() + b"\0")
+    top_kev_pyc = capsule / "kev.pyc"
+    top_kev_pyc.write_bytes(b"shadow")
+
+    def transport(*_args: Any, **_kw: Any) -> Any:
+        return HttpResult(
+            200,
+            {},
+            b'{"model":"kev-latest","answers":{},"usage":{"input_tokens":1,"output_tokens":0},"latency_ms":1}',
+            1.0,
+        )
+
+    with pytest.raises(EvidenceBlocked, match="top-level kev entry"):
+        validate_runtime_identity(
+            pid=321,
+            expected_checkpoint=str(checkpoint),
+            gateway_url="http://127.0.0.1:8181",
+            getuid=lambda: process.stat().st_uid,
+            geteuid=lambda: 1000,
+            proc_root=proc_root,
+            path_stat_reader=_make_path_stat_reader(tmp_path / "python3.12"),
+            proc_exe_reader=lambda *_: str(final_python),
+            approved_system_roots=(tmp_path,),
+            cmdline_reader=lambda *_: "\0".join(command) + "\0",
+            environ_reader=lambda *_: (_complete_launcher_environment(capsule), True),
+            stat_reader=lambda *_: {"starttime": 7, "utime": 1, "stime": 1},
+            socket_reader=lambda *_: 17,
+            transport=transport,
         )
