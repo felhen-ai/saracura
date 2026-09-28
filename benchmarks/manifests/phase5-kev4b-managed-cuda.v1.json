@@ -1,0 +1,38 @@
+{
+  "schema_version": "phase5-kev4b-managed-cuda.v1",
+  "candidate_id": "kev-4b",
+  "acquisition_descriptor_sha256": "7f0260968bd4733fd814dfc2fb6b8937b123811d5a0285a2559c5f4402808c9d",
+  "runtime": {
+    "backend": "torch",
+    "dtype": "bf16",
+    "host": "127.0.0.1",
+    "direct_upstream_port": 8182
+  },
+  "command": {
+    "module": "kev.serve",
+    "python_basename": "python",
+    "run_flag": "--run",
+    "fallback_flag": "--fallback",
+    "host_flag": "--host",
+    "port_flag": "--port"
+  },
+  "environment": {
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "KEV_BACKEND": "torch",
+    "KEV_DTYPE": "bf16",
+    "KEV_MERGE": "0",
+    "KEV_FUSED": "0",
+    "KEV_CUDA_GRAPHS": "0",
+    "KEV_DATE_FACTS": "0",
+    "KEV_LORA_SCALE": "1",
+    "KEV_PREFIX_CACHE": "4",
+    "KEV_PREFIX_MIN_TOKENS": "0",
+    "KEV_PREFIX_MAX_TOKENS": "65536",
+    "required_nonempty": ["KEV_API_KEY"]
+  },
+  "source_revision": "9c41005b2180347c3c646dfc9e50c4428483ec6b",
+  "checkpoint_revision": "139fdd94f1b6a6ad80cc15e08fcb99cac885a101",
+  "base_revision": "1001bb4d826a52d1f399e183466143f4da7b741b",
+  "base_model_id": "Qwen/Qwen3.5-4B-Base"
+}
