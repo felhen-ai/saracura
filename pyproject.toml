@@ -59,6 +59,9 @@ phase5-candidate = [
   "psutil>=6.1,<7",
   "huggingface_hub>=0.25,<1",
 ]
+ptbr-benchmark = [
+  "pyarrow>=22,<26",
+]
 
 [project.scripts]
 saracura = "saracura.cli:main"

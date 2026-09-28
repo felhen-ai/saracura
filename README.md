@@ -120,6 +120,41 @@ Saracura PT-BR evaluation. The response therefore remains `uncalibrated`,
 `abstained`, and `automation_allowed=false` until workflow-specific evaluation
 and calibration exist.
 
+## Native PT-BR FAQ benchmark
+
+Phase 5D adds a reproducible four-way answer-selection benchmark over 373
+Brazilian Portuguese questions from Banco Central do Brasil. It is a narrow
+external control, not a general leaderboard: chance is `0.25`, and a frozen
+lexical-overlap baseline scores 265/373 (`0.710455764075067`). Rejects and
+errors remain in the denominator. Results are uncalibrated and cannot authorize
+automation.
+
+The data is not redistributed. Download the pinned `MTEB-BR/faq-bacen`
+revision into a caller-controlled cache, then run with absolute paths. The BCB
+source declares ODbL; the upstream `Itau-Unibanco/FAQ_BACEN` repository
+declares Apache-2.0; the pinned MTEB-BR dataset card does not declare a license.
+The BCB portal says its open-data catalog excludes personal or restricted
+records, but Saracura has not performed a row-level privacy review.
+
+```bash
+uv sync --locked --dev --extra ptbr-benchmark
+uv pip install -e /absolute/path/to/Julia-1
+uv run --no-sync python -m benchmarks.ptbr_native run \
+  --backend julia --device cpu \
+  --model-snapshot /absolute/path/to/Julia-1 \
+  --data-root /absolute/path/to/MTEB-BR-faq-bacen-revision \
+  --output /absolute/path/to/phase5d-ptbr-faq-bacen-julia-cpu.json
+
+uv run --no-sync python -m benchmarks.ptbr_native verify \
+  /absolute/path/to/phase5d-ptbr-faq-bacen-julia-cpu.json
+```
+
+For the Saracura-owned ranker, sync both `ptbr-benchmark` and
+`universal-local`, then use `--backend saracura-universal` with the explicit
+verified `--encoder-snapshot` and `--training-capsule`. That historical ranker
+remains `synthetic_only_research`; its smaller state envelope is part of what
+the benchmark measures. See the [frozen Phase 5D protocol](docs/action/specs/phase5d-native-ptbr-benchmark.md).
+
 ## Run the experimental System One loopback adapter
 
 The System One backend is an optional, loopback-only adapter for the exact

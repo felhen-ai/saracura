@@ -109,6 +109,43 @@ não uma avaliação PT-BR do Saracura. A resposta permanece `uncalibrated`,
 `abstained` e `automation_allowed=false` até existirem avaliação e calibração
 específicas do workflow.
 
+## Benchmark nativo de FAQ em PT-BR
+
+A Fase 5D acrescenta um benchmark reproduzível de seleção entre quatro
+respostas usando 373 perguntas em português brasileiro do Banco Central do
+Brasil. É um controle externo estreito, não um leaderboard geral: o acaso vale
+`0.25`, e um baseline lexical fixo acerta 265/373 (`0.710455764075067`).
+Rejeições e erros continuam no denominador. Os resultados não são calibrados e
+não autorizam automação.
+
+Os dados não são redistribuídos. Baixe a revisão pinada de
+`MTEB-BR/faq-bacen` para um cache controlado pelo operador e execute com paths
+absolutos. A fonte do BCB declara ODbL; o repositório upstream
+`Itau-Unibanco/FAQ_BACEN` declara Apache-2.0; o card do derivado MTEB-BR pinado
+não declara licença. O portal do BCB informa que o catálogo aberto exclui
+registros pessoais ou restritos, mas o Saracura não fez revisão de privacidade
+registro por registro.
+
+```bash
+uv sync --locked --dev --extra ptbr-benchmark
+uv pip install -e /path/absoluto/para/Julia-1
+uv run --no-sync python -m benchmarks.ptbr_native run \
+  --backend julia --device cpu \
+  --model-snapshot /path/absoluto/para/Julia-1 \
+  --data-root /path/absoluto/para/revisao-MTEB-BR-faq-bacen \
+  --output /path/absoluto/para/phase5d-ptbr-faq-bacen-julia-cpu.json
+
+uv run --no-sync python -m benchmarks.ptbr_native verify \
+  /path/absoluto/para/phase5d-ptbr-faq-bacen-julia-cpu.json
+```
+
+Para o ranker próprio do Saracura, sincronize os extras `ptbr-benchmark` e
+`universal-local` e use `--backend saracura-universal` com
+`--encoder-snapshot` e `--training-capsule` verificados e explícitos. Esse
+ranker histórico continua `synthetic_only_research`; seu envelope menor de
+estado faz parte do que o benchmark mede. Consulte o [protocolo congelado da
+Fase 5D](action/specs/phase5d-native-ptbr-benchmark.md).
+
 ## Executar o adapter experimental System One loopback
 
 O backend System One é um adapter loopback-only opcional para o workflow Choice exato `universal-choice@phase5c-systemone.v1`. Requer um checkpoint aberto separadamente iniciado em `http://127.0.0.1:<port>`, identidade de modelo explícita e token de bearer fornecido apenas pela variável de ambiente `SARACURA_SYSTEMONE_API_KEY`. O adapter desabilita todos os handlers de proxy e nunca segue redirects.
