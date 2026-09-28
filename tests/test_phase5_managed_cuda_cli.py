@@ -1040,6 +1040,7 @@ def test_clean_archive_sync_is_frozen_offline_and_digest_bound() -> None:
         "tests/test_phase5_managed_cuda",
         "tests/test_manifests.py",
         "docs/action/specs/phase5b-managed-cuda-systems-closure.md",
+        "uv.lock",
     )
     scoped = [path for path in changed if path.startswith(allowed)]
     with tempfile.TemporaryDirectory(prefix="phase5b-archive-", dir=ROOT) as temporary:

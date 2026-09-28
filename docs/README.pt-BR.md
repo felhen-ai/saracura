@@ -47,6 +47,8 @@ O inglês é o idioma canônico da documentação técnica. O quickstart, os exe
 - runtime in-process e CLI locais;
 - um backend experimental opt-in `laya-universal` para o workflow Choice dinâmico exato;
 - trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos;
+- um backend opcional loopback-only `systemone` para o workflow Choice exato `universal-choice@phase5c-systemone.v1`;
+- um backend direto em CPU `julia` para o checkpoint Apache-2.0 Julia-1 pinado e o workflow Choice exato `universal-choice@phase5c-julia.v1`;
 - `saracura-universal` opt-in para exatamente `universal-choice@phase4e-saracura-ranker.v1`, somente com artefatos privados verificados e explícitos.
 
 Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos fora dos workflows Choice exatos das Fases 4D e 4E, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria, calibração, limiares de confiança, publicação pública de checkpoint ou automação de produção. O backend Saracura-owned instalado é opt-in, sintético-only e somente de pesquisa; exige snapshot MiniLM e capsule de treino verificados e fornecidos pelo operador, retorna ranking weights não calibrados com abstenção e nunca autoriza automação. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
@@ -79,6 +81,49 @@ uv run saracura decide \
 ```
 
 O resultado distingue scores crus de probabilidades normalizadas da fixture e declara `fixture_only`. O artefato exercita as verificações de compatibilidade, mas não foi ajustado em dados de calibração; ele não prova que o backend seja preciso, calibrado ou seguro para automação. `verified_for_research` fica reservado a um artefato futuro que cumpra seu protocolo held-out declarado.
+
+## Executar o Julia-1 localmente em CPU
+
+Julia-1 é o backend recomendado deste preview experimental. O Saracura fixa a
+revisão pública do código e o digest do checkpoint, carrega o modelo diretamente
+de um snapshot local explícito e mantém todo resultado como pesquisa.
+
+```bash
+uv sync --locked --dev
+uvx --from huggingface-hub hf download SupersonicLabs/Julia-1 \
+  --revision a85b127321d580d65176c89ced8273f305745d85 \
+  --local-dir ./Julia-1
+uv pip install -e ./Julia-1
+
+uv run --no-sync saracura decide \
+  --backend julia \
+  --request examples/ptbr-julia-request.json \
+  --model-snapshot ./Julia-1 \
+  --device cpu \
+  --timing
+```
+
+O Julia-1 é um checkpoint aberto de terceiros, não um modelo treinado pelo
+Saracura. Os resultados multilíngues publicados medem português de Portugal,
+não uma avaliação PT-BR do Saracura. A resposta permanece `uncalibrated`,
+`abstained` e `automation_allowed=false` até existirem avaliação e calibração
+específicas do workflow.
+
+## Executar o adapter experimental System One loopback
+
+O backend System One é um adapter loopback-only opcional para o workflow Choice exato `universal-choice@phase5c-systemone.v1`. Requer um checkpoint aberto separadamente iniciado em `http://127.0.0.1:<port>`, identidade de modelo explícita e token de bearer fornecido apenas pela variável de ambiente `SARACURA_SYSTEMONE_API_KEY`. O adapter desabilita todos os handlers de proxy e nunca segue redirects.
+
+```bash
+uv run saracura decide \
+  --backend systemone \
+  --request examples/ptbr-systemone-request.json \
+  --endpoint http://127.0.0.1:<port> \
+  --model-id systemone-compatible \
+  --model-revision <revisao-pinada> \
+  --checkpoint-sha256 <sha256>
+```
+
+Defina `SARACURA_SYSTEMONE_API_KEY` no ambiente do operador para autenticacao. A resposta e `uncalibrated`, `abstained` e `automation_allowed=false`. O nome de modelo retornado pelo checkpoint e registrado mas nao precisa ser igual ao alias da requisicao. Esta e uma demonstraco experimental de interoperabilidade de wire apenas, nao suporte de candidato ou disposicao de sistemas.
 
 ## Boundary
 

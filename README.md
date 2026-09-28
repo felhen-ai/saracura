@@ -47,6 +47,8 @@ English is the canonical language for technical documentation. The quickstart, p
 - local in-process runtime and CLI
 - one opt-in experimental `laya-universal` backend for the exact dynamic Choice workflow
 - opt-in research lanes for encoder acquisition, synthetic head training, human PT-BR calibration, and external controls
+- one optional loopback-only `systemone` backend for the exact `universal-choice@phase5c-systemone.v1` Choice workflow
+- one direct CPU `julia` backend for the pinned Apache-2.0 Julia-1 checkpoint and the exact `universal-choice@phase5c-julia.v1` Choice workflow
 - opt-in `saracura-universal` for exactly `universal-choice@phase4e-saracura-ranker.v1`, using explicit verified private artifacts only
 
 Not included in the installed runtime: bundled or request-triggered model downloads, bundled datasets or checkpoints, dynamic labels outside the exact Phase 4D and Phase 4E Choice workflows, boolean or ordinal heads, HTTP serving, remote fallback, telemetry, calibration, confidence thresholds, public checkpoint publication, or production automation. The installed Saracura-owned backend is opt-in, synthetic-only and research-only; it requires an operator-provided verified MiniLM snapshot and sealed training capsule, returns uncalibrated abstained ranking weights, and never authorizes automation. Research tooling can acquire reviewed encoder snapshots and train local experimental heads only through explicit, offline-first operator workflows.
@@ -79,6 +81,83 @@ uv run saracura decide \
 ```
 
 The output distinguishes raw scores from normalized fixture probabilities and reports `fixture_only`. The artifact exercises compatibility checks but was not fitted on calibration data; it is not evidence that the fixture backend is accurate, calibrated, or safe for automation. `verified_for_research` is reserved for a future artifact that passes its declared held-out protocol.
+
+## Run Julia-1 locally on CPU
+
+Julia-1 is the recommended backend for this experimental preview. Saracura pins
+the public source revision and checkpoint digest, loads the model directly from
+an explicit local snapshot, and keeps every result research-only.
+
+```bash
+uv sync --locked --dev
+uvx --from huggingface-hub hf download SupersonicLabs/Julia-1 \
+  --revision a85b127321d580d65176c89ced8273f305745d85 \
+  --local-dir ./Julia-1
+uv pip install -e ./Julia-1
+
+uv run --no-sync saracura decide \
+  --backend julia \
+  --request examples/ptbr-julia-request.json \
+  --model-snapshot ./Julia-1 \
+  --device cpu \
+  --timing
+```
+
+English equivalent:
+
+```bash
+uv run --no-sync saracura decide \
+  --backend julia \
+  --request examples/en-julia-request.json \
+  --model-snapshot ./Julia-1 \
+  --device cpu \
+  --timing
+```
+
+Julia-1 is a third-party open checkpoint, not a Saracura-trained model. Its
+published multilingual results include Portuguese from Portugal, not a
+Saracura PT-BR evaluation. The response therefore remains `uncalibrated`,
+`abstained`, and `automation_allowed=false` until workflow-specific evaluation
+and calibration exist.
+
+## Run the experimental System One loopback adapter
+
+The System One backend is an optional, loopback-only adapter for the exact
+`universal-choice@phase5c-systemone.v1` Choice workflow. It requires a
+separately started open checkpoint listening on `http://127.0.0.1:<port>`, an
+explicit model identity, and a bearer token supplied only through the
+`SARACURA_SYSTEMONE_API_KEY` environment variable. The adapter disables all
+proxy handlers and never follows redirects.
+
+PT-BR quickstart:
+
+```bash
+SARACURA_SYSTEMONE_API_KEY=<token> uv run saracura decide \
+  --backend systemone \
+  --request examples/ptbr-systemone-request.json \
+  --endpoint http://127.0.0.1:<port> \
+  --model-id systemone-compatible \
+  --model-revision <pinned-revision> \
+  --checkpoint-sha256 <sha256>
+```
+
+English equivalent:
+
+```bash
+SARACURA_SYSTEMONE_API_KEY=<token> uv run saracura decide \
+  --backend systemone \
+  --request examples/en-systemone-request.json \
+  --endpoint http://127.0.0.1:<port> \
+  --model-id systemone-compatible \
+  --model-revision <pinned-revision> \
+  --checkpoint-sha256 <sha256>
+```
+
+The response is `uncalibrated`, `abstained`, and
+`automation_allowed=false`. The model name returned by the checkpoint is
+recorded but need not equal the request alias. This is an experimental
+wire-interoperability smoke only, not candidate support or a systems
+disposition.
 
 ## Design boundary
 

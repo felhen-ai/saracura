@@ -48,6 +48,8 @@ class EncodedState:
 class ScoredChoice:
     question_id: str
     raw_scores: dict[str, float]
+    normalized_probabilities: dict[str, float] | None = None
+    selected_choice: str | None = None
     input_tokens: int = 0
 
 

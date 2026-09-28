@@ -22,6 +22,8 @@ MINILM_ROUTING_LABELS = (
 UNIVERSAL_CHOICE_WORKFLOW_ID = "universal-choice"
 UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4d-laya.v1"
 SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4e-saracura-ranker.v1"
+SYSTEMONE_CHOICE_WORKFLOW_REVISION = "phase5c-systemone.v1"
+JULIA_CHOICE_WORKFLOW_REVISION = "phase5c-julia.v1"
 _UNIVERSAL_CHOICE_LOCALES = frozenset({"pt-BR", "en"})
 _UNIVERSAL_CHOICE_MAX_QUESTIONS = 10
 _UNIVERSAL_CHOICE_MAX_CRITERIA = 20
@@ -53,6 +55,8 @@ class WorkflowRegistry:
             if key in (
                 (UNIVERSAL_CHOICE_WORKFLOW_ID, UNIVERSAL_CHOICE_WORKFLOW_REVISION),
                 (UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
+                (UNIVERSAL_CHOICE_WORKFLOW_ID, SYSTEMONE_CHOICE_WORKFLOW_REVISION),
+                (UNIVERSAL_CHOICE_WORKFLOW_ID, JULIA_CHOICE_WORKFLOW_REVISION),
             ):
                 return self._validate_universal_choice(request, execution_tier, capabilities)
             raise SaracuraError(
