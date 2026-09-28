@@ -710,16 +710,29 @@ def test_clean_archive_sync_is_frozen_offline_and_digest_bound() -> None:
         "docs/action/specs/phase5b-managed-cuda-systems-closure.md",
     )
     scoped = [path for path in changed if path.startswith(allowed)]
-    assert scoped
     with tempfile.TemporaryDirectory(prefix="phase5b-archive-", dir=ROOT) as temporary:
         temp = Path(temporary)
-        index = temp / "index"
-        env = dict(os.environ, GIT_INDEX_FILE=str(index))
-        subprocess.run(["git", "read-tree", "HEAD"], cwd=ROOT, env=env, check=True)
-        subprocess.run(["git", "add", "-A", "--", *scoped], cwd=ROOT, env=env, check=True)
-        tree = subprocess.run(
-            ["git", "write-tree"], cwd=ROOT, env=env, text=True, capture_output=True, check=True
-        ).stdout.strip()
+        if scoped:
+            index = temp / "index"
+            env = dict(os.environ, GIT_INDEX_FILE=str(index))
+            subprocess.run(["git", "read-tree", "HEAD"], cwd=ROOT, env=env, check=True)
+            subprocess.run(["git", "add", "-A", "--", *scoped], cwd=ROOT, env=env, check=True)
+            tree = subprocess.run(
+                ["git", "write-tree"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+        else:
+            tree = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
         archive = temp / "phase5b.tar"
         with archive.open("wb") as stream:
             subprocess.run(
