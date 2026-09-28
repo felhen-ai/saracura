@@ -129,7 +129,7 @@ Gate B authorizes an external benchmark submission and a public model claim limi
 | Phase | Deliverable | Target elapsed time | Dependency |
 | --- | --- | --- | --- |
 | 5A | Strategic reset, closed candidate/evaluation contracts and release ladder | 1 day | none |
-| 5B | Pinned Kev-4B acquisition, opt-in local adapter and MacBook systems run | 2-3 days | 5A |
+| 5B | Pinned Kev-4B acquisition, opt-in out-of-process research adapter and managed local systems runs | 2-3 days | 5A |
 | 5C | Frozen PT-BR/English dev and sealed-test protocol with 300-500 reviewed cases | 3-5 days, parallel with 5B | 5A |
 | 5D | Baseline comparison, targeted Qwen 3.5 4B LoRA/pointer-head training and disjoint calibration | 3-5 days | 5B, 5C |
 | 5E | Public checkpoint, model card, clean-room submission bundle and `0.1.0` release | 2-3 days | 5D |

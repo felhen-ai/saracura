@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import date
@@ -177,8 +178,14 @@ def validate_routed_manifest(path: Path) -> None:
     if schema_version == "phase5-open-model-candidates.v1":
         validate_phase5_candidate_manifest(path)
         return
+    if schema_version == "phase5-open-model-candidates.v2":
+        validate_phase5_candidate_manifest_v2(path)
+        return
     if schema_version == "phase5-public-readiness.v1":
         validate_phase5_readiness_manifest(path)
+        return
+    if schema_version == "phase5-kev4b-acquisition.v1":
+        validate_phase5b_acquisition_descriptor(path)
         return
     if schema_version == 1:
         validate_manifest(path)
@@ -491,6 +498,243 @@ def _validate_candidate(candidate: object, path: Path, seen_ids: set[str]) -> No
     if tuple(allowed_claims) != rule.allowed_claims:
         raise ValueError(f"{path}: allowed_claims do not match the disposition")
     _require_public_note(candidate["notes"], path)
+
+
+_PHASE5_CANDIDATE_SCHEMA_V2 = "phase5-open-model-candidates.v2"
+_PHASE5B_ACQUISITION_SCHEMA = "phase5-kev4b-acquisition.v1"
+
+_CANDIDATE_DISPOSITIONS_V2 = (
+    "historical_baseline",
+    "planned_acquisition",
+    "reviewed_acquisition",
+    "blocked_upstream",
+    "conditional",
+    "continue",
+    "reject_local",
+    "external_control",
+    "comparison_only",
+)
+
+_CANDIDATE_KEYS_V2 = _CANDIDATE_KEYS | {
+    "source_revision",
+    "base_model_id",
+    "base_model_revision",
+    "acquisition_descriptor_sha256",
+}
+
+_ACQUISITION_FIELDS = (
+    "source_revision",
+    "base_model_id",
+    "base_model_revision",
+    "acquisition_descriptor_sha256",
+)
+
+_REVIEWED_ACQUISITION_RULE = _DispositionRule(
+    "pointer_head_causal_lm",
+    "immutable_pinned",
+    "reviewed_for_candidate_artifacts",
+    "research_service",
+    "reviewed_upstream_identity",
+    ("candidate_for_evaluation",),
+)
+
+
+def _validate_candidate_v2(candidate: object, path: Path, seen_ids: set[str]) -> None:
+    if not isinstance(candidate, dict):
+        raise ValueError(f"{path}: candidate shape is not closed")
+    _require_exact_keys(candidate, _CANDIDATE_KEYS_V2, path, "candidate")
+    candidate_id = candidate["id"]
+    if not isinstance(candidate_id, str) or _KEBAB_ID.fullmatch(candidate_id) is None:
+        raise ValueError(f"{path}: candidate id must be stable lower-kebab")
+    if candidate_id in seen_ids:
+        raise ValueError(f"{path}: candidate id is duplicated")
+    seen_ids.add(candidate_id)
+    display_name = candidate["display_name"]
+    if (
+        not isinstance(display_name, str)
+        or not display_name.strip()
+        or display_name != display_name.strip()
+    ):
+        raise ValueError(f"{path}: display_name must be a non-empty label")
+    disposition = candidate["disposition"]
+    if disposition not in _CANDIDATE_DISPOSITIONS_V2:
+        raise ValueError(f"{path}: disposition is not allowed")
+    architecture_class = candidate["architecture_class"]
+    if architecture_class not in _ARCHITECTURE_CLASSES:
+        raise ValueError(f"{path}: architecture_class is not allowed")
+    source_url = _require_https_url(candidate["source_url"], path)
+    declared_license = candidate["declared_license"]
+    if (
+        not isinstance(declared_license, str)
+        or _DECLARED_LICENSE.fullmatch(declared_license) is None
+        or "/" in declared_license
+    ):
+        raise ValueError(f"{path}: declared_license must be an SPDX identifier or unknown")
+
+    acquisition_fields = (
+        candidate["source_revision"],
+        candidate["base_model_id"],
+        candidate["base_model_revision"],
+        candidate["acquisition_descriptor_sha256"],
+    )
+    if disposition in _REQUIRES_ACQUISITION_DISPOSITIONS:
+        rule = _REVIEWED_ACQUISITION_RULE
+        if architecture_class != rule.architecture_class:
+            raise ValueError(f"{path}: disposition requires {rule.architecture_class}")
+        if declared_license != "Apache-2.0":
+            raise ValueError(f"{path}: reviewed acquisition requires declared Apache-2.0")
+        if not all(value is not None for value in acquisition_fields):
+            raise ValueError(f"{path}: reviewed acquisition requires acquisition fields")
+        for key, value in (
+            ("source_revision", candidate["source_revision"]),
+            ("base_model_revision", candidate["base_model_revision"]),
+        ):
+            if not isinstance(value, str) or _IMMUTABLE_REVISION.fullmatch(value) is None:
+                raise ValueError(f"{path}: {key} must be an immutable lowercase hexadecimal digest")
+        base_model_id = candidate["base_model_id"]
+        if not isinstance(base_model_id, str) or "/" not in base_model_id:
+            raise ValueError(f"{path}: base_model_id must be an owner/model hub id")
+        descriptor = candidate["acquisition_descriptor_sha256"]
+        if not isinstance(descriptor, str) or re.fullmatch(r"[0-9a-f]{64}", descriptor) is None:
+            raise ValueError(f"{path}: acquisition_descriptor_sha256 must be a sha256 digest")
+    else:
+        rule = _DISPOSITION_RULES_V2[disposition]
+        if rule.architecture_class is not None and architecture_class != rule.architecture_class:
+            raise ValueError(f"{path}: disposition requires {rule.architecture_class}")
+        if disposition == "historical_baseline" and source_url != _PUBLIC_SARACURA_REPOSITORY:
+            raise ValueError(f"{path}: historical baseline must point at the public repository")
+        if disposition in ("planned_acquisition", "blocked_upstream"):
+            if any(value is not None for value in acquisition_fields):
+                raise ValueError(f"{path}: pre-execution acquisition fields must remain null")
+        else:
+            if any(value is not None for value in acquisition_fields):
+                raise ValueError(
+                    f"{path}: non-acquisition disposition requires null acquisition fields"
+                )
+        if disposition == "blocked_upstream":
+            if candidate["revision_state"] != "unpinned":
+                raise ValueError(f"{path}: blocked_upstream must remain unpinned")
+        else:
+            if candidate["revision_state"] != rule.revision_state:
+                raise ValueError(f"{path}: revision_state does not match the disposition")
+
+    if candidate["license_review"] != rule.license_review:
+        raise ValueError(f"{path}: license_review does not match the disposition")
+    if disposition in _REQUIRES_ACQUISITION_DISPOSITIONS:
+        revision = candidate["revision"]
+        if not isinstance(revision, str) or _IMMUTABLE_REVISION.fullmatch(revision) is None:
+            raise ValueError(f"{path}: reviewed acquisition requires an immutable model revision")
+    else:
+        _require_phase5a_revision(candidate["revision"], path)
+    if candidate["local_execution"] != rule.local_execution:
+        raise ValueError(f"{path}: local_execution does not match the disposition")
+    if candidate["evidence_authority"] != rule.evidence_authority:
+        raise ValueError(f"{path}: evidence_authority does not match the disposition")
+    allowed_claims = _require_string_list(candidate["allowed_claims"], path, "allowed_claims")
+    if tuple(allowed_claims) != rule.allowed_claims:
+        raise ValueError(f"{path}: allowed_claims do not match the disposition")
+    _require_public_note(candidate["notes"], path)
+
+
+_DISPOSITION_RULES_V2 = {
+    "historical_baseline": _DISPOSITION_RULES["historical_baseline"],
+    "planned_acquisition": _DISPOSITION_RULES["planned_acquisition"],
+    "external_control": _DISPOSITION_RULES["external_control"],
+    "comparison_only": _DISPOSITION_RULES["comparison_only"],
+}
+
+_REQUIRES_ACQUISITION_DISPOSITIONS = (
+    "reviewed_acquisition",
+    "conditional",
+    "continue",
+    "reject_local",
+)
+
+
+def validate_phase5_candidate_manifest_v2(path: Path) -> None:
+    _reject_packaged_phase5_copy(path)
+    payload = _load_closed_json(path)
+    _require_exact_keys(
+        payload,
+        frozenset(
+            {
+                "schema_version",
+                "reviewed_at",
+                "supersedes_manifest_sha256",
+                "allowed_dispositions",
+                "candidate_claim_vocabulary",
+                "candidates",
+            }
+        ),
+        path,
+        "candidate manifest",
+    )
+    if payload["schema_version"] != _PHASE5_CANDIDATE_SCHEMA_V2:
+        raise ValueError(f"{path}: unsupported schema version")
+    _require_iso_date(payload["reviewed_at"], path)
+    supersedes = payload["supersedes_manifest_sha256"]
+    v1_path = Path(__file__).parent / "manifests" / "phase5-open-model-candidates.v1.json"
+    if (
+        not isinstance(supersedes, str)
+        or re.fullmatch(r"[0-9a-f]{64}", supersedes) is None
+        or supersedes != hashlib.sha256(v1_path.read_bytes()).hexdigest()
+    ):
+        raise ValueError(f"{path}: supersedes_manifest_sha256 must bind the exact v1 bytes")
+    if _require_string_list(payload["allowed_dispositions"], path, "allowed_dispositions") != list(
+        _CANDIDATE_DISPOSITIONS_V2
+    ):
+        raise ValueError(f"{path}: allowed_dispositions are not the closed vocabulary")
+    if _require_string_list(
+        payload["candidate_claim_vocabulary"], path, "candidate_claim_vocabulary"
+    ) != list(_CANDIDATE_CLAIMS):
+        raise ValueError(f"{path}: candidate_claim_vocabulary is not the closed vocabulary")
+    candidates = payload["candidates"]
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError(f"{path}: candidates must be a non-empty list")
+    seen_ids: set[str] = set()
+    for candidate in candidates:
+        _validate_candidate_v2(candidate, path, seen_ids)
+
+
+def validate_phase5b_acquisition_descriptor(path: Path) -> None:
+    _reject_packaged_phase5_copy(path)
+    payload = _load_closed_json(path)
+    _require_exact_keys(
+        payload,
+        frozenset(
+            {
+                "schema_version",
+                "reviewed_at",
+                "candidate_id",
+                "licenses",
+                "source",
+                "checkpoint",
+                "base_model",
+                "runtime",
+                "limits",
+                "thresholds",
+                "allowed_readiness_evidence",
+            }
+        ),
+        path,
+        "acquisition descriptor",
+    )
+    if payload["schema_version"] != _PHASE5B_ACQUISITION_SCHEMA:
+        raise ValueError(f"{path}: unsupported schema version")
+    _require_iso_date(payload["reviewed_at"], path)
+    if payload["candidate_id"] != "kev-4b":
+        raise ValueError(f"{path}: candidate_id must be kev-4b")
+    if tuple(sorted(payload["allowed_readiness_evidence"])) != (
+        "local_systems_report",
+        "pinned_license_reviewed_acquisition",
+    ):
+        raise ValueError(f"{path}: allowed_readiness_evidence is not the frozen pair")
+    if payload["runtime"]["python"] != "3.12":
+        raise ValueError(f"{path}: runtime python must be 3.12")
+    if payload["runtime"]["backend"] != "mlx" or payload["runtime"]["dtype"] != "bf16":
+        raise ValueError(f"{path}: runtime backend/dtype must be mlx bf16")
+    if payload["runtime"]["loopback_host"] != "127.0.0.1":
+        raise ValueError(f"{path}: runtime host must be fixed loopback")
 
 
 def validate_phase5_candidate_manifest(path: Path) -> None:

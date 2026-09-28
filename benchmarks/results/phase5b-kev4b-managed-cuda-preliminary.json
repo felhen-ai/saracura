@@ -1,0 +1,48 @@
+{
+  "aggregate": {
+    "max_ms": 1359.766,
+    "measured_requests": 240,
+    "p50_ms": 377.527,
+    "p95_ms": 721.687
+  },
+  "backend": "torch",
+  "candidate": "kev-4b",
+  "dtype": "bfloat16",
+  "fixture_sha256": "a708ee1ee515f59bfbcd4978f7839f0d837db16f9c4e4430d4855d138e985254",
+  "functional": {
+    "choices_stable": true,
+    "direct_upstream_without_auth_status": 401,
+    "invalid_contract_status": 422,
+    "invalid_outputs": 0,
+    "permute_argmax_stable": true,
+    "permute_probability_spread_max": 0.0857,
+    "repeat_probability_delta_max": 0.0,
+    "together_separate_delta_max": 0.007699999999999985
+  },
+  "locales": {
+    "en": {
+      "q1": {"decisions_per_second": 10.612, "max_ms": 150.305, "p50_ms": 94.235, "p95_ms": 115.673, "requests": 40},
+      "q10": {"decisions_per_second": 88.556, "max_ms": 145.262, "p50_ms": 112.923, "p95_ms": 139.721, "requests": 40},
+      "q50": {"decisions_per_second": 125.333, "max_ms": 432.664, "p50_ms": 398.938, "p95_ms": 424.465, "requests": 40}
+    },
+    "pt-BR": {
+      "q1": {"decisions_per_second": 2.857, "max_ms": 726.318, "p50_ms": 349.978, "p95_ms": 660.806, "requests": 40},
+      "q10": {"decisions_per_second": 19.706, "max_ms": 925.106, "p50_ms": 507.454, "p95_ms": 765.18, "requests": 40},
+      "q50": {"decisions_per_second": 114.146, "max_ms": 1359.766, "p50_ms": 438.034, "p95_ms": 1091.643, "requests": 40}
+    }
+  },
+  "scope": {
+    "claims": ["preliminary_managed_cuda_systems_evidence"],
+    "excluded": ["quality_accuracy", "calibration", "automation_authorization", "gate_a_completion", "memory_disposition", "oversize_state_contract"],
+    "status": "preliminary_pass"
+  },
+  "schema_version": "saracura-kev-managed-cuda-preliminary.v1",
+  "thresholds": {
+    "isolation_delta": 0.04,
+    "max_request_ms": 60000,
+    "q10_p95_ms": 15000,
+    "q1_p95_ms": 5000,
+    "q50_p95_ms": 45000,
+    "repeat_delta": 0.000001
+  }
+}

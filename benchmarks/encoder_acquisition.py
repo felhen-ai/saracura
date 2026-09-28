@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import BinaryIO
 
 from benchmarks.encoder_registry import Candidate, get_candidate, registry_digest
 
@@ -29,9 +29,9 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 
 def _cache_root() -> Path:
-    from platformdirs import user_cache_path  # type: ignore[import-not-found]
+    from platformdirs import user_cache_path
 
-    return cast(Path, user_cache_path("saracura")) / "encoders"
+    return user_cache_path("saracura") / "encoders"
 
 
 def snapshot_path(candidate: Candidate, root: Path | None = None) -> Path:

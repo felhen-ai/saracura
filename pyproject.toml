@@ -50,6 +50,15 @@ universal-local = [
   "transformers>=4.48,<5",
   "tokenizers>=0.21,<1",
 ]
+# Opt-in Phase 5B orchestration only: describe/prepare/serve/evaluate of a
+# pinned open candidate. Imports stay lazy; the default environment never
+# gains these modules. No model/weight dependency is declared here because
+# the Kev service runs out of process under its own locked Python 3.12.
+phase5-candidate = [
+  "platformdirs>=4.3,<5",
+  "psutil>=6.1,<7",
+  "huggingface_hub>=0.25,<1",
+]
 
 [project.scripts]
 saracura = "saracura.cli:main"
