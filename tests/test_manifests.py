@@ -166,3 +166,26 @@ def test_phase5_readiness_manifest_rejects_contract_tampering(
     _write_tampered_manifest(path, payload)
     with pytest.raises(ValueError, match=error):
         validate_routed_manifest(path)
+
+
+def _managed_cuda_manifest(name: str) -> Path:
+    return Path(__file__).parents[1] / "benchmarks" / "manifests" / name
+
+
+def test_phase5_managed_cuda_runtime_manifest_is_closed_and_routed() -> None:
+    path = _managed_cuda_manifest("phase5-kev4b-managed-cuda.v1.json")
+    validate_routed_manifest(path)
+
+
+def test_phase5_managed_cuda_systems_manifest_is_closed_and_routed() -> None:
+    path = _managed_cuda_manifest("phase5-managed-cuda-systems.v1.json")
+    validate_routed_manifest(path)
+
+
+def test_phase5_managed_cuda_manifests_bind_acquisition_digest() -> None:
+    root = Path(__file__).parents[1]
+    acq_path = root / "benchmarks" / "manifests" / "phase5-kev4b-acquisition.v1.json"
+    digest = hashlib.sha256(acq_path.read_bytes()).hexdigest()
+    for name in ("phase5-kev4b-managed-cuda.v1.json", "phase5-managed-cuda-systems.v1.json"):
+        manifest = json.loads(_managed_cuda_manifest(name).read_text())
+        assert manifest["acquisition_descriptor_sha256"] == digest

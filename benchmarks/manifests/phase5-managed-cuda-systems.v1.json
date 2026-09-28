@@ -1,0 +1,55 @@
+{
+  "schema_version": "phase5-managed-cuda-systems.v1",
+  "candidate_id": "kev-4b",
+  "acquisition_descriptor_sha256": "7f0260968bd4733fd814dfc2fb6b8937b123811d5a0285a2559c5f4402808c9d",
+  "managed_runtime_descriptor_sha256": "6c71626415218103ebb56933ef064a5ceb8c8bdc5c90f30ef855076e164e2c6c",
+  "fixture_digest": "4c37f4c2ddf5a595e32753aa47a5a26c27b8ebd6f00f936285b786dc5cad71e3",
+  "wire_contract": {
+    "model": "kev-latest",
+    "questions_shape": "mapping_by_question_id",
+    "question_type": "choice",
+    "instructions_field": "instructions",
+    "criteria_shape": "mapping_by_criterion_id",
+    "success_response_keys": ["model", "answers", "usage", "latency_ms"],
+    "answer_keys": ["choice", "probabilities"],
+    "probability_simplex_abs_tolerance": 0.00001,
+    "input_token_counter": "input_tokens"
+  },
+  "workload_counts": {
+    "pt-BR": {"q1": 20, "q10": 20, "q50": 20},
+    "en": {"q1": 20, "q10": 20, "q50": 20}
+  },
+  "protocol_counts": {
+    "warmups_per_cell": 3,
+    "new_state_per_cell": 20,
+    "cached_state_per_cell": 20,
+    "matrix_cell_count": 12,
+    "measured_request_count": 240
+  },
+  "probe_sizes": {
+    "oversize_branch_instructions": 100000,
+    "oversize_state_items": 100000,
+    "valid_control_questions": 1
+  },
+  "sampling": {
+    "procfs_interval_ms": 250,
+    "procfs_max_gap_ms": 1000,
+    "nvidia_smi_interval_ms": 1000,
+    "nvidia_smi_max_gap_ms": 3000,
+    "diagnostic_state_window_separate": true
+  },
+  "thresholds": {
+    "q1_p95_ms": 5000,
+    "q10_p95_ms": 15000,
+    "q50_p95_ms": 45000,
+    "max_request_ms": 60000,
+    "repeat_probability_delta": 0.000001,
+    "together_separate_delta": 0.04,
+    "cold_load_seconds": 600,
+    "peak_rss_gib": 22,
+    "peak_gpu_memory_gib": 16,
+    "device_min_ram_gib": 24,
+    "candidate_swap_gib": 1
+  },
+  "report_schema": "phase5b-managed-cuda-systems-report.v1"
+}

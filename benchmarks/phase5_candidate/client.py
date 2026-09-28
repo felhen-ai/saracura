@@ -1,11 +1,13 @@
 """Phase 5B loopback client for the pinned Kev service.
 
-Implements the fail-closed client side of the public TypeSafe-style contract:
-``GET /v1/models`` must confirm backend, dtype, base id and an exact local
-checkpoint run; every decision endpoint requires the per-run bearer token and
-rejects oversize/invalid probes.  This module uses only the standard library
-(``urllib``) and therefore runs in the default environment; the fake-loopback
-pytest exercises every boundary without weights or network.
+Phase 5B closure uses a Linux runner and report model for oversize probing on
+127.0.0.1.  Implements the fail-closed client side of the public
+TypeSafe-style contract: ``GET /v1/models`` must confirm backend, dtype,
+base id and an exact local checkpoint run; every decision endpoint requires
+the per-run bearer token and rejects oversize/invalid probes.  This module
+uses only the standard library (``urllib``) and therefore runs in the
+default environment; the fake-loopback pytest exercises every boundary
+without weights or network.
 """
 
 from __future__ import annotations

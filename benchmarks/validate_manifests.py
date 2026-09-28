@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from datetime import date
 from pathlib import Path
@@ -186,6 +187,15 @@ def validate_routed_manifest(path: Path) -> None:
         return
     if schema_version == "phase5-kev4b-acquisition.v1":
         validate_phase5b_acquisition_descriptor(path)
+        return
+    if schema_version == "phase5-kev4b-managed-cuda.v1":
+        validate_phase5_managed_cuda_runtime(path)
+        return
+    if schema_version == "phase5-managed-cuda-systems.v1":
+        validate_phase5_managed_cuda_systems_protocol(path)
+        return
+    if schema_version == "phase5-open-model-candidates.v3":
+        validate_phase5_candidate_manifest_v3(path)
         return
     if schema_version == 1:
         validate_manifest(path)
@@ -859,6 +869,497 @@ def validate_phase5_readiness_manifest(path: Path) -> None:
         raise ValueError(f"{path}: gate B claims must be a strict superset of gate A")
 
 
+_PHASE5_MANAGED_CUDA_RUNTIME_FIELDS = frozenset(
+    {
+        "schema_version",
+        "candidate_id",
+        "acquisition_descriptor_sha256",
+        "runtime",
+        "command",
+        "environment",
+        "source_revision",
+        "checkpoint_revision",
+        "base_revision",
+        "base_model_id",
+    },
+)
+
+_PHASE5_MANAGED_CUDA_SYSTEMS_FIELDS = frozenset(
+    {
+        "schema_version",
+        "candidate_id",
+        "acquisition_descriptor_sha256",
+        "managed_runtime_descriptor_sha256",
+        "fixture_digest",
+        "wire_contract",
+        "workload_counts",
+        "protocol_counts",
+        "probe_sizes",
+        "sampling",
+        "thresholds",
+        "report_schema",
+    },
+)
+
+_PHASE5_OPEN_MODEL_CANDIDATES_V3_FIELDS = frozenset(
+    {
+        "schema_version",
+        "reviewed_at",
+        "supersedes_manifest_sha256",
+        "allowed_dispositions",
+        "candidate_claim_vocabulary",
+        "candidates",
+        "systems_report_path",
+        "systems_report_digest",
+        "protocol_path",
+        "protocol_digest",
+        "readiness_manifest_path",
+        "readiness_manifest_sha256",
+    },
+)
+
+_PHASE5_CANDIDATE_V3_CLAIMS = (
+    "historical_research_baseline",
+    "candidate_for_evaluation",
+    "external_product_control",
+    "comparison_reference",
+)
+
+_PHASE5_CANDIDATE_V3_ENTRY_FIELDS = frozenset(
+    {
+        "id",
+        "display_name",
+        "disposition",
+        "architecture_class",
+        "source_url",
+        "declared_license",
+        "license_review",
+        "revision",
+        "revision_state",
+        "local_execution",
+        "evidence_authority",
+        "allowed_claims",
+        "source_revision",
+        "base_model_id",
+        "base_model_revision",
+        "acquisition_descriptor_sha256",
+        "notes",
+        "mitigation_markers",
+    }
+)
+
+
+def validate_phase5_managed_cuda_runtime(path: Path) -> None:
+    _reject_packaged_phase5_copy(path)
+    payload = _load_closed_json(path)
+    _require_exact_keys(
+        payload, _PHASE5_MANAGED_CUDA_RUNTIME_FIELDS, path, "managed-runtime descriptor"
+    )
+    if payload["schema_version"] != "phase5-kev4b-managed-cuda.v1":
+        raise ValueError(f"{path}: unsupported schema version")
+    if payload["candidate_id"] != "kev-4b":
+        raise ValueError(f"{path}: candidate_id must be kev-4b")
+    runtime = payload["runtime"]
+    _require_exact_keys(
+        runtime,
+        frozenset({"backend", "dtype", "host", "direct_upstream_port"}),
+        path,
+        "managed-runtime runtime",
+    )
+    if runtime["backend"] != "torch":
+        raise ValueError(f"{path}: runtime backend must be torch")
+    if runtime["dtype"] != "bf16":
+        raise ValueError(f"{path}: runtime dtype must be bf16")
+    if runtime["host"] != "127.0.0.1":
+        raise ValueError(f"{path}: runtime host must be 127.0.0.1")
+    if type(runtime["direct_upstream_port"]) is not int or runtime["direct_upstream_port"] != 8182:
+        raise ValueError(f"{path}: direct_upstream_port must be the fixed port 8182")
+    expected_command = {
+        "module": "kev.serve",
+        "python_basename": "python",
+        "run_flag": "--run",
+        "fallback_flag": "--fallback",
+        "host_flag": "--host",
+        "port_flag": "--port",
+    }
+    _require_exact_keys(
+        pathayload := payload["command"],
+        frozenset(expected_command),
+        path,
+        "managed-runtime command",
+    )
+    if pathayload != expected_command:
+        raise ValueError(f"{path}: command contract differs from pinned kev.serve invocation")
+    expected_environment = {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "KEV_BACKEND": "torch",
+        "KEV_DTYPE": "bf16",
+        "KEV_MERGE": "0",
+        "KEV_FUSED": "0",
+        "KEV_CUDA_GRAPHS": "0",
+        "KEV_DATE_FACTS": "0",
+        "KEV_LORA_SCALE": "1",
+        "KEV_PREFIX_CACHE": "4",
+        "KEV_PREFIX_MIN_TOKENS": "0",
+        "KEV_PREFIX_MAX_TOKENS": "65536",
+        "required_nonempty": ["KEV_API_KEY"],
+    }
+    _require_exact_keys(
+        payload["environment"], frozenset(expected_environment), path, "managed-runtime environment"
+    )
+    if payload["environment"] != expected_environment:
+        raise ValueError(f"{path}: environment contract differs from frozen values")
+    if not re.fullmatch(r"[0-9a-f]{64}", payload["acquisition_descriptor_sha256"]):
+        raise ValueError(f"{path}: acquisition_descriptor_sha256 must be a sha256 digest")
+    for field in ("source_revision", "checkpoint_revision", "base_revision"):
+        if not re.fullmatch(r"^[0-9a-f]{40}$", payload[field]):
+            raise ValueError(f"{path}: {field} must be a git revision")
+    acquisition_path = Path(__file__).parent / "manifests/phase5-kev4b-acquisition.v1.json"
+    acquisition = _load_closed_json(acquisition_path)
+    expected = {
+        "acquisition_descriptor_sha256": hashlib.sha256(acquisition_path.read_bytes()).hexdigest(),
+        "source_revision": acquisition["source"]["revision"],
+        "checkpoint_revision": acquisition["checkpoint"]["revision"],
+        "base_revision": acquisition["base_model"]["revision"],
+        "base_model_id": acquisition["base_model"]["model_id"],
+    }
+    if any(payload[key] != value for key, value in expected.items()):
+        raise ValueError(
+            f"{path}: managed runtime does not bind the immutable acquisition descriptor"
+        )
+
+
+def validate_phase5_managed_cuda_systems_protocol(path: Path) -> None:
+    _reject_packaged_phase5_copy(path)
+    payload = _load_closed_json(path)
+    _require_exact_keys(payload, _PHASE5_MANAGED_CUDA_SYSTEMS_FIELDS, path, "systems protocol")
+    if payload["schema_version"] != "phase5-managed-cuda-systems.v1":
+        raise ValueError(f"{path}: unsupported schema version")
+    if payload["candidate_id"] != "kev-4b":
+        raise ValueError(f"{path}: candidate_id must be kev-4b")
+    expected_wire = {
+        "model": "kev-latest",
+        "questions_shape": "mapping_by_question_id",
+        "question_type": "choice",
+        "instructions_field": "instructions",
+        "criteria_shape": "mapping_by_criterion_id",
+        "success_response_keys": ["model", "answers", "usage", "latency_ms"],
+        "answer_keys": ["choice", "probabilities"],
+        "probability_simplex_abs_tolerance": 0.00001,
+        "input_token_counter": "input_tokens",
+    }
+    _require_exact_keys(payload["wire_contract"], frozenset(expected_wire), path, "wire contract")
+    if payload["wire_contract"] != expected_wire:
+        raise ValueError(f"{path}: source-shaped wire contract drifted")
+    counts = {
+        "warmups_per_cell": 3,
+        "new_state_per_cell": 20,
+        "cached_state_per_cell": 20,
+        "matrix_cell_count": 12,
+        "measured_request_count": 240,
+    }
+    _require_exact_keys(payload["protocol_counts"], frozenset(counts), path, "protocol counts")
+    if payload["protocol_counts"] != counts:
+        raise ValueError(f"{path}: request matrix counts drifted")
+    cadence = {
+        "procfs_interval_ms": 250,
+        "procfs_max_gap_ms": 1000,
+        "nvidia_smi_interval_ms": 1000,
+        "nvidia_smi_max_gap_ms": 3000,
+        "diagnostic_state_window_separate": True,
+    }
+    _require_exact_keys(payload["sampling"], frozenset(cadence), path, "sampling protocol")
+    if payload["sampling"] != cadence:
+        raise ValueError(f"{path}: sampling cadence drifted")
+    if not re.fullmatch(r"[0-9a-f]{64}", payload["acquisition_descriptor_sha256"]):
+        raise ValueError(f"{path}: acquisition_descriptor_sha256 must be a sha256 digest")
+    if not re.fullmatch(r"[0-9a-f]{64}", payload["fixture_digest"]):
+        raise ValueError(f"{path}: fixture_digest must be a sha256 digest")
+    if not re.fullmatch(r"[0-9a-f]{64}", payload["managed_runtime_descriptor_sha256"]):
+        raise ValueError(f"{path}: managed_runtime_descriptor_sha256 must be a sha256 digest")
+    acquisition_path = Path(__file__).parent / "manifests/phase5-kev4b-acquisition.v1.json"
+    acquisition = _load_closed_json(acquisition_path)
+    if (
+        payload["acquisition_descriptor_sha256"]
+        != hashlib.sha256(acquisition_path.read_bytes()).hexdigest()
+    ):
+        raise ValueError(
+            f"{path}: protocol acquisition digest does not match exact descriptor bytes"
+        )
+    runtime_path = Path(__file__).parent / "manifests/phase5-kev4b-managed-cuda.v1.json"
+    if (
+        payload["managed_runtime_descriptor_sha256"]
+        != hashlib.sha256(runtime_path.read_bytes()).hexdigest()
+    ):
+        raise ValueError(f"{path}: protocol runtime digest does not match exact descriptor bytes")
+    from benchmarks.phase5_candidate.fixture import matrix
+
+    fixture_digest = hashlib.sha256(
+        json.dumps(matrix(), sort_keys=True, default=str).encode()
+    ).hexdigest()
+    if payload["fixture_digest"] != fixture_digest:
+        raise ValueError(f"{path}: protocol fixture digest does not match exact fixture semantics")
+    for name, value in (
+        (
+            "workload_counts",
+            {"pt-BR": {"q1": 20, "q10": 20, "q50": 20}, "en": {"q1": 20, "q10": 20, "q50": 20}},
+        ),
+        (
+            "probe_sizes",
+            {
+                "oversize_branch_instructions": 100000,
+                "oversize_state_items": 100000,
+                "valid_control_questions": 1,
+            },
+        ),
+    ):
+        if payload[name] != value:
+            raise ValueError(f"{path}: {name} does not match the frozen protocol")
+    _require_exact_keys(
+        payload["workload_counts"], frozenset({"pt-BR", "en"}), path, "workload counts"
+    )
+    _require_exact_keys(
+        payload["probe_sizes"],
+        frozenset(
+            {"oversize_branch_instructions", "oversize_state_items", "valid_control_questions"}
+        ),
+        path,
+        "probe sizes",
+    )
+    thresholds = payload["thresholds"]
+    expected_thresholds = {
+        "q1_p95_ms",
+        "q10_p95_ms",
+        "q50_p95_ms",
+        "max_request_ms",
+        "repeat_probability_delta",
+        "together_separate_delta",
+        "cold_load_seconds",
+        "peak_rss_gib",
+        "peak_gpu_memory_gib",
+        "device_min_ram_gib",
+        "candidate_swap_gib",
+    }
+    if not isinstance(thresholds, dict) or set(thresholds) != expected_thresholds:
+        raise ValueError(f"{path}: thresholds shape mismatch")
+    if any(
+        type(value) not in (int, float) or not math.isfinite(value) for value in thresholds.values()
+    ):
+        raise ValueError(f"{path}: thresholds must be finite numbers")
+    if thresholds["q1_p95_ms"] > 5000:
+        raise ValueError(f"{path}: q1_p95_ms threshold exceeds 5 seconds")
+    if thresholds["q10_p95_ms"] > 15000:
+        raise ValueError(f"{path}: q10_p95_ms threshold exceeds 15 seconds")
+    if thresholds["q50_p95_ms"] > 45000:
+        raise ValueError(f"{path}: q50_p95_ms threshold exceeds 45 seconds")
+    if thresholds["peak_rss_gib"] > 22:
+        raise ValueError(f"{path}: peak_rss_gib exceeds 22 GiB")
+    if thresholds["peak_gpu_memory_gib"] > 16:
+        raise ValueError(f"{path}: peak_gpu_memory_gib exceeds 16 GiB")
+    if thresholds["device_min_ram_gib"] < 24:
+        raise ValueError(f"{path}: device_min_ram_gib must be at least 24 GiB")
+    if thresholds["candidate_swap_gib"] > 1:
+        raise ValueError(f"{path}: candidate_swap_gib exceeds 1 GiB")
+    shared = acquisition["thresholds"]
+    equal_or_stricter = {
+        "q1_p95_ms": shared["p95_latency_seconds_q1"] * 1000,
+        "q10_p95_ms": shared["p95_latency_seconds_q10"] * 1000,
+        "q50_p95_ms": shared["p95_latency_seconds_q50"] * 1000,
+        "max_request_ms": shared["max_latency_seconds"] * 1000,
+        "repeat_probability_delta": shared["max_repeat_probability_delta"],
+        "together_separate_delta": shared["max_together_separate_probability_delta"],
+        "cold_load_seconds": acquisition["limits"]["startup_timeout_seconds"],
+        "peak_rss_gib": shared["max_peak_rss_gib"],
+        "candidate_swap_gib": shared["max_swap_delta_gib"],
+        "peak_gpu_memory_gib": thresholds["peak_gpu_memory_gib"],
+        "device_min_ram_gib": thresholds["device_min_ram_gib"],
+    }
+    for key, ceiling in equal_or_stricter.items():
+        if thresholds[key] > ceiling:
+            raise ValueError(f"{path}: {key} is looser than acquisition ceiling")
+
+
+def validate_phase5_candidate_manifest_v3(path: Path, repository: Path | None = None) -> None:
+    _reject_packaged_phase5_copy(path)
+    payload = _load_closed_json(path)
+    _require_exact_keys(
+        payload, _PHASE5_OPEN_MODEL_CANDIDATES_V3_FIELDS, path, "candidate manifest v3"
+    )
+    if payload["schema_version"] != "phase5-open-model-candidates.v3":
+        raise ValueError(f"{path}: unsupported schema version")
+    _require_iso_date(payload["reviewed_at"], path)
+    supersedes = payload["supersedes_manifest_sha256"]
+    v2_path = Path(__file__).parent / "manifests" / "phase5-open-model-candidates.v2.json"
+    if (
+        not isinstance(supersedes, str)
+        or re.fullmatch(r"[0-9a-f]{64}", supersedes) is None
+        or supersedes != hashlib.sha256(v2_path.read_bytes()).hexdigest()
+    ):
+        raise ValueError(f"{path}: supersedes_manifest_sha256 must bind the exact v2 bytes")
+    if _require_string_list(payload["allowed_dispositions"], path, "allowed_dispositions") != [
+        "historical_baseline",
+        "planned_acquisition",
+        "reviewed_acquisition",
+        "blocked_upstream",
+        "conditional",
+        "continue",
+        "reject_local",
+        "external_control",
+        "comparison_only",
+        "blocked_evidence",
+    ]:
+        raise ValueError(f"{path}: allowed_dispositions must be the v3 closed vocabulary")
+    if _require_string_list(
+        payload["candidate_claim_vocabulary"], path, "candidate_claim_vocabulary"
+    ) != list(_PHASE5_CANDIDATE_V3_CLAIMS):
+        raise ValueError(f"{path}: candidate_claim_vocabulary mismatch")
+    candidates = payload["candidates"]
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError(f"{path}: candidates must be a non-empty list")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError(f"{path}: each candidate must be an object")
+        _require_exact_keys(candidate, _PHASE5_CANDIDATE_V3_ENTRY_FIELDS, path, "v3 candidate")
+        if candidate["disposition"] not in payload["allowed_dispositions"]:
+            raise ValueError(f"{path}: candidate disposition is outside the closed vocabulary")
+        claims = _require_string_list(candidate["allowed_claims"], path, "candidate allowed_claims")
+        if set(claims) - set(_PHASE5_CANDIDATE_V3_CLAIMS):
+            raise ValueError(f"{path}: candidate claims are outside the closed vocabulary")
+        markers = _require_string_list(candidate["mitigation_markers"], path, "mitigation_markers")
+        if markers not in ([], ["state_size_guard_required"]):
+            raise ValueError(f"{path}: unknown mitigation marker")
+    _validate_phase5_v3_bindings(payload, path, repository or Path(__file__).resolve().parents[1])
+
+
+def _validate_phase5_v3_bindings(payload: dict[str, Any], path: Path, repository: Path) -> None:
+    canonical_paths = {
+        "systems_report_path": "benchmarks/results/phase5b-kev4b-managed-cuda-systems.json",
+        "protocol_path": "benchmarks/manifests/phase5-managed-cuda-systems.v1.json",
+        "readiness_manifest_path": "benchmarks/manifests/phase5-public-readiness.v1.json",
+    }
+    fields = (
+        ("systems_report_path", "systems_report_digest"),
+        ("protocol_path", "protocol_digest"),
+        ("readiness_manifest_path", "readiness_manifest_sha256"),
+    )
+    references: dict[str, Path] = {}
+    for path_key, digest_key in fields:
+        relative = payload[path_key]
+        digest = payload[digest_key]
+        if relative is None and digest is None:
+            continue
+        if not isinstance(relative, str) or not isinstance(digest, str):
+            raise ValueError(f"{path}: {path_key} and {digest_key} must be both null or both set")
+        if relative != canonical_paths[path_key]:
+            raise ValueError(f"{path}: {path_key} does not name the canonical artifact")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError(f"{path}: {digest_key} must be a SHA-256 digest")
+        candidate_path = (repository / relative).resolve()
+        if repository.resolve() not in candidate_path.parents:
+            raise ValueError(f"{path}: {path_key} must resolve below the repository")
+        if not candidate_path.is_file():
+            raise ValueError(f"{path}: referenced {path_key} does not exist")
+        if hashlib.sha256(candidate_path.read_bytes()).hexdigest() != digest:
+            raise ValueError(f"{path}: {digest_key} does not match exact referenced bytes")
+        references[path_key] = candidate_path
+    if not references:
+        return
+    if len(references) != 3:
+        raise ValueError(f"{path}: report, protocol and readiness bindings are all required")
+
+    report_path = references["systems_report_path"]
+    report = _load_closed_json(report_path)
+    from benchmarks.phase5_managed_cuda.models import PublicSystemsReport
+
+    parsed_report = PublicSystemsReport.model_validate(report)
+    protocol_path = references["protocol_path"]
+    validate_phase5_managed_cuda_systems_protocol(protocol_path)
+    protocol = _load_closed_json(protocol_path)
+    expected_report_bindings = {
+        "protocol_digest": hashlib.sha256(protocol_path.read_bytes()).hexdigest(),
+        "acquisition_descriptor_sha256": protocol["acquisition_descriptor_sha256"],
+        "managed_runtime_descriptor_sha256": protocol["managed_runtime_descriptor_sha256"],
+        "fixture_digest": protocol["fixture_digest"],
+    }
+    if any(
+        getattr(parsed_report, field) != expected
+        for field, expected in expected_report_bindings.items()
+    ):
+        raise ValueError(f"{path}: report provenance differs from the exact protocol bytes")
+    readiness_path = references["readiness_manifest_path"]
+    validate_phase5_readiness_manifest(readiness_path)
+    readiness = _load_closed_json(readiness_path)
+    gate_a = readiness["gates"][0]
+    if gate_a["id"] != "gate_a_developer_preview" or gate_a["status"] != "not_met":
+        raise ValueError(f"{path}: referenced readiness Gate A must remain not_met")
+
+    candidates = payload["candidates"]
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError(f"{path}: candidates must be a non-empty list")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError(f"{path}: each candidate must be an object")
+        _require_exact_keys(candidate, _PHASE5_CANDIDATE_V3_ENTRY_FIELDS, path, "v3 candidate")
+        if candidate["disposition"] not in payload["allowed_dispositions"]:
+            raise ValueError(f"{path}: candidate disposition is outside the closed vocabulary")
+        if _require_string_list(candidate["allowed_claims"], path, "candidate allowed_claims"):
+            unknown_claims = set(candidate["allowed_claims"]) - set(_PHASE5_CANDIDATE_V3_CLAIMS)
+            if unknown_claims:
+                raise ValueError(f"{path}: candidate claims are outside the closed vocabulary")
+        if _require_string_list(
+            candidate["mitigation_markers"], path, "mitigation_markers"
+        ) and candidate["mitigation_markers"] != ["state_size_guard_required"]:
+            raise ValueError(f"{path}: unknown mitigation marker")
+    kev_matches = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("id") == "kev-4b"
+    ]
+    if len(kev_matches) != 1:
+        raise ValueError(f"{path}: exactly one Kev-4B candidate is required")
+    candidate = kev_matches[0]
+    if candidate.get("disposition") != parsed_report.disposition:
+        raise ValueError(f"{path}: candidate disposition must equal the bound systems report")
+    claims = candidate.get("allowed_claims")
+    markers = candidate.get("mitigation_markers")
+    if not isinstance(claims, list) or not isinstance(markers, list):
+        raise ValueError(f"{path}: candidate claims and mitigation_markers must be lists")
+    if parsed_report.disposition == "conditional":
+        if claims != ["candidate_for_evaluation"]:
+            raise ValueError(f"{path}: conditional permits only candidate_for_evaluation")
+        if markers != ["state_size_guard_required"] or not parsed_report.state_size_guard_required:
+            raise ValueError(f"{path}: conditional requires the exact state-size guard marker")
+    elif parsed_report.disposition == "reject_local":
+        if claims or "candidate_for_evaluation" in claims or markers:
+            raise ValueError(f"{path}: reject_local requires empty claims and mitigation markers")
+    elif parsed_report.disposition == "blocked_evidence":
+        raise ValueError(f"{path}: blocked_evidence must not publish a v3 successor")
+    elif parsed_report.disposition == "continue":
+        raise ValueError(f"{path}: v1 managed CUDA protocol cannot emit continue")
+
+
+def validate_committed_phase5b_report(repository: Path | None = None) -> None:
+    """Validate the designated P2 report whenever it is committed in a checkout."""
+    root = repository or Path(__file__).resolve().parents[1]
+    report_path = root / "benchmarks/results/phase5b-kev4b-managed-cuda-systems.json"
+    if not report_path.exists():
+        return
+    _load_closed_json(report_path)
+    from benchmarks.phase5_managed_cuda.models import PublicFailureReport, PublicSystemsReport
+
+    payload = _load_closed_json(report_path)
+    if payload.get("schema_version") == "phase5b-managed-cuda-failure-report.v1":
+        report: PublicFailureReport | PublicSystemsReport = PublicFailureReport.model_validate(
+            payload
+        )
+    else:
+        report = PublicSystemsReport.model_validate(payload)
+    from benchmarks.phase5_managed_cuda.cli import _assert_public_sanitized
+
+    _assert_public_sanitized(report, ())
+
+
 def main() -> int:
     manifest_directory = Path(__file__).parent / "manifests"
     manifests = sorted(manifest_directory.glob("*.json"))
@@ -866,6 +1367,7 @@ def main() -> int:
         raise ValueError("no first-party manifests found")
     for path in manifests:
         validate_routed_manifest(path)
+    validate_committed_phase5b_report()
     print(f"validated {len(manifests)} routed manifest(s)")
     return 0
 
