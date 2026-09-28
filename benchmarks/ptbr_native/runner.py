@@ -23,8 +23,16 @@ from benchmarks.ptbr_native.protocol import (
     earliest_argmax,
     percentile,
 )
-from saracura.backends.julia import JuliaBackend
-from saracura.backends.saracura_universal import SaracuraUniversalBackend
+from saracura.backends.julia import (
+    JULIA_CHECKPOINT_SHA256,
+    JULIA_MODEL_ID,
+    JULIA_MODEL_REVISION,
+    JuliaBackend,
+)
+from saracura.backends.saracura_universal import (
+    SaracuraUniversalBackend,
+    load_saracura_candidate,
+)
 from saracura.contracts.errors import ErrorCode, SaracuraError
 from saracura.runtime.engine import DecisionEngine
 from saracura.runtime.workflows import WorkflowRegistry
@@ -159,6 +167,10 @@ def _category(error: BaseException) -> tuple[str, bool]:
         if code in {ErrorCode.CAPACITY_EXCEEDED, ErrorCode.CARDINALITY_EXCEEDED}:
             return "backend_capacity", True
         if code is ErrorCode.BACKEND_UNAVAILABLE:
+            if isinstance(error.__cause__, ValueError) and str(error.__cause__) == (
+                "Option exceeds 48-token model contract"
+            ):
+                return "backend_capacity", True
             return "backend_unavailable", False
         return "other_error", False
     if isinstance(error, (ValidationError, ValueError, TypeError)):
@@ -302,4 +314,39 @@ def atomic_write_report(path: Path, report: BenchmarkReport) -> None:
 def verify_report(path: Path) -> BenchmarkReport:
     if not path.is_file():
         raise ValueError("report must be an existing file")
-    return load_report(path.read_bytes())
+    report = load_report(path.read_bytes())
+    root = Path(__file__).resolve().parents[2]
+    expected_names = {
+        "julia": "phase5d-ptbr-faq-bacen-julia-cpu.json",
+        "saracura-universal": "phase5d-ptbr-faq-bacen-saracura-universal-cpu.json",
+    }
+    if path.name != expected_names[report.backend]:
+        raise ValueError("report filename does not match its backend")
+    if report.manifest_sha256 != hashlib.sha256(MANIFEST_PATH.read_bytes()).hexdigest():
+        raise ValueError("report manifest digest does not match the checkout")
+    if report.release_code_sha256 != release_code_sha256(root):
+        raise ValueError("report code digest does not match the checkout")
+    model_identity = (
+        (JULIA_MODEL_ID, JULIA_MODEL_REVISION, JULIA_CHECKPOINT_SHA256)
+        if report.backend == "julia"
+        else (
+            (candidate := load_saracura_candidate()).id,
+            candidate.model_revision,
+            candidate.checkpoint_sha256,
+        )
+    )
+    if (
+        report.model_id,
+        report.model_revision,
+        report.checkpoint_sha256,
+    ) != model_identity:
+        raise ValueError("report model identity does not match the checkout")
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", report.code_commit, "HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    if ancestor.returncode != 0:
+        raise ValueError("report code commit is not an ancestor of the checkout")
+    return report

@@ -1427,6 +1427,15 @@ def validate_committed_phase5b_report(repository: Path | None = None) -> None:
     _assert_public_sanitized(report, ())
 
 
+def validate_committed_phase5d_reports(repository: Path | None = None) -> None:
+    """Bind every committed Phase 5D report to this checkout."""
+    root = repository or Path(__file__).resolve().parents[1]
+    from benchmarks.ptbr_native.runner import verify_report
+
+    for path in sorted((root / "benchmarks/results").glob("phase5d-ptbr-faq-bacen-*-cpu.json")):
+        verify_report(path)
+
+
 def main() -> int:
     manifest_directory = Path(__file__).parent / "manifests"
     manifests = sorted(manifest_directory.glob("*.json"))
@@ -1435,6 +1444,7 @@ def main() -> int:
     for path in manifests:
         validate_routed_manifest(path)
     validate_committed_phase5b_report()
+    validate_committed_phase5d_reports()
     print(f"validated {len(manifests)} routed manifest(s)")
     return 0
 

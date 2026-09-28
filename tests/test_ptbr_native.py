@@ -16,6 +16,12 @@ from benchmarks.ptbr_native.protocol import (
     lexical_tokens,
     percentile,
 )
+from benchmarks.ptbr_native.runner import verify_report
+from saracura.backends.julia import (
+    JULIA_CHECKPOINT_SHA256,
+    JULIA_MODEL_ID,
+    JULIA_MODEL_REVISION,
+)
 from saracura.serialization import canonical_json_bytes
 
 ROOT = Path(__file__).parents[1]
@@ -220,3 +226,35 @@ def test_report_accounts_rejects_and_errors_against_plan() -> None:
 def test_importing_protocol_does_not_import_pyarrow() -> None:
     source = (ROOT / "benchmarks/ptbr_native/protocol.py").read_text()
     assert "pyarrow" not in source
+
+
+def test_offline_verifier_binds_filename_manifest_code_and_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = valid_report()
+    payload["code_commit"] = (
+        __import__("subprocess")
+        .run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+    )
+    payload["manifest_sha256"] = hashlib.sha256(MANIFEST.read_bytes()).hexdigest()
+    payload["model_id"] = JULIA_MODEL_ID
+    payload["model_revision"] = JULIA_MODEL_REVISION
+    payload["checkpoint_sha256"] = JULIA_CHECKPOINT_SHA256
+    monkeypatch.setattr(
+        "benchmarks.ptbr_native.runner.release_code_sha256",
+        lambda root: payload["release_code_sha256"],
+    )
+    report = tmp_path / "phase5d-ptbr-faq-bacen-julia-cpu.json"
+    report.write_text(json.dumps(payload))
+    assert verify_report(report).model_id == JULIA_MODEL_ID
+    payload["manifest_sha256"] = "0" * 64
+    report.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="manifest digest"):
+        verify_report(report)
