@@ -148,7 +148,7 @@ cresce com o número de alternativas. O relatório CPU verificado acerta 161/373
 (`43,16%`) com `98,66%` de cobertura, ganho de `8,85` pontos percentuais sobre
 os 128/373 (`34,32%`) do single-pass. A acurácia planejada por posição sai da
 faixa `16,13%`–`58,51%` para `40,86%`–`46,24%`. A latência warm p50/p95 é
-`87,31/100,11 ms` e a vazão é `8,78 decisões/s`, contra `21,70/25,01 ms` e
+`87,81/99,75 ms` e a vazão é `10,40 decisões/s`, contra `21,70/25,01 ms` e
 `29,08 decisões/s` no single-pass. Ambos ficam acima dos 25% de acaso e bem
 abaixo dos 265/373 (`71,05%`) do baseline lexical. O experimento foi
 selecionado post-hoc neste mesmo benchmark de desenvolvimento e ainda não tem
