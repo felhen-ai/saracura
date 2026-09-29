@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "saracura"
 version = "0.1.0a2"
-description = "A research-only, local-first engine for typed decisions."
+description = "A local-first decision model project for fast typed decisions at scale."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }

@@ -9,10 +9,11 @@ status: current
 canonical: docs/README.pt-BR.md
 globalRef: qmd://saracura/docs/README.pt-BR.md
 reviewCadenceDays: 90
-lastReviewedAt: 2026-09-27
+lastReviewedAt: 2026-09-29
 sourceRefs: []
 related:
   - README.md
+  - docs/decisions/0004-model-first-product-direction.md
   - SECURITY.md
   - CONTRIBUTING.md
 supersedes: []
@@ -24,55 +25,73 @@ sensitivity: public
 
 [English](../README.md) | [Português (Brasil)](README.pt-BR.md)
 
-Saracura é um runtime aberto de decisões e laboratório de modelos para fluxos locais de alto volume, com benchmark PT-BR-first e backends de decisão plugáveis.
+Saracura é um projeto aberto e local-first de modelo de decisão para decisões tipadas rápidas em escala, com avaliação PT-BR-first e API neutra em relação ao idioma.
 
-> Uma API tipada. Backends de pesquisa plugáveis. Evidência antes de alegações.
+> Modelos locais pequenos. Muitas decisões tipadas. Evidência em hardware real.
 
-Este repositório ainda é um **alpha exclusivo para pesquisa**. Ele não contém pesos treinados, não afirma qualidade de decisão e não deve ser usado como gate de automação ou autorização. O backend determinístico incluído é apenas uma fixture para exercitar o contrato e os invariantes do runtime.
+O Saracura está atualmente em **preview de desenvolvimento orientado ao modelo**. O runtime público e as ferramentas de avaliação já existem; o primeiro checkpoint próprio e de uso geral do Saracura é o próximo marco de release e ainda não foi publicado. Até que esse checkpoint e suas medições estejam disponíveis, o repositório não faz alegação comparativa de qualidade e não deve ser usado como gate de automação ou autorização.
 
-PT-BR-first significa que o português brasileiro é o primeiro idioma dos exemplos e do trabalho de governança de dados, anotação e avaliação. Isso não significa que este alpha já distribua um checkpoint com qualidade medida em PT-BR. A API e a arquitetura permanecem neutras em relação ao idioma para que o mesmo protocolo de evidência possa se expandir para inglês e outros idiomas.
+## O que estamos construindo
 
-O inglês é o idioma canônico da documentação técnica. O quickstart, os exemplos públicos e os materiais de avaliação em PT-BR também são mantidos em português brasileiro quando aplicável.
+O Saracura está sendo construído como um modelo que qualquer pessoa possa baixar e executar, não como wrapper de outro modelo de decisão nem como laboratório de benchmark cujo principal resultado seja infraestrutura.
 
-## Escopo atual
+O projeto se concentra na interseção de quatro propriedades:
 
-- contratos fechados de request, response e erro `v1alpha1`;
-- perguntas `choice` em workflows conhecidos e imutáveis;
-- normalização NFC versionada antes da canonicalização RFC 8785;
-- segmentos semânticos prefixados por comprimento;
-- uma única codificação do estado reutilizada em Q=1, Q=10 e Q=50;
-- testes de isolamento entre perguntas com tolerância numérica absoluta de `1e-12`;
-- chaves de cache de schema fail-closed com os bytes canônicos completos e eixos de revisão;
-- artefatos de calibração imutáveis e compatíveis de forma fail-closed;
-- runtime in-process e CLI locais;
-- um backend experimental opt-in `laya-universal` para o workflow Choice dinâmico exato;
-- trilhas opt-in de pesquisa para aquisição de encoder, treino de head sintético, calibração humana em PT-BR e controles externos;
-- um backend opcional loopback-only `systemone` para o workflow Choice exato `universal-choice@phase5c-systemone.v1`;
-- um backend direto em CPU `julia` para o checkpoint Apache-2.0 Julia-1 pinado e o workflow Choice exato `universal-choice@phase5c-julia.v1`;
-- `saracura-universal` opt-in para exatamente `universal-choice@phase4e-saracura-ranker.v1`, somente com artefatos privados verificados e explícitos.
+- modelos pequenos que rodem localmente em CPU, Apple Silicon ou GPU modesta;
+- decisões tipadas sobre novos schemas por meio de uma API estável;
+- workloads de alto volume, incluindo muitas decisões sobre contexto compartilhado;
+- treino e avaliação PT-BR-first sem tornar a arquitetura específica de um idioma.
 
-Não estão incluídos no runtime instalado: downloads de modelos incluídos no pacote ou disparados por request, datasets ou checkpoints incluídos, labels dinâmicos fora dos workflows Choice exatos das Fases 4D e 4E, heads boolean ou ordinal, servidor HTTP, fallback remoto, telemetria, calibração, limiares de confiança, publicação pública de checkpoint ou automação de produção. O backend Saracura-owned instalado é opt-in, sintético-only e somente de pesquisa; exige snapshot MiniLM e capsule de treino verificados e fornecidos pelo operador, retorna ranking weights não calibrados com abstenção e nunca autoriza automação. As ferramentas de pesquisa podem adquirir snapshots revisados de encoders e treinar heads experimentais locais apenas por meio de fluxos explícitos, controlados pelo operador e offline-first.
+O próximo marco público é um checkpoint próprio do Saracura com:
 
-## Direção da Fase 5 e arquitetura de pesquisa em duas camadas
+- quickstart local em um comando;
+- pesos públicos e imutáveis, acompanhados de model card;
+- medições reproduzíveis de qualidade em PT-BR e de desempenho em hardware;
+- uma alegação delimitada pelo resultado que o modelo efetivamente demonstrar.
 
-Saracura preserva uma única API de decisões tipadas com camada `universal` plugável para novos schemas Choice e camada `compiled` opcional para fluxos estáveis, repetidos e de alto volume. O atual `saracura-universal-ranker.v0` é um ranker histórico de projeção bi-encoder MiniLM, não a fundação presumida do produto nem uma alegação de número de parâmetros. A Fase 5 avalia candidatos abertos com evidência antes de qualquer novo treino de checkpoint. TypeSafe/Jev continua como controle externo independente, nunca dependência de runtime ou fallback. Nenhum candidato está aprovado para produção, calibrado para um protocolo declarado ou autorizado a automatizar. Veja o [ADR 0001](decisions/0001-two-tier-decision-architecture.md) e o [ADR 0002](decisions/0002-open-model-runtime-and-readiness.md).
+Calibração, predição seletiva e segurança para automação continuam sendo marcos importantes posteriores. Eles não bloqueiam a publicação de um preview de modelo útil e honestamente delimitado.
 
-## Instalação e validação
+## Release atual
+
+O pacote atual fornece a API de decisões tipadas, CLI local, contratos estritos de request e response, ferramentas de benchmark e a fundação de runtime para o próximo modelo. Ele ainda **não** distribui o checkpoint público do Saracura descrito acima.
+
+Releases anteriores integraram checkpoints de terceiros e controles externos para validar o runtime e entender onde as abordagens existentes falham. Essas integrações continuam como evidência reproduzível de pesquisa, mas não são o produto Saracura, não são recomendadas como seu modelo padrão e não definem o roadmap público.
+
+O boundary permanente do produto está registrado no [ADR 0004: direção de produto model-first](decisions/0004-model-first-product-direction.md).
+
+## Roadmap
+
+As GitHub Issues são o roadmap operacional público. O [milestone v0.2.0 Model Preview](https://github.com/felhen-ai/saracura/milestone/1) mostra quanto falta para o primeiro release de modelo; o [issue de roadmap #49](https://github.com/felhen-ai/saracura/issues/49) registra a ordem das dependências e a definição de pronto.
+
+Cada issue do roadmap deve terminar em um artefato visível de modelo, avaliação, empacotamento ou release. O trabalho de automação calibrada é acompanhado separadamente e não dilui o progresso rumo à v0.2.0.
+
+## Arquitetura
+
+O Saracura expõe uma única API de decisões tipadas com dois papéis de modelo:
+
+- `universal`: o modelo Saracura padrão para novos schemas Choice;
+- `compiled`: uma especialização opcional para workflows estáveis, repetidos e de alto volume quando as medições a justificarem.
+
+O primeiro release de modelo tem como alvo o papel universal. Uma rota compiled só tem valor quando melhora a fronteira entre qualidade e vazão para um workload declarado; ela não é motivo para atrasar o checkpoint universal.
+
+Consulte o [ADR 0001](decisions/0001-two-tier-decision-architecture.md) para a arquitetura em duas camadas e o [ADR 0002](decisions/0002-open-model-runtime-and-readiness.md) para os limites de evidência e release.
+
+## Instalação para desenvolvimento
 
 É necessário usar Python 3.11+ e [uv](https://docs.astral.sh/uv/).
 
 ```bash
+git clone https://github.com/felhen-ai/saracura.git
+cd saracura
 uv sync --dev
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
 uv run pytest -q
-uv build
 ```
 
-O ambiente de desenvolvimento padrão não instala backend de modelo nem dependências pesadas de ML.
+O ambiente padrão continua leve e não baixa pesos nem dependências pesadas de ML. A aquisição de modelos é sempre explícita e pinada por revisão.
 
-## Executar a fixture PT-BR autoescrita
+## Exercitar o contrato atual da API
+
+O repositório inclui uma fixture PT-BR autoescrita para que contribuidores exercitem o contrato tipado antes de baixar artefatos de modelo:
 
 ```bash
 uv run saracura decide \
@@ -80,437 +99,42 @@ uv run saracura decide \
   --calibration examples/ptbr-support-calibration.json
 ```
 
-O resultado distingue scores crus de probabilidades normalizadas da fixture e declara `fixture_only`. O artefato exercita as verificações de compatibilidade, mas não foi ajustado em dados de calibração; ele não prova que o backend seja preciso, calibrado ou seguro para automação. `verified_for_research` fica reservado a um artefato futuro que cumpra seu protocolo held-out declarado.
+Essa fixture é infraestrutura de teste, não um modelo treinado nem evidência de qualidade de decisão. Este README substituirá a seção pelo quickstart do modelo quando o checkpoint Saracura for publicado.
 
-## Executar o Julia-1 localmente em CPU
+## Evidência, não marketing de concorrentes
 
-Julia-1 é o backend recomendado deste preview experimental. O Saracura fixa a
-revisão pública do código e o digest do checkpoint, carrega o modelo diretamente
-de um snapshot local explícito e mantém todo resultado como pesquisa.
+O Saracura mantém registros reproduzíveis de pesquisa, inclusive resultados negativos. Modelos de terceiros só devem aparecer nesses registros como controles sob o mesmo protocolo declarado. A página principal não posiciona o Saracura como adapter ou pequena variação de um checkpoint externo específico.
 
-```bash
-uv sync --locked --dev
-uvx --from huggingface-hub hf download SupersonicLabs/Julia-1 \
-  --revision a85b127321d580d65176c89ced8273f305745d85 \
-  --local-dir ./Julia-1
-uv pip install -e ./Julia-1
+Registros relevantes:
 
-uv run --no-sync saracura decide \
-  --backend julia \
-  --request examples/ptbr-julia-request.json \
-  --model-snapshot ./Julia-1 \
-  --device cpu \
-  --timing
-```
+- [protocolo de prontidão e avaliação de modelos abertos](action/specs/phase5-open-model-benchmark-and-public-readiness.md);
+- [protocolo do benchmark nativo em PT-BR](action/specs/phase5d-native-ptbr-benchmark.md);
+- [resultado histórico da comparação cega](action/phase4e-comparison-result.md);
+- [resultado da avaliação shadow somente leitura](action/phase4f1-shadow-evaluation-result.md).
 
-O Julia-1 é um checkpoint aberto de terceiros, não um modelo treinado pelo
-Saracura. Os resultados multilíngues publicados medem português de Portugal,
-não uma avaliação PT-BR do Saracura. A resposta permanece `uncalibrated`,
-`abstained` e `automation_allowed=false` até existirem avaliação e calibração
-específicas do workflow.
+Resultados históricos de benchmark não estabelecem que o próximo modelo Saracura seja melhor. Uma alegação comparativa só se torna pública quando existirem um checkpoint próprio do Saracura e evidência diretamente comparável.
 
-## Benchmark nativo de FAQ em PT-BR
+## Guardrail de produto
 
-A Fase 5D acrescenta um benchmark reproduzível de seleção entre quatro
-respostas usando 373 perguntas em português brasileiro do Banco Central do
-Brasil. É um controle externo estreito, não um leaderboard geral: o acaso vale
-`0.25`, e um baseline lexical fixo acerta 265/373 (`0.710455764075067`).
-Rejeições e erros continuam no denominador. Os resultados não são calibrados e
-não autorizam automação.
+Novos adapters, harnesses, integrações de candidatos ou infraestrutura de benchmark devem contribuir diretamente para pelo menos um destes resultados:
 
-Os dados não são redistribuídos. Baixe a revisão pinada de
-`MTEB-BR/faq-bacen` para um cache controlado pelo operador e execute com paths
-absolutos. A fonte do BCB declara ODbL; o repositório upstream
-`Itau-Unibanco/FAQ_BACEN` declara Apache-2.0; o card do derivado MTEB-BR pinado
-não declara licença. O portal do BCB informa que o catálogo aberto exclui
-registros pessoais ou restritos, mas o Saracura não fez revisão de privacidade
-registro por registro.
+1. selecionar ou treinar o checkpoint Saracura;
+2. medir qualidade, footprint, latência ou vazão do modelo;
+3. empacotar e executar o modelo localmente;
+4. melhorar uma fraqueza medida no modelo publicado.
 
-A primeira execução em CPU Apple Silicon produziu estes resultados sobre todo o
-conjunto planejado:
+Trabalho que não satisfaça nenhum desses resultados não está no caminho crítico do release do modelo. Isso evita que a infraestrutura auxiliar vire o produto por acidente.
 
-| Backend | Acertos / planejados | Acurácia planejada | Cobertura | Rejeitados |
-| --- | ---: | ---: | ---: | ---: |
-| Julia-1 | 128 / 373 | 34,32% | 98,66% | 5 casos de capacidade do backend |
-| Ranker próprio do Saracura | 103 / 373 | 27,61% | 98,66% | 5 casos de capacidade da requisição |
-| Baseline lexical fixo | 265 / 373 | 71,05% | 100% | 0 |
+## Segurança e independência
 
-Os dois resultados apoiados por modelo ficam apenas modestamente acima do
-acaso e muito abaixo do baseline lexical. Isso é evidência negativa de
-qualidade, não uma alegação de superioridade. Os relatórios agregados
-versionados preservam a procedência exata de modelo, código, protocolo,
-latência e rejeições sem incluir registros do dataset.
+- O Saracura continua utilizável sem Felhen, AIOS, serviços privados, dados privados ou configuração privada.
+- Nenhuma requisição dispara download implícito de modelo ou fallback remoto.
+- Scores não calibrados não são apresentados como confiança.
+- Um preview de modelo não autoriza ações automáticas de alto risco.
+- Registros de treino, calibração e avaliação held-out permanecem separados nos protocolos declarados.
 
-A estratégia Julia opcional da Fase 5D.1 testa se a média do conjunto completo
-de rotações cíclicas dos critérios reduz esse viés de posição. Ela executa uma
-inferência Julia por critério (quatro neste benchmark), portanto a latência
-cresce com o número de alternativas. O relatório CPU verificado acerta 161/373
-(`43,16%`) com `98,66%` de cobertura, ganho de `8,85` pontos percentuais sobre
-os 128/373 (`34,32%`) do single-pass. A acurácia planejada por posição sai da
-faixa `16,13%`–`58,51%` para `40,86%`–`46,24%`. A latência warm p50/p95 é
-`87,81/99,75 ms` e a vazão é `10,40 decisões/s`, contra `21,70/25,01 ms` e
-`29,08 decisões/s` no single-pass. Ambos ficam acima dos 25% de acaso e bem
-abaixo dos 265/373 (`71,05%`) do baseline lexical. O experimento foi
-selecionado post-hoc neste mesmo benchmark de desenvolvimento e ainda não tem
-confirmação em conjunto independente; média cíclica foi a única agregação
-explorada nesse ciclo. A estratégia envolve um checkpoint Julia-1 de terceiro,
-que não pertence ao Saracura. Como os IDs giram junto com as descrições, a
-rotação também não separa viés de posição de preferência por tokens dos rótulos.
-O resultado permanece sem calibração e não autoriza automação.
-
-Para gerar o relatório v2 separado de média cíclica, use `--strategy
-cyclic_mean` e o nome canônico:
-
-```bash
-uv run --no-sync python -m benchmarks.ptbr_native run \
-  --backend julia --strategy cyclic_mean --device cpu \
-  --model-snapshot /path/absoluto/para/Julia-1 \
-  --data-root /path/absoluto/para/revisao-MTEB-BR-faq-bacen \
-  --output /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
-
-uv run --no-sync python -m benchmarks.ptbr_native verify \
-  /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
-```
-
-O relatório v2 versionado registra a estratégia e a quantidade de inferências por decisão
-junto das métricas de acurácia, posição, cobertura, latência e vazão. Os hashes
-de código e do manifesto do ensemble são conferidos contra a árvore Git
-ancestral indicada no próprio relatório, preservando a evidência histórica
-após futuras mudanças no código.
-
-```bash
-uv sync --locked --dev --extra ptbr-benchmark
-uv pip install -e /path/absoluto/para/Julia-1
-uv run --no-sync python -m benchmarks.ptbr_native run \
-  --backend julia --device cpu \
-  --model-snapshot /path/absoluto/para/Julia-1 \
-  --data-root /path/absoluto/para/revisao-MTEB-BR-faq-bacen \
-  --output /path/absoluto/para/phase5d-ptbr-faq-bacen-julia-cpu.json
-
-uv run --no-sync python -m benchmarks.ptbr_native verify \
-  /path/absoluto/para/phase5d-ptbr-faq-bacen-julia-cpu.json
-```
-
-Para o ranker próprio do Saracura, sincronize os extras `ptbr-benchmark` e
-`universal-local` e use `--backend saracura-universal` com
-`--encoder-snapshot` e `--training-capsule` verificados e explícitos. Esse
-ranker histórico continua `synthetic_only_research`; seu envelope menor de
-estado faz parte do que o benchmark mede. Consulte o [protocolo congelado da
-Fase 5D](action/specs/phase5d-native-ptbr-benchmark.md).
-
-## Executar o adapter experimental System One loopback
-
-O backend System One é um adapter loopback-only opcional para o workflow Choice exato `universal-choice@phase5c-systemone.v1`. Requer um checkpoint aberto separadamente iniciado em `http://127.0.0.1:<port>`, identidade de modelo explícita e token de bearer fornecido apenas pela variável de ambiente `SARACURA_SYSTEMONE_API_KEY`. O adapter desabilita todos os handlers de proxy e nunca segue redirects.
-
-```bash
-uv run saracura decide \
-  --backend systemone \
-  --request examples/ptbr-systemone-request.json \
-  --endpoint http://127.0.0.1:<port> \
-  --model-id systemone-compatible \
-  --model-revision <revisao-pinada> \
-  --checkpoint-sha256 <sha256>
-```
-
-Defina `SARACURA_SYSTEMONE_API_KEY` no ambiente do operador para autenticacao. A resposta e `uncalibrated`, `abstained` e `automation_allowed=false`. O nome de modelo retornado pelo checkpoint e registrado mas nao precisa ser igual ao alias da requisicao. Esta e uma demonstraco experimental de interoperabilidade de wire apenas, nao suporte de candidato ou disposicao de sistemas.
-
-## Boundary
-
-Saracura é independente. Instalação, testes, CLI e exemplos não exigem código, serviço, dado ou configuração privados. Todo o conteúdo de fixture desta fase é autoescrito e declarado em `benchmarks/manifests/ptbr-fixture-v1.json`.
-
-Consulte [SECURITY.md](../SECURITY.md) antes de adicionar carregamento de modelos, tokenizers, datasets ou plugins. Contribuições devem seguir [CONTRIBUTING.md](../CONTRIBUTING.md).
-
-As licenças e versões resolvidas das dependências de runtime estão registradas em [dependency-licenses.md](dependency-licenses.md).
-
-## Executar o harness local de escala
-
-O runner de benchmark, usado apenas a partir do checkout, consome a fixture autoescrita e executa o `DecisionEngine` público em Q=1, Q=10 e Q=50. Ele grava amostras brutas e um relatório Markdown em `.artifacts/`, que é ignorado pelo Git:
-
-```bash
-uv run python -m benchmarks.run \
-  --suite decision-scaling \
-  --backend fixture \
-  --warmups 1 \
-  --iterations 10 \
-  --code-revision local-smoke \
-  --output-dir .artifacts/benchmarks
-```
-
-O schema do resultado é `phase2a.v1`. Os percentis usam nearest-rank (`sorted[ceil(p*n)-1]`) e cada amostra registra o digest das respostas e a observação de uma única codificação do estado. Esta fixture é apenas um instrumento de pesquisa: seu tempo não é performance de modelo treinado, não prova qualidade e não autoriza automação ou decisões de produção. O runner não faz parte do wheel instalado e não baixa modelos, tokenizers, datasets nem runtimes pesados de ML.
-
-## Gate opcional de pesquisa de encoders
-
-A Fase 2B é uma trilha local e explícita de pesquisa. Ela não escolhe modelo,
-treina, calibra, mede qualidade nem autoriza automação. O ambiente padrão
-continua leve e offline. Depois da validação padrão, o operador pode instalar o
-extra isolado e adquirir um candidato revisado em revisão imutável:
-
-```bash
-uv sync --locked --dev --extra encoder-eval
-uv run python -m benchmarks.encoder_gate validate-registry
-uv run python -m benchmarks.encoder_gate acquire \
-  --candidate multilingual-minilm-l12 --allow-network
-uv run python -m benchmarks.encoder_gate probe \
-  --candidate multilingual-minilm-l12 --device cpu --output-dir .artifacts/encoders
-```
-
-A aquisição nunca é disparada por uma requisição. Ela aceita somente um ID do
-registry, verifica cada byte contra o manifesto e não substitui um snapshot
-imutável. O `mmbert-base` fica bloqueado porque a revisão analisada publica
-`pytorch_model.bin` sem peso safetensors. Os relatórios são observações somente
-do encoder: não medem qualidade da decisão, head treinado, calibração, latência
-ponta a ponta ou prontidão para automação.
-
-## Roteamento MiniLM local opt-in da Fase 4A
-
-A Fase 4A pode executar um único head congelado, sintético e de cinco labels
-para roteamento de suporte quando o operador fornece explicitamente um snapshot
-local já verificado, o manifesto de treino selado e o checkpoint safetensors.
-Não há download, descoberta por cache, variável de ambiente, requisição ou
-serviço de rede. A instalação padrão não muda; o opt-in é explícito:
-
-    uv sync --locked --dev --extra local-minilm
-    uv run saracura describe-backend --backend minilm-routing \
-      --encoder-snapshot <snapshot-verificado> \
-      --training-manifest <training-manifest.json> \
-      --checkpoint <checkpoint.safetensors> --device cpu
-
-O loader verifica cada byte fornecido por descritores locais, constrói BERT e o
-tokenizer diretamente desses bytes e vincula a ABI de runtime/dispositivo à
-revisão imutável do modelo. O artefato de identidade da Fase 4A continua
-fixture_only: não tem ajuste, avaliação, limiar ou autorização de automação.
-MPS da Apple é uma escolha explícita do operador e não tem fallback automático
-para CPU.
-
-## Choice universal experimental da Fase 4D
-
-`laya-universal` é um backend local, opt-in e somente para pesquisa para o
-único workflow Choice dinâmico `universal-choice@phase4d-laya.v1`. Ele exige o
-grupo opcional isolado de dependências, um snapshot Laya local e imutável
-fornecido pelo operador e um dispositivo CPU ou MPS explícito; nunca baixa,
-descobre nem contata um provedor de modelo. A requisição sintética em PT-BR em
-[`examples/ptbr-universal-request.json`](../examples/ptbr-universal-request.json)
-usa a triagem de e-mail somente como cenário de referência fictício para a
-avaliação em modo sombra e somente leitura da Fase 4F.1. Não contém dados de
-caixa postal nem se conecta a serviços de e-mail.
-
-```bash
-uv sync --locked --dev --extra universal-local
-uv run saracura describe-backend --backend laya-universal \
-  --model-snapshot <snapshot-local-laya-verificado> --device cpu
-uv run saracura decide --backend laya-universal \
-  --request examples/ptbr-universal-request.json \
-  --model-snapshot <snapshot-local-laya-verificado> --device cpu
-```
-
-A resposta é explicitamente `uncalibrated`, `abstained` e
-`automation_allowed=false`. Seus valores normalizados são pesos de ranking, não
-confiança ou permissão para arquivar, apagar, mover, responder, encaminhar ou
-fazer qualquer outra alteração em e-mail. O candidato permanece
-`research_only_unresolved_provenance`; um smoke local bem-sucedido demonstra
-somente compatibilidade de execução, não qualidade, calibração, licenciamento
-ou prontidão para produção.
-
-## Checkpoint universal Saracura-owned da Fase 4E
-
-A Fase 4E.3C instala `saracura-universal` somente para o checkpoint selado
-`universal-choice@phase4e-saracura-ranker.v1`. Ele aceita caminhos locais
-explícitos somente após validar descriptor, manifest, snapshot e conformance;
-o pacote contém metadados, nunca pesos, vetores, linhas brutas ou capsule. É
-infraestrutura sintética-only de pesquisa, não calibrada e com abstenção, sem poder
-habilitar automação. Laya continua sendo um controle externo, nunca professor,
-fonte de checkpoint ou modelo Saracura-owned.
-
-```bash
-saracura decide --backend saracura-universal --request examples/ptbr-saracura-request.json \
-  --encoder-snapshot <verified-minilm-snapshot> \
-  --training-capsule <sealed-saracura-capsule> --device cpu
-```
-
-### Trilha operacional da Fase 4E
-
-O pipeline da Fase 4E existe apenas no checkout e começa offline. Os comandos
-`plan`, `extract`, `train` e `verify` não constroem socket. Os materiais gerados
-ficam em `.artifacts/`, ignorado pelo Git, e continuam sendo evidência sintética
-de pesquisa: não instalam runtime, não provam qualidade e não autorizam
-automação.
-
-```bash
-uv run python -m benchmarks.phase4e_pipeline plan \
-  --output .artifacts/phase4e/plan.json
-
-# Apenas corpus e pilot podem usar rede, e cada um exige --allow-network
-# literal. OPENROUTER_API_KEY entra de forma efêmera pelo ambiente do operador;
-# nunca é argumento nem entra em artefato.
-uv run --extra local-minilm python -m benchmarks.phase4e_pipeline corpus \
-  --plan .artifacts/phase4e/plan.json \
-  --snapshot <snapshot-minilm-verificado> \
-  --work-dir .artifacts/phase4e/corpus-work \
-  --packet .artifacts/phase4e/accepted-packet \
-  --allow-network
-
-uv run --extra local-minilm python -m benchmarks.phase4e_pipeline extract \
-  --packet .artifacts/phase4e/accepted-packet \
-  --snapshot <snapshot-minilm-verificado> --device cpu \
-  --output .artifacts/phase4e/embedding-capsule
-uv run --extra local-minilm python -m benchmarks.phase4e_pipeline train \
-  --packet .artifacts/phase4e/accepted-packet \
-  --snapshot <snapshot-minilm-verificado> \
-  --embeddings .artifacts/phase4e/embedding-capsule --device cpu \
-  --output-parent .artifacts/phase4e/training --output-name saracura-universal-v0
-uv run --extra local-minilm python -m benchmarks.phase4e_pipeline verify \
-  --packet .artifacts/phase4e/accepted-packet \
-  --embeddings .artifacts/phase4e/embedding-capsule \
-  --training .artifacts/phase4e/training/saracura-universal-v0
-```
-
-As requisições de corpus são fixadas em HTTPS do OpenRouter, sem redirects e
-proxies. Os ledgers históricos de corpus e comparação preservam os tetos
-originais para reprodutibilidade. O piloto atual do protocolo de aceite usa
-telemetria de custo sem teto: valores financeiros não autorizam, bloqueiam nem
-interrompem a execução. O comando informa cada USD 10 de gasto real do provedor
-na execução e o total final. Uma reserva durável pré-envio que permaneça sem
-resolução continua bloqueando o resume; o comando não repete uma cobrança
-possivelmente efetuada.
-
-A política atual mantém as entradas legadas `corpus` e `train` fechadas. Elas
-só podem ser reativadas por uma revisão de política posterior ao piloto, depois
-de um `PASS`; o próprio piloto nunca altera essas autorizações.
-
-```bash
-uv run python -m benchmarks.phase4e_pipeline pilot-plan \
-  --output .artifacts/phase4e/pilot-plan-v12/plan.json
-
-uv run python -m benchmarks.phase4e_pipeline import-ledgers \
-  --source .artifacts/phase4e \
-  --artifact-root <raiz-duravel-dos-ledgers-phase4e>
-
-uv run --extra local-minilm python -m benchmarks.phase4e_pipeline pilot \
-  --plan .artifacts/phase4e/pilot-plan-v12/plan.json \
-  --snapshot <snapshot-minilm-verificado> \
-  --work-dir .artifacts/phase4e/pilot-work-v12 \
-  --report .artifacts/phase4e/pilot-report-v12 \
-  --artifact-root <raiz-duravel-dos-ledgers-phase4e> \
-  --allow-network
-```
-
-## Gate de dados, licença e privacidade da Fase 2C
-
-Antes de criar qualquer pacote de treino, o repositório valida o registry de
-políticas de origem, que contém apenas metadata:
-
-```bash
-uv run python -m benchmarks.data_policy_gate validate-registry
-```
-
-O registry tem exatamente oito categorias e não aprova nenhum byte de dataset.
-Somente casos futuros, originalmente escritos por humanos, e derivados
-determinísticos poderão ser considerados para treino PT-BR, sempre sob um
-manifesto de artefato separado e revisão humana de privacidade e direitos. O
-Amazon MASSIVE oficial em `pt-PT` fica restrito a um controle externo separado;
-ele não pode virar evidência PT-BR. Fontes assistidas por modelo, privadas, de
-clientes e públicas sem procedência permanecem em quarentena ou bloqueadas.
-Este é um gate de engenharia, não aconselhamento jurídico nem prova de
-qualidade do dataset. A validação não baixa dados nem importa um loader de
-datasets.
-
-## Gate de pacote first-party da Fase 3A
-
-O protocolo de anotação de roteamento de suporte e o gate de divisão determinística são apenas infraestrutura offline. Nenhum registro de dataset é incluído, e os comandos não autorizam treinamento, alegações de qualidade, publicação ou automação:
-
-```bash
-uv run python -m benchmarks.first_party_gate validate-protocol
-uv run python -m benchmarks.validate_manifests
-```
-
-Mantenedores futuros deverão fornecer um JSONL canônico de estados-base, atestado externamente, e uma seed pública para construir um plano de divisão que não sobrescreve artefatos existentes. Autoria humana, privacidade, direitos, representatividade e revisão independente permanecem fora do alcance da ferramenta.
-
-## Benchmark de throughput ponta a ponta da Fase 3C
-
-A Fase 3C é um instrumento de performance usado somente a partir do checkout e apenas com dados sintéticos. Ela mede o head MiniLM revisado desde o texto em PT-BR, passando por tokenização, inferência Apple MPS, pooling e transferência para CPU, até a materialização das escolhas, com evidências separadas de carregamento e warm path. Requisições opcionais de controle com Jev usam o modelo fixado `typesafe/jev-1.13` pelo OpenRouter somente quando habilitadas explicitamente.
-
-O ambiente padrão permanece offline e leve: importar o runner não importa Torch nem Transformers. A execução real exige um snapshot local verificado do encoder, manifestos selados da Fase 3B e um orçamento aprovado explicitamente; ela não deve autorizar automação nem fundamentar alegações gerais de qualidade. Os testes offline do protocolo podem ser executados com:
-
-```bash
-uv run pytest -q tests/test_e2e_benchmark.py
-uv run ruff check benchmarks/e2e_benchmark.py tests/test_e2e_benchmark.py
-uv run mypy benchmarks/e2e_benchmark.py tests/test_e2e_benchmark.py
-```
-
-## Benchmark de controle nativo TypeSafe da Fase 3D
-
-A Fase 3D é um experimento explícito somente com dados sintéticos. Ela reutiliza o workload selado e o construtor da Fase 3C, fixa `jev-1.13.0` e mantém separados probabilidade, confiança, tokens, latência e custo calculado nativos. O ambiente padrão continua offline e leve, sem SDK TypeSafe ou backend de runtime. Uma execução ao vivo exige o contrato genérico `TYPESAFE_API_KEY`, `--allow-network` e o orçamento local revisado `0.25`. O custo calculado não é comprovante de cobrança e nenhum resultado escolhe limiar de automação.
-
-```bash
-uv run pytest -q tests/test_typesafe_native.py
-uv run ruff check benchmarks/typesafe_native.py tests/test_typesafe_native.py
-uv run ruff format --check benchmarks/typesafe_native.py tests/test_typesafe_native.py
-uv run mypy benchmarks/typesafe_native.py tests/test_typesafe_native.py
-```
-
-## Referência local e somente leitura da Fase 4F.1
-
-O exemplo de triagem de e-mail é um fluxo local em modo sombra e somente
-leitura, não uma integração com caixa postal. O Saracura não se conecta a
-Gmail, Outlook, IMAP, navegador ou serviço de rede, e não lê, move, rotula,
-apaga, responde nem altera mensagens. A policy e os JSONL de referência contêm
-dados fictícios; antes de usar a CLI local, o operador deve escolher uma
-`subject` e uma `preview` minimizadas.
-
-Execute somente com o snapshot local verificado do encoder e o capsule de
-treino selado correspondentes à revisão de modelo da policy. Esses artefatos
-não são incluídos no pacote nem baixados. `shadow-decide` emite decisões sem
-conteúdo de mensagem: não inclui estado de entrada, descrições dos critérios,
-scores crus ou timing. A saída é sempre `uncalibrated`, com abstenção e
-`automation_allowed=false`; pesos ordenados de ranking não são confiança nem
-autorização para agir. O feedback do operador serve apenas para uma avaliação
-descritiva separada: não deve ser reutilizado para treino, fine-tuning,
-retrieval, otimização de prompt ou calibração. Um adapter de caixa postal
-específico de provedor, se vier a ser aprovado, fica fora deste incremento
-público e pertence a uma futura Fase 4F.2 privada.
-
-```bash
-uv sync --locked --dev --extra universal-local
-mkdir -p .artifacts/shadow
-uv run saracura shadow-decide \
-  --policy examples/ptbr-email-shadow-policy.json \
-  --encoder-snapshot <snapshot-local-verificado-do-encoder> \
-  --training-capsule <capsule-local-de-treino-verificado> \
-  --device cpu \
-  < examples/ptbr-email-shadow-input.jsonl \
-  > .artifacts/shadow/decisions.jsonl
-uv run saracura shadow-evaluate \
-  --policy examples/ptbr-email-shadow-policy.json \
-  --decisions .artifacts/shadow/decisions.jsonl \
-  --feedback examples/ptbr-email-shadow-feedback.jsonl
-```
-
-A policy de referência é dado editável, não um pack fixo do runner nem uma
-alegação de que o checkpoint foi otimizado para e-mail. Na execução, o
-tokenizer verificado aplica os limites existentes de 128 tokens para o contexto
-e 96 tokens por critério. Não há orçamento público de tokens para a prévia: ele
-depende do smoke separado do operador com o tokenizer verificado, e o runner
-nunca trunca a entrada. Uma saída válida do tokenizer que exceda esses limites
-é reportada como `CAPACITY_EXCEEDED`; uma saída malformada é tratada como
-`BACKEND_UNAVAILABLE`. A CLI mantém a saída do lote atômica e não emite decisões
-parciais em nenhum dos casos. Integrações podem chamar o helper público
-`validate_shadow_state_capacity` antes de construir um `ShadowItem`; ele é dono
-dos limites canônicos de bytes/codepoints do estado serializado, enquanto a
-validação de chaves da policy permanece separada. O JSON da policy pode
-permanecer no source distribution, mas não entra no wheel; os JSONL fictícios
-de entrada e feedback ficam fora dos dois arquivos.
-
-Um smoke operacional sintético com 8 itens confirmou apenas a execução local; a
-concordância observada não demonstra qualidade do modelo nem prontidão. Consulte
-o [resultado do smoke da Fase 4F.1](action/phase4f1-shadow-evaluation-result.md).
+Consulte [SECURITY.md](../SECURITY.md) antes de acrescentar carregamento de modelo, tokenizer, dataset ou plugin. Contribuições seguem [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Licença
 
-Apache License 2.0. Consulte [LICENSE](../LICENSE).
-
-## Status da comparação cega da Fase 4E.4
-
-<!-- phase4e4-status:begin -->
-<!-- phase4e4-status-binding:scored:080e9264b3d7fbaf2c95ff51d2599f0522daf27bf94861a144c1463e94ac5596 -->
-A comparação cega live da Fase 4E.4 foi concluída. O Saracura acertou 187/198 e o Laya acertou 139/198 nos mesmos registros sintéticos aceitos. Veja o [resultado agregado](action/phase4e-comparison-result.md). Isso permanece evidência de pesquisa sintética e não autoriza automação.
-<!-- phase4e4-status:end -->
+Apache-2.0. Consulte [LICENSE](../LICENSE).

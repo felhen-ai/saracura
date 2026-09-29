@@ -44,38 +44,27 @@ def test_canonical_markdown_has_structural_frontmatter() -> None:
         assert re.search(r"^sensitivity: public$", frontmatter, re.MULTILINE)
 
 
-def test_shadow_public_boundary_is_documented_in_both_languages_and_agents_policy() -> None:
+def test_shadow_public_boundary_is_documented_in_spec_and_agents_policy() -> None:
     root = Path(__file__).parents[1]
-    english = (root / "README.md").read_text(encoding="utf-8")
-    portuguese = (root / "docs/README.pt-BR.md").read_text(encoding="utf-8")
+    spec = (root / "docs/action/specs/phase4f1-shadow-evaluation-and-email-reference.md").read_text(
+        encoding="utf-8"
+    )
     agents = (root / "AGENTS.md").read_text(encoding="utf-8")
 
-    for document, phase_marker in (
-        (english, "Phase 4F.2"),
-        (portuguese, "Fase 4F.2"),
-    ):
-        assert "shadow-decide" in document
-        assert "shadow-evaluate" in document
-        assert "--encoder-snapshot" in document
-        assert "--training-capsule" in document
-        assert "automation_allowed=false" in document
-        assert "Gmail" in document and "Outlook" in document and "IMAP" in document
-        assert phase_marker in document
+    assert "shadow-decide" in spec
+    assert "shadow-evaluate" in spec
+    assert "--encoder-snapshot" in spec
+    assert "--training-capsule" in spec
+    assert "automation_allowed=false" in spec
+    assert "Gmail" in spec and "Outlook" in spec and "IMAP" in spec
+    assert "Phase 4F.2" in spec
 
-    normalized_english = " ".join(english.split())
-    normalized_portuguese = " ".join(portuguese.split())
+    normalized_spec = " ".join(spec.split())
     for phrase in (
-        "ranking weights are not confidence",
-        "must not be used to train",
+        "ranking weights are never named confidence",
         "does not connect",
     ):
-        assert phrase in normalized_english
-    for phrase in (
-        "pesos ordenados de ranking não são confiança",
-        "não deve ser reutilizado para treino",
-        "não se conecta",
-    ):
-        assert phrase in normalized_portuguese
+        assert phrase in normalized_spec
     assert "read-only evaluator" in agents
     assert "no Gmail, Outlook, IMAP" in agents
     assert "automation_allowed=false" in agents
@@ -115,76 +104,52 @@ def test_phase4f1_smoke_result_is_bound_and_conservative_in_both_readmes() -> No
     ):
         assert conservative_claim in report
     assert "phase4f1-shadow-evaluation-result.md" in english
-    assert "concordância observada não demonstra qualidade do modelo nem prontidão" in " ".join(
-        portuguese.split()
-    )
     assert "action/phase4f1-shadow-evaluation-result.md" in portuguese
     for private_value in ("/Volumes/", "/Users/", "Felhen", "checkpoint.safetensors"):
         assert private_value not in report
 
 
-def test_phase5_positioning_is_bounded_and_readme_parity_is_preserved() -> None:
+def test_model_first_positioning_is_bounded_and_readme_parity_is_preserved() -> None:
     root = Path(__file__).parents[1]
     english = (root / "README.md").read_text(encoding="utf-8")
     portuguese = (root / "docs/README.pt-BR.md").read_text(encoding="utf-8")
-    adr = (root / "docs/decisions/0002-open-model-runtime-and-readiness.md").read_text(
+    adr = (root / "docs/decisions/0004-model-first-product-direction.md").read_text(
         encoding="utf-8"
     )
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
 
-    english_overview = english.split("## Phase 5 direction and two-tier research architecture", 1)[
-        1
-    ].split("## Install and verify", 1)[0]
-    portuguese_overview = portuguese.split(
-        "## Direção da Fase 5 e arquitetura de pesquisa em duas camadas", 1
-    )[1].split("## Instalação e validação", 1)[0]
-
-    for document, overview, required, forbidden in (
+    for document, required in (
         (
             english,
-            english_overview,
             (
-                "open decision runtime and model lab",
-                "pluggable",
-                "MiniLM bi-encoder projection ranker",
-                "not a parameter-count claim",
-                "No candidate is production-approved",
+                "open, local-first decision model project",
+                "model-first development preview",
+                "Small local models. Many typed decisions.",
+                "first generally usable Saracura-owned checkpoint",
+                "not as a benchmark laboratory",
             ),
-            ("Jev replacement", "fastest decision model", "production-ready", "PT-BR optimized"),
         ),
         (
             portuguese,
-            portuguese_overview,
             (
-                "runtime aberto de decisões e laboratório de modelos",
-                "plugável",
-                "ranker histórico de projeção bi-encoder MiniLM",
-                "alegação de número de parâmetros",
-                "Nenhum candidato está aprovado para produção",
-            ),
-            (
-                "substituto do Jev",
-                "modelo de decisão mais rápido",
-                "pronto para produção",
-                "otimizado para PT-BR",
+                "projeto aberto e local-first de modelo de decisão",
+                "preview de desenvolvimento orientado ao modelo",
+                "Modelos locais pequenos. Muitas decisões tipadas.",
+                "primeiro checkpoint próprio e de uso geral do Saracura",
+                "nem como laboratório de benchmark",
             ),
         ),
     ):
         for phrase in required:
             assert phrase in document
-        for phrase in forbidden:
-            assert phrase not in overview
 
-    assert "unqualified" not in adr
-    assert "Gate A" in adr and "Gate B" in adr
-    assert "no runtime effect" in adr
-    assert "automation authorization" in adr
+    english_front_door = english.split("## Evidence, not competitor marketing", 1)[0]
+    portuguese_front_door = portuguese.split("## Evidência, não marketing de concorrentes", 1)[0]
+    for competitor in ("Julia", "Laya", "Jev"):
+        assert competitor not in english_front_door
+        assert competitor not in portuguese_front_door
 
-    english_opening = english.split("## Current scope", 1)[0]
-    portuguese_opening = portuguese.split("## Escopo atual", 1)[0]
-    for stale_claim in ("answer many calibrated questions", "One state. Many calibrated decisions"):
-        assert stale_claim not in english_opening
-    for stale_claim in (
-        "responder muitas perguntas calibradas",
-        "Um estado. Muitas decisões calibradas",
-    ):
-        assert stale_claim not in portuguese_opening
+    assert "Model Preview" in adr and "Calibrated Automation" in adr
+    assert "Model Preview is the immediate milestone" in adr
+    assert "must not be presented as the recommended Saracura model" in adr
+    assert "research-only, local-first engine" not in pyproject
