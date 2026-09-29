@@ -1176,3 +1176,444 @@ def test_frozen_plan_mutation_is_rejected(tmp_path: Path) -> None:
     plan["slots"][0]["locale"] = "changed"
     with pytest.raises(ValueError, match="frozen plan"):
         v02_corpus.OfflineLedger(plan, tmp_path)
+
+
+def _case(
+    option_count: int, *, state: str = "Fictional target label semantic state"
+) -> dict[str, object]:
+    return {
+        "state": state,
+        "question": "Which fictional option matches the rule?",
+        "options": [
+            {"id": f"option_{index}", "description": f"Distinct fictional choice {index}"}
+            for index in range(option_count)
+        ],
+    }
+
+
+def _judgments() -> dict[str, bool]:
+    return {
+        "fictionality_valid": True,
+        "exclusive_options_valid": True,
+        "ambiguity_free": True,
+    }
+
+
+def _raw(value: dict[str, object]) -> bytes:
+    return canonical_json_bytes(cast(JsonValue, value))
+
+
+def test_c1_prompt_contract_is_deterministic_and_six_roles_are_bound() -> None:
+    first = v02_corpus.prompt_contract()
+    assert first == v02_corpus.prompt_contract()
+    assert set(first["template_digests"]) == set(v02_corpus.MODEL_ROLES)
+    assert first["model_bindings"]["training_author"] == v02_corpus._model_identity(
+        "training_author"
+    )
+    assert first["one_invocation_per_role_identity"] is True
+    assert first["retry_policy"] == "forbidden"
+    training = v02_corpus._generate_training_plan()
+    slot = training["slots"][0]
+    request = v02_corpus.role_request(training, slot["slot_id"], "training_author")
+    assert slot["scenario_code"] in request[1]["content"]
+    assert f"option_{slot['gold_position']}" in request[1]["content"]
+    sealed = v02_corpus._generate_sealed_plan()
+    identity = sealed["identities"][0]
+    sealed_request = v02_corpus.role_request(sealed, identity["identity_id"], "sealed_author")
+    assert "fictional_diversity" in sealed_request[1]["content"]
+    assert "target" not in json.loads(sealed_request[1]["content"].split("\n", 1)[1])
+
+
+def test_c1_author_reviewer_annotator_and_adjudicator_round_trip() -> None:
+    training = v02_corpus._generate_training_plan()
+    slot = training["slots"][0]
+    training_case = _case(slot["option_count"])
+    author_response = {
+        **training_case,
+        "answer": f"option_{slot['gold_position']}",
+        "semantic": {
+            "scenario_code": slot["scenario_code"],
+            "criterion_roles": slot["criterion_roles"],
+        },
+        **_judgments(),
+    }
+    parsed_author = v02_corpus.parse_role_response(
+        _raw(author_response), training, slot["slot_id"], "training_author"
+    )
+    author = v02_corpus.role_envelope(
+        parsed_author, training, slot["slot_id"], "training_author", training_case, _all_gates()
+    )
+    assert author["content_digest"] == v02_corpus.case_digest(training_case)
+    reviewer_response = {
+        "answer": author_response["answer"],
+        "semantic": author_response["semantic"],
+        **_judgments(),
+    }
+    parsed_reviewer = v02_corpus.parse_role_response(
+        _raw(reviewer_response), training, slot["slot_id"], "independent_reviewer"
+    )
+    reviewer = v02_corpus.role_envelope(
+        parsed_reviewer,
+        training,
+        slot["slot_id"],
+        "independent_reviewer",
+        training_case,
+        _all_gates(),
+    )
+    assert reviewer["content_digest"] == author["content_digest"]
+    sealed = v02_corpus._generate_sealed_plan()
+    identity = sealed["identities"][0]
+    sealed_case = _case(identity["option_count"])
+    sealed_response = {**sealed_case, "target": "option_0", **_judgments()}
+    parsed_sealed = v02_corpus.parse_role_response(
+        _raw(sealed_response), sealed, identity["identity_id"], "sealed_author"
+    )
+    v02_corpus.role_envelope(
+        parsed_sealed, sealed, identity["identity_id"], "sealed_author", sealed_case, _all_gates()
+    )
+    for role, label in (("sealed_annotator_a", "option_0"), ("sealed_annotator_b", "option_1")):
+        parsed = v02_corpus.parse_role_response(
+            _raw({"label": label, **_judgments()}), sealed, identity["identity_id"], role
+        )
+        envelope = v02_corpus.role_envelope(
+            parsed, sealed, identity["identity_id"], role, sealed_case, _all_gates()
+        )
+        assert envelope["label"] == label
+    parsed_adjudicator = v02_corpus.parse_role_response(
+        _raw({"choice": "option_0", **_judgments()}),
+        sealed,
+        identity["identity_id"],
+        "sealed_adjudicator",
+        ["option_0", "option_1"],
+    )
+    assert (
+        v02_corpus.role_envelope(
+            parsed_adjudicator,
+            sealed,
+            identity["identity_id"],
+            "sealed_adjudicator",
+            sealed_case,
+            _all_gates(),
+            ["option_0", "option_1"],
+        )["choice"]
+        == "option_0"
+    )
+
+
+def test_c1_blind_requests_and_closed_json_fail_closed() -> None:
+    training = v02_corpus._generate_training_plan()
+    slot = training["slots"][0]
+    case = _case(slot["option_count"])
+    request = v02_corpus.role_request(training, slot["slot_id"], "independent_reviewer", case)
+    content = request[1]["content"]
+    assert "gold_position" not in content and "family_id" not in content and "split" not in content
+    with pytest.raises(ValueError, match="exactly a case"):
+        v02_corpus.role_request(
+            training, slot["slot_id"], "independent_reviewer", case, ["option_0", "option_1"]
+        )
+    malformed = (
+        b'{"answer":"option_0","answer":"option_1","semantic":{},'
+        b'"fictionality_valid":true,"exclusive_options_valid":true,"ambiguity_free":true}'
+    )
+    with pytest.raises(ValueError, match="pure JSON"):
+        v02_corpus.parse_role_response(malformed, training, slot["slot_id"], "independent_reviewer")
+    nonfinite = (
+        b'{"answer":"option_0","semantic":{"scenario_code":"x","criterion_roles":[]},'
+        b'"fictionality_valid":NaN,"exclusive_options_valid":true,"ambiguity_free":true}'
+    )
+    with pytest.raises(ValueError, match="pure JSON"):
+        v02_corpus.parse_role_response(nonfinite, training, slot["slot_id"], "independent_reviewer")
+    bad_case = _case(slot["option_count"])
+    cast(list[dict[str, object]], bad_case["options"])[0]["extra"] = "metadata"
+    with pytest.raises(ValueError, match="closed"):
+        v02_corpus.role_request(training, slot["slot_id"], "independent_reviewer", bad_case)
+    bad_unicode = _case(slot["option_count"], state="e\u0301")
+    with pytest.raises(ValueError, match="NFC"):
+        v02_corpus.validate_case(bad_unicode, slot)
+
+
+def test_c1_bilingual_source_and_gate_binding_are_constrained() -> None:
+    training = v02_corpus._generate_training_plan()
+    slots = training["slots"]
+    destination = next(slot for slot in slots if slot["bilingual_pair_id"] is not None)
+    source = next(
+        slot
+        for slot in slots
+        if slot["family_id"] == destination["family_id"]
+        and slot["slot_id"] != destination["slot_id"]
+    )
+    source_case = _case(source["option_count"])
+    request = v02_corpus.role_request(
+        training,
+        destination["slot_id"],
+        "training_author",
+        bilingual_source={"source_identity_id": source["slot_id"], "case": source_case},
+    )
+    assert source["slot_id"] in request[1]["content"]
+    with pytest.raises(ValueError, match="distinct identity"):
+        v02_corpus.role_request(
+            training,
+            destination["slot_id"],
+            "training_author",
+            bilingual_source={"source_identity_id": destination["slot_id"], "case": source_case},
+        )
+    case = _case(destination["option_count"])
+    response = {
+        **case,
+        "answer": f"option_{destination['gold_position']}",
+        "semantic": {
+            "scenario_code": destination["scenario_code"],
+            "criterion_roles": destination["criterion_roles"],
+        },
+        **_judgments(),
+    }
+    parsed = v02_corpus.parse_role_response(
+        _raw(response), training, destination["slot_id"], "training_author"
+    )
+    gates = _all_gates()
+    gates["privacy_valid"] = False
+    gates["fictionality_valid"] = True
+    envelope = v02_corpus.role_envelope(
+        parsed, training, destination["slot_id"], "training_author", case, gates
+    )
+    assert envelope["gates"]["privacy_valid"] is False
+    with pytest.raises(ValueError, match="local gates are closed"):
+        v02_corpus.role_envelope(
+            parsed,
+            training,
+            destination["slot_id"],
+            "training_author",
+            case,
+            {"schema_valid": True},
+        )
+
+
+@pytest.mark.parametrize("role", sorted(v02_corpus.MODEL_ROLES))
+def test_c1_all_requests_provide_explicit_closed_response_schema(role: str) -> None:
+    lane = v02_corpus._ROLE_LANES[role]
+    plan = (
+        v02_corpus._generate_training_plan()
+        if lane == "training"
+        else v02_corpus._generate_sealed_plan()
+    )
+    identity = (plan["slots"] if lane == "training" else plan["identities"])[0]
+    identity_id = identity.get("slot_id", identity.get("identity_id"))
+    case = None if role in {"training_author", "sealed_author"} else _case(identity["option_count"])
+    labels = ["option_0", "option_1"] if role == "sealed_adjudicator" else None
+    first = v02_corpus.role_request(plan, identity_id, role, case, labels)
+    assert first == v02_corpus.role_request(plan, identity_id, role, case, labels)
+    context = json.loads(first[1]["content"].split("\n", 1)[1])
+    schema = context["response_schema"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == v02_corpus._response_fields(role)
+    assert set(schema["properties"]) == set(schema["required"])
+    if role == "sealed_adjudicator":
+        assert context["case"] == case
+        assert set(context["labels"]) == set(labels or [])
+        assert set(schema["properties"]["choice"]["enum"]) == set(labels or [])
+    if role in {
+        "independent_reviewer",
+        "sealed_annotator_a",
+        "sealed_annotator_b",
+        "sealed_adjudicator",
+    }:
+        assert "target" not in context and "semantic" not in context and "answer" not in context
+        assert "gold_position" not in context and "family_id" not in context
+
+
+def test_c1_adjudicator_needs_case_and_cannot_choose_a_third_label() -> None:
+    plan = v02_corpus._generate_sealed_plan()
+    identity = next(row for row in plan["identities"] if row["option_count"] == 3)
+    labels = ["option_0", "option_1"]
+    case = _case(3)
+    with pytest.raises(ValueError, match="needs a case"):
+        v02_corpus.role_request(
+            plan, identity["identity_id"], "sealed_adjudicator", committed_labels=labels
+        )
+    raw = _raw({"choice": "option_2", **_judgments()})
+    with pytest.raises(ValueError, match="committed label"):
+        v02_corpus.parse_role_response(
+            raw, plan, identity["identity_id"], "sealed_adjudicator", labels
+        )
+    with pytest.raises(ValueError, match="committed label"):
+        v02_corpus.role_envelope(
+            json.loads(raw),
+            plan,
+            identity["identity_id"],
+            "sealed_adjudicator",
+            case,
+            _all_gates(),
+            labels,
+        )
+    first = v02_corpus.role_request(
+        plan, identity["identity_id"], "sealed_adjudicator", case, labels
+    )
+    assert first == v02_corpus.role_request(
+        plan, identity["identity_id"], "sealed_adjudicator", case, list(reversed(labels))
+    )
+    with pytest.raises(ValueError, match="closed"):
+        v02_corpus.role_request(
+            plan,
+            identity["identity_id"],
+            "sealed_adjudicator",
+            {**case, "target": "option_0"},
+            labels,
+        )
+
+
+@pytest.mark.parametrize("gate", sorted(v02_corpus.LOCAL_GATES))
+def test_c1_every_gate_is_explicit_and_false_is_preserved(gate: str) -> None:
+    plan = v02_corpus._generate_sealed_plan()
+    identity = plan["identities"][0]
+    case = _case(identity["option_count"])
+    response = {**case, "target": "option_0", **_judgments()}
+    gates = _all_gates()
+    gates[gate] = False
+    result = v02_corpus.role_envelope(
+        response, plan, identity["identity_id"], "sealed_author", case, gates
+    )
+    assert result["gates"][gate] is False
+    gates.pop(gate)
+    with pytest.raises(ValueError):
+        v02_corpus.role_envelope(
+            response, plan, identity["identity_id"], "sealed_author", case, gates
+        )
+    gates[gate] = cast(bool, 1)
+    with pytest.raises(ValueError):
+        v02_corpus.role_envelope(
+            response, plan, identity["identity_id"], "sealed_author", case, gates
+        )
+    with pytest.raises(ValueError):
+        v02_corpus.role_envelope(
+            response,
+            plan,
+            identity["identity_id"],
+            "sealed_author",
+            case,
+            {**_all_gates(), "unknown": True},
+        )
+
+
+@pytest.mark.parametrize("judgment", sorted(v02_corpus._JUDGMENT_FIELDS))
+def test_c1_model_judgment_false_cannot_be_promoted(judgment: str) -> None:
+    plan = v02_corpus._generate_sealed_plan()
+    identity = plan["identities"][0]
+    case = _case(identity["option_count"])
+    response = {**case, "target": "option_0", **_judgments(), judgment: False}
+    result = v02_corpus.role_envelope(
+        response, plan, identity["identity_id"], "sealed_author", case, _all_gates()
+    )
+    assert result["gates"][judgment] is False
+
+
+def test_c1_author_binding_never_normalizes_or_rewrites_content() -> None:
+    plan = v02_corpus._generate_sealed_plan()
+    identity = plan["identities"][0]
+    case = _case(identity["option_count"], state="é")
+    response = {**case, "target": "option_0", **_judgments()}
+    with pytest.raises(ValueError, match="NFC"):
+        v02_corpus.role_envelope(
+            {**response, "state": "e\u0301"},
+            plan,
+            identity["identity_id"],
+            "sealed_author",
+            case,
+            _all_gates(),
+        )
+    with pytest.raises(ValueError, match="differs"):
+        v02_corpus.role_envelope(
+            {**response, "state": "Different facts"},
+            plan,
+            identity["identity_id"],
+            "sealed_author",
+            case,
+            _all_gates(),
+        )
+
+
+def test_c1_schema_and_system_changes_change_contract_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = v02_corpus.prompt_contract()
+    assert set(original["response_schema_digests"]) == set(v02_corpus.MODEL_ROLES)
+    monkeypatch.setattr(v02_corpus, "_ROLE_SYSTEM_TEMPLATE", "changed")
+    assert v02_corpus.prompt_contract()["contract_digest"] != original["contract_digest"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"{} trailing",
+        b"```json\n{}\n```",
+        b"\xff",
+        b'{"semantic":{"x":1,"x":2}}',
+        b'{"x":Infinity}',
+    ],
+)
+def test_c1_malformed_model_bytes_are_rejected(raw: bytes) -> None:
+    plan = v02_corpus._generate_sealed_plan()
+    with pytest.raises(ValueError):
+        v02_corpus.parse_role_response(
+            raw, plan, plan["identities"][0]["identity_id"], "sealed_author"
+        )
+
+
+def test_c1_case_limits_option_ids_and_descriptions() -> None:
+    identity = {"option_count": 2}
+    for invalid in (
+        _case(1),
+        _case(2, state=" "),
+        _case(2, state="line\nnext"),
+        _case(2, state="x" * 16384),
+    ):
+        with pytest.raises(ValueError):
+            v02_corpus.validate_case(invalid, identity)
+    case = _case(2)
+    options = cast(list[dict[str, object]], case["options"])
+    options[1]["description"] = " DISTINCT fictional choice 0 "
+    with pytest.raises(ValueError, match="distinct"):
+        v02_corpus.validate_case(case, identity)
+    options[1]["description"] = "Other"
+    options[1]["id"] = "option_0"
+    with pytest.raises(ValueError, match="id/order"):
+        v02_corpus.validate_case(case, identity)
+
+
+def test_c1_bilingual_context_rejects_other_families_and_blind_roles() -> None:
+    plan = v02_corpus._generate_training_plan()
+    destination = next(row for row in plan["slots"] if row["bilingual_pair_id"] is not None)
+    source = next(row for row in plan["slots"] if row["family_id"] != destination["family_id"])
+    context = {"source_identity_id": source["slot_id"], "case": _case(source["option_count"])}
+    with pytest.raises(ValueError, match="family"):
+        v02_corpus.role_request(
+            plan, destination["slot_id"], "training_author", bilingual_source=context
+        )
+    with pytest.raises(ValueError):
+        v02_corpus.role_request(
+            plan,
+            destination["slot_id"],
+            "independent_reviewer",
+            _case(destination["option_count"]),
+            bilingual_source=context,
+        )
+    with pytest.raises(ValueError):
+        v02_corpus.role_request(plan, destination["slot_id"], "sealed_author")
+    mutated = json.loads(json.dumps(plan))
+    mutated["slots"][0]["gold_position"] = 100
+    with pytest.raises(ValueError, match="frozen plan"):
+        v02_corpus.role_request(mutated, destination["slot_id"], "training_author")
+
+
+def test_c1_semantic_disagreement_is_committed_then_rejected(tmp_path: Path) -> None:
+    _mkdir_0700(tmp_path)
+    plan = v02_corpus._generate_training_plan()
+    author = _training_envelope(plan, "training_author")
+    reviewer = _training_envelope(plan, "independent_reviewer")
+    semantic = cast(dict[str, object], reviewer["semantic"])
+    semantic["criterion_roles"] = list(reversed(cast(list[str], semantic["criterion_roles"])))
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    ledger.commit("training_author", author)
+    ledger.commit("training_reviewer", reviewer)
+    metrics = v02_corpus.reduce_training(plan, ledger.events())
+    assert metrics["accepted"] == 0 and metrics["resolved"] == 1
+    assert metrics["denominator"] == 1600
