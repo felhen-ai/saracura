@@ -1443,8 +1443,7 @@ def validate_committed_phase5d_reports(repository: Path | None = None) -> None:
         root / "benchmarks/results/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json",
     )
     for path in report_paths:
-        if path.is_file():
-            verify_report(path)
+        verify_report(path)
 
 
 def main() -> int:

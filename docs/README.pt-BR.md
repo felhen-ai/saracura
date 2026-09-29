@@ -144,9 +144,13 @@ latência e rejeições sem incluir registros do dataset.
 A estratégia Julia opcional da Fase 5D.1 testa se a média do conjunto completo
 de rotações cíclicas dos critérios reduz esse viés de posição. Ela executa uma
 inferência Julia por critério (quatro neste benchmark), portanto a latência
-cresce com o número de alternativas. O resultado single-pass de 34,32%, o
-acaso de 25% e o baseline lexical de 71,05% continuam sendo a comparação
-publicada até que o novo relatório agregado seja produzido. O experimento foi
+cresce com o número de alternativas. O relatório CPU verificado acerta 161/373
+(`43,16%`) com `98,66%` de cobertura, ganho de `8,85` pontos percentuais sobre
+os 128/373 (`34,32%`) do single-pass. A acurácia planejada por posição sai da
+faixa `16,13%`–`58,51%` para `40,86%`–`46,24%`. A latência warm p50/p95 é
+`87,31/100,11 ms` e a vazão é `8,78 decisões/s`, contra `21,70/25,01 ms` e
+`29,08 decisões/s` no single-pass. Ambos ficam acima dos 25% de acaso e bem
+abaixo dos 265/373 (`71,05%`) do baseline lexical. O experimento foi
 selecionado post-hoc neste mesmo benchmark de desenvolvimento e ainda não tem
 confirmação em conjunto independente; média cíclica foi a única agregação
 explorada nesse ciclo. A estratégia envolve um checkpoint Julia-1 de terceiro,
@@ -168,7 +172,7 @@ uv run --no-sync python -m benchmarks.ptbr_native verify \
   /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
 ```
 
-O relatório v2 registra a estratégia e a quantidade de inferências por decisão
+O relatório v2 versionado registra a estratégia e a quantidade de inferências por decisão
 junto das métricas de acurácia, posição, cobertura, latência e vazão. Os hashes
 de código e do manifesto do ensemble são conferidos contra a árvore Git
 ancestral indicada no próprio relatório, preservando a evidência histórica

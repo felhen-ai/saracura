@@ -318,6 +318,20 @@ def run_benchmark(
         "rejected": rejected,
         "error": errors,
     }
+    limitations = [
+        "Single four-way Banco Central FAQ answer-selection task; not a general quality claim.",
+        "Julia-1 training overlap with this public dataset is unknown.",
+        "The Saracura-owned ranker remains synthetic_only_research.",
+    ]
+    if inference_strategy == "cyclic_mean":
+        limitations.extend(
+            [
+                "Cyclic mean was selected post-hoc on this development benchmark "
+                "and has no held-out confirmation.",
+                "Rotating criterion IDs with descriptions cannot separate position "
+                "bias from label-token preference.",
+            ]
+        )
     report = {
         "schema_version": (
             "phase5d-ptbr-faq-bacen-report.v2"
@@ -366,11 +380,7 @@ def run_benchmark(
         "backend_choice_argmax_divergences": divergences,
         "calibration_status": "uncalibrated",
         "automation_allowed": False,
-        "limitations": [
-            "Single four-way Banco Central FAQ answer-selection task; not a general quality claim.",
-            "Julia-1 training overlap with this public dataset is unknown.",
-            "The Saracura-owned ranker remains synthetic_only_research.",
-        ],
+        "limitations": limitations,
     }
     if inference_strategy == "cyclic_mean":
         assert ensemble_manifest_raw is not None

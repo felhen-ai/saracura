@@ -152,9 +152,13 @@ protocol, latency, and rejection provenance without dataset rows.
 The opt-in Phase 5D.1 Julia strategy tests whether averaging the complete set of
 cyclic criterion rotations reduces that position bias. It performs one Julia
 inference per criterion (four for this benchmark), so latency rises with the
-number of choices. The 34.32% single-pass result, 25% chance level, and 71.05%
-lexical baseline remain the published comparison until the new aggregate report
-is produced. This is a post-hoc experiment on the same development benchmark,
+number of choices. The verified CPU report scores 161/373 (`43.16%`) at `98.66%`
+coverage, up `8.85` percentage points from the 128/373 (`34.32%`) single-pass
+result. Planned position accuracy narrows from `16.13%`–`58.51%` to
+`40.86%`–`46.24%`. Warm p50/p95 latency is `87.31/100.11 ms` and throughput is
+`8.78 decisions/s`, versus `21.70/25.01 ms` and `29.08 decisions/s` single-pass.
+Both remain above the 25% chance level and well below the 265/373 (`71.05%`)
+lexical baseline. This is a post-hoc experiment on the same development benchmark,
 with no held-out confirmation; cyclic mean was the only aggregation explored in
 that cycle. It wraps a third-party Julia-1 checkpoint and does not make it a
 Saracura-owned model. Rotating criterion IDs together with their descriptions
@@ -175,7 +179,7 @@ uv run --no-sync python -m benchmarks.ptbr_native verify \
   /absolute/path/to/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
 ```
 
-The v2 report records the inference strategy and per-decision inference count
+The committed v2 report records the inference strategy and per-decision inference count
 alongside accuracy, position, coverage, latency, and throughput metrics. Its
 code and ensemble-manifest digests are checked against the report's ancestor
 Git tree, so later source edits do not rewrite historical evidence.
