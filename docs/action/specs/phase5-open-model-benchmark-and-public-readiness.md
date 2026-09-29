@@ -18,6 +18,7 @@ related:
   - README.md
   - docs/README.pt-BR.md
   - docs/decisions/0001-two-tier-decision-architecture.md
+  - docs/decisions/0004-model-first-product-direction.md
   - docs/action/specs/phase4c-universal-backend-bakeoff.md
   - docs/action/specs/phase4e4-blind-comparison-and-public-evidence.md
   - docs/action/specs/phase4f1-shadow-evaluation-and-email-reference.md
@@ -27,6 +28,12 @@ sensitivity: public
 ---
 
 # Phase 5 open-model benchmark and public readiness
+
+> **Current direction:** ADR 0004 supersedes this document's original
+> runtime-and-lab positioning and makes a Saracura-owned Model Preview the next
+> public milestone. The Gate A/Gate B manifest contracts below remain
+> historical implementation contracts until a separately reviewed increment
+> revises their schemas; they do not override the model-first roadmap filter.
 
 ## Outcome
 
@@ -56,9 +63,9 @@ The current `saracura-universal-ranker.v0` MiniLM bi-encoder projection ranker r
 
 Use this bounded description until a checkpoint passes the release gates:
 
-> Saracura is an open decision runtime and model lab for local, high-throughput workflows, with a PT-BR-first benchmark and pluggable decision backends.
+> Saracura is an open, local-first decision model project for fast typed decisions at scale, with PT-BR-first evaluation and a language-neutral API.
 
-Do not describe the project as a Jev replacement, the fastest decision model, PT-BR optimized, production-ready, calibrated, or better than another candidate unless the corresponding evidence gate has passed. Jev and Laya may be named as benchmark and architectural references with clear independence language.
+Do not describe the project as a Jev replacement, the fastest decision model, PT-BR optimized, production-ready, calibrated, or better than another candidate unless the corresponding evidence gate has passed. External models may be named inside detailed benchmark records as controls under the same protocol, but no individual third-party checkpoint is the public positioning anchor or recommended Saracura model.
 
 ## Independent benchmark strategy
 

@@ -17,6 +17,7 @@ related:
   - README.md
   - SECURITY.md
   - CONTRIBUTING.md
+  - docs/decisions/0004-model-first-product-direction.md
   - docs/decisions/0001-two-tier-decision-architecture.md
   - docs/decisions/0002-open-model-runtime-and-readiness.md
   - docs/decisions/0003-experimental-systemone-runtime-effect.md
@@ -32,6 +33,10 @@ sensitivity: public
 Saracura is a standalone, local-first typed decision engine. This repository must remain usable without Felhen, AIOS, private services, private data, or private configuration.
 
 ## Current product boundary
+
+- The product direction is model-first. The next public milestone is a downloadable Saracura-owned universal checkpoint with a short local quickstart, model card, PT-BR evaluation, hardware measurements, and an evidence-bounded claim. Runtime adapters, harnesses, and third-party checkpoints are supporting tools, not the product.
+- New adapters, candidate integrations, or benchmark infrastructure enter the model-release critical path only when they directly contribute to checkpoint selection/training, model measurement, local packaging/execution, or correction of a measured weakness. Otherwise defer them.
+- Model Preview and Calibrated Automation are separate milestones. The first model may be published with honest uncalibrated limitations and no automation authorization; calibration and selective-risk gates must remain separate and fail-closed.
 
 - `v1alpha1` is research-only and supports `choice` for known, versioned workflows plus reviewed dynamic workflows. The optional loopback-only `systemone` backend serves `universal-choice@phase5c-systemone.v1`. The direct CPU `julia` backend keeps the default `universal-choice@phase5c-julia.v1` single-pass path and offers the opt-in `universal-choice@phase5d1-julia-cyclic-mean.v1` strategy, which performs N inferences for N criteria (maximum 20 per request); both verify the pinned public Julia-1 checkpoint digest, load only an explicit local snapshot, and return uncalibrated abstained results with automation disabled.
 - The public Phase 4F.1 `ShadowRunner` is a local, read-only evaluator over caller-selected minimized state and an editable `ShadowPolicy`. It has no Gmail, Outlook, IMAP, browser, provider, or network adapter and performs no mailbox reads or mutations. Decisions are content-free, uncalibrated, abstained rankings with `automation_allowed=false`; ranking weights are not confidence. Feedback is descriptive evaluation only and must not be reused for training, retrieval, prompt optimization, or calibration. A provider-specific mailbox adapter remains outside the public increment and requires a separately reviewed private Phase 4F.2.
