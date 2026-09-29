@@ -190,6 +190,9 @@ def validate_routed_manifest(path: Path) -> None:
             raise ValueError(f"{path}: comparison policy must be the canonical file")
         validate_comparison_policy(path)
         return
+    if schema_version == "v02-model-evaluation-protocol.v1":
+        validate_v02_protocol_manifest(path)
+        return
     if schema_version == "phase5-open-model-candidates.v1":
         validate_phase5_candidate_manifest(path)
         return
@@ -1409,6 +1412,13 @@ def _validate_phase5_v3_schema_only_copy(payload: dict[str, Any], path: Path) ->
     ]
     if payload["candidates"] != expected_candidates:
         raise ValueError(f"{path}: unbound v3 must be an exact semantic copy of v2")
+
+
+def validate_v02_protocol_manifest(path: Path) -> None:
+    # One implementation owns both routed and direct validation.
+    from benchmarks.v02_evaluation import validate_protocol_manifest
+
+    validate_protocol_manifest(path)
 
 
 def validate_committed_phase5b_report(repository: Path | None = None) -> None:
