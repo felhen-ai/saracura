@@ -193,6 +193,9 @@ def validate_routed_manifest(path: Path) -> None:
     if schema_version == "v02-model-evaluation-protocol.v1":
         validate_v02_protocol_manifest(path)
         return
+    if schema_version == "v02-distillation-safe-corpus.v1":
+        validate_v02_distillation_safe_corpus(path)
+        return
     if schema_version == "phase5-open-model-candidates.v1":
         validate_phase5_candidate_manifest(path)
         return
@@ -1419,6 +1422,623 @@ def validate_v02_protocol_manifest(path: Path) -> None:
     from benchmarks.v02_evaluation import validate_protocol_manifest
 
     validate_protocol_manifest(path)
+
+
+_HERE = Path(__file__).resolve()
+
+
+def _load_corpus_manifest(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys
+        )
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path}: invalid JSON") from error
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: manifest root must be an object")
+    return payload
+
+
+def validate_v02_distillation_safe_corpus(path: Path) -> None:
+    payload = _load_corpus_manifest(path)
+    from saracura.serialization import canonical_json_bytes
+
+    if path.read_bytes() != canonical_json_bytes(payload) + b"\n":
+        raise ValueError(f"{path}: manifest bytes are not canonical")
+    expected = frozenset(
+        {
+            "schema_version",
+            "protocol_digest",
+            "model_roles",
+            "runtime_policy",
+            "renderer_contracts",
+            "corpus_plan",
+            "sealed_plan",
+            "pilot",
+            "file_schemas",
+            "terminal_values",
+            "privacy_boundary",
+        }
+    )
+    if set(payload) != expected:
+        missing = expected - set(payload)
+        extra = set(payload) - expected
+        if missing:
+            raise ValueError(f"{path}: manifest schema mismatch: missing {sorted(missing)}")
+        raise ValueError(f"{path}: manifest schema is not closed: extra {sorted(extra)}")
+    if payload["schema_version"] != "v02-distillation-safe-corpus.v1":
+        raise ValueError(f"{path}: unsupported manifest schema version")
+    _validate_distillation_models(payload, path)
+    _validate_distillation_runtime(payload, path)
+    _validate_distillation_renderer(payload, path)
+    _validate_distillation_counts(payload, path)
+    _validate_distillation_terminal(payload, path)
+    _validate_distillation_pilot(payload, path)
+    _validate_distillation_digest(payload, path)
+
+
+_DISTILLATION_MODEL_ROLES = {
+    "training_author": {
+        "model": "Qwen/Qwen3.5-9B",
+        "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "family": "Qwen",
+        "license": "Apache-2.0",
+    },
+    "independent_reviewer": {
+        "model": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+        "revision": "68faf511d618ef198fef186659617cfd2eb8e33a",
+        "family": "Mistral",
+        "license": "Apache-2.0",
+    },
+    "sealed_author": {
+        "model": "microsoft/Phi-4-mini-instruct",
+        "revision": "cfbefacb99257ffa30c83adab238a50856ac3083",
+        "family": "Microsoft",
+        "license": "MIT",
+    },
+    "sealed_annotator_a": {
+        "model": "ibm-granite/granite-3.3-8b-instruct",
+        "revision": "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
+        "family": "IBM Granite",
+        "license": "Apache-2.0",
+    },
+    "sealed_annotator_b": {
+        "model": "allenai/OLMo-2-1124-7B-Instruct",
+        "revision": "470b1fba1ae01581f270116362ee4aa1b97f4c84",
+        "family": "Allenai OLMo",
+        "license": "Apache-2.0",
+    },
+    "sealed_adjudicator": {
+        "model": "HuggingFaceTB/SmolLM3-3B",
+        "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+        "family": "HuggingFace TB",
+        "license": "Apache-2.0",
+    },
+}
+
+_FROZEN_DOMAINS_ORDERED = [
+    "email_triage",
+    "customer_support",
+    "finance",
+    "accounting",
+    "commerce",
+    "operations",
+    "scheduling",
+    "document_routing",
+    "browser_action",
+    "security_triage",
+    "content_moderation",
+    "personal_productivity",
+]
+
+_DISTILLATION_DOMAINS = frozenset(_FROZEN_DOMAINS_ORDERED)
+
+
+_FROZEN_SCENARIO_CODES = [
+    "action_required",
+    "informational_only",
+    "suspected_abuse",
+    "missing_information",
+    "deadline_risk",
+    "policy_violation",
+    "duplicate_record",
+    "topic_routing",
+    "rule_eligibility",
+    "urgency_priority",
+    "threshold_approval",
+    "reconciliation_mismatch",
+    "fulfillment_exception",
+    "access_risk",
+    "schedule_conflict",
+    "content_safety",
+]
+
+_FROZEN_CRITERION_ROLES = [
+    "matches_rule",
+    "contradicts_rule",
+    "irrelevant_to_rule",
+    "insufficient_evidence",
+    "unsafe_action",
+    "premature_action",
+    "overbroad_action",
+    "duplicate_action",
+]
+
+_FROZEN_DOMAIN_SCENARIO_MAP = {
+    "email_triage": [
+        "action_required",
+        "informational_only",
+        "suspected_abuse",
+        "urgency_priority",
+        "topic_routing",
+    ],
+    "customer_support": [
+        "action_required",
+        "missing_information",
+        "policy_violation",
+        "urgency_priority",
+        "informational_only",
+    ],
+    "finance": [
+        "threshold_approval",
+        "reconciliation_mismatch",
+        "deadline_risk",
+        "policy_violation",
+        "missing_information",
+    ],
+    "accounting": [
+        "reconciliation_mismatch",
+        "duplicate_record",
+        "threshold_approval",
+        "missing_information",
+        "policy_violation",
+    ],
+    "commerce": [
+        "fulfillment_exception",
+        "duplicate_record",
+        "threshold_approval",
+        "topic_routing",
+        "missing_information",
+    ],
+    "operations": [
+        "fulfillment_exception",
+        "deadline_risk",
+        "action_required",
+        "urgency_priority",
+        "missing_information",
+    ],
+    "scheduling": [
+        "schedule_conflict",
+        "deadline_risk",
+        "action_required",
+        "missing_information",
+        "urgency_priority",
+    ],
+    "document_routing": [
+        "topic_routing",
+        "duplicate_record",
+        "informational_only",
+        "missing_information",
+        "action_required",
+    ],
+    "browser_action": [
+        "access_risk",
+        "action_required",
+        "policy_violation",
+        "suspected_abuse",
+        "missing_information",
+    ],
+    "security_triage": [
+        "access_risk",
+        "suspected_abuse",
+        "policy_violation",
+        "content_safety",
+        "urgency_priority",
+    ],
+    "content_moderation": [
+        "content_safety",
+        "policy_violation",
+        "suspected_abuse",
+        "informational_only",
+        "action_required",
+    ],
+    "personal_productivity": [
+        "action_required",
+        "deadline_risk",
+        "schedule_conflict",
+        "informational_only",
+        "urgency_priority",
+    ],
+}
+
+_FROZEN_FILE_SCHEMAS = {
+    "plan": {
+        "schema_version": "v02-plan.v1",
+        "required_fields": [
+            "schema_version",
+            "lane",
+            "namespace",
+            "seed",
+            "slot_ids",
+            "split_totals",
+            "locale_totals",
+            "pair_totals",
+            "domain_allocation",
+            "option_count_allocation",
+            "gold_position_allocation",
+            "pilot_prefix",
+        ],
+    },
+    "sealed_identity": {
+        "schema_version": "v02-sealed-identity.v1",
+        "required_fields": ["identity_id", "locale", "option_count", "permutation_rank"],
+    },
+    "training_slot": {
+        "schema_version": "v02-training-slot.v1",
+        "required_fields": [
+            "slot_id",
+            "namespace",
+            "split",
+            "locale",
+            "domain",
+            "option_count",
+            "gold_position",
+            "bilingual_pair_id",
+            "content_fingerprint",
+        ],
+    },
+}
+
+_FROZEN_PRIVACY_BOUNDARY = {
+    "aggregate_receipts_only": True,
+    "create_if_absent": True,
+    "manifest_artifact_mode": 600,
+    "no_credentials_in_git": True,
+    "no_labels_in_git": True,
+    "no_paths_in_git": True,
+    "no_prompts_in_git": True,
+    "no_provider_payloads_in_git": True,
+    "no_raw_rows_in_git": True,
+    "raw_artifact_mode": 600,
+    "safe_output_parent_required": True,
+    "symlink_rejection": True,
+}
+
+
+def _validate_ordered_list(value: object, expected: list[str], path: Path, label: str) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"{path}: {label} must be a list")
+    if value != expected:
+        raise ValueError(f"{path}: {label} mismatch")
+
+
+def _validate_domain_scenario_map(value: object, path: Path) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: domain_scenario_map must be an object")
+    if set(value) != set(_FROZEN_DOMAIN_SCENARIO_MAP):
+        missing = set(_FROZEN_DOMAIN_SCENARIO_MAP) - set(value)
+        extra = set(value) - set(_FROZEN_DOMAIN_SCENARIO_MAP)
+        if missing:
+            raise ValueError(f"{path}: domain_scenario_map missing domains: {sorted(missing)}")
+        raise ValueError(f"{path}: domain_scenario_map extra domains: {sorted(extra)}")
+    for domain, scenarios in value.items():
+        if scenarios != _FROZEN_DOMAIN_SCENARIO_MAP[domain]:
+            raise ValueError(f"{path}: domain_scenario_map[{domain}] mismatch")
+
+
+def _validate_file_schemas(value: object, path: Path) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: file_schemas must be an object")
+    if set(value) != set(_FROZEN_FILE_SCHEMAS):
+        missing = set(_FROZEN_FILE_SCHEMAS) - set(value)
+        extra = set(value) - set(_FROZEN_FILE_SCHEMAS)
+        if missing:
+            raise ValueError(f"{path}: file_schemas missing: {sorted(missing)}")
+        raise ValueError(f"{path}: file_schemas extra: {sorted(extra)}")
+    for schema_key, expected in _FROZEN_FILE_SCHEMAS.items():
+        actual = value[schema_key]
+        if not isinstance(actual, dict):
+            raise ValueError(f"{path}: file_schemas.{schema_key} must be an object")
+        if set(actual) != {"schema_version", "required_fields"}:
+            raise ValueError(f"{path}: file_schemas.{schema_key} schema mismatch")
+        if actual.get("schema_version") != expected["schema_version"]:
+            raise ValueError(f"{path}: file_schemas.{schema_key} schema_version mismatch")
+        if sorted(actual.get("required_fields", [])) != sorted(expected["required_fields"]):
+            raise ValueError(f"{path}: file_schemas.{schema_key} required_fields mismatch")
+
+
+def _validate_privacy_boundary(value: object, path: Path) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: privacy_boundary must be an object")
+    if set(value) != set(_FROZEN_PRIVACY_BOUNDARY):
+        missing = set(_FROZEN_PRIVACY_BOUNDARY) - set(value)
+        extra = set(value) - set(_FROZEN_PRIVACY_BOUNDARY)
+        if missing:
+            raise ValueError(f"{path}: privacy_boundary missing: {sorted(missing)}")
+        raise ValueError(f"{path}: privacy_boundary extra: {sorted(extra)}")
+    for key, expected in _FROZEN_PRIVACY_BOUNDARY.items():
+        if value.get(key) != expected:
+            raise ValueError(f"{path}: privacy_boundary.{key} mismatch")
+
+
+def _validate_distillation_models(payload: dict[str, Any], path: Path) -> None:
+    roles = payload.get("model_roles")
+    if not isinstance(roles, dict) or set(roles) != set(_DISTILLATION_MODEL_ROLES):
+        raise ValueError(f"{path}: model_roles schema mismatch")
+    for key, expected in _DISTILLATION_MODEL_ROLES.items():
+        actual = roles[key]
+        if not isinstance(actual, dict):
+            raise ValueError(f"{path}: model role {key} must be an object")
+        if set(actual) != set(expected):
+            raise ValueError(f"{path}: model role {key} fields mismatch")
+        for field, value in expected.items():
+            if actual.get(field) != value:
+                raise ValueError(f"{path}: model {key} {field} mismatch")
+
+
+def _validate_distillation_runtime(payload: dict[str, Any], path: Path) -> None:
+    runtime = payload.get("runtime_policy")
+    if not isinstance(runtime, dict):
+        raise ValueError(f"{path}: runtime_policy must be an object")
+    expected = {
+        "serving_runtime": "vLLM",
+        "container": "pinned-by-digest",
+        "quantization": "bitsandbytes-nf4",
+        "compute": "bf16",
+        "gpu_class": "NVIDIA-A100-80GiB-or-equivalent",
+        "gpu_fallback": "A100-40GiB-or-A6000-48GiB-or-L40S-48GiB-only-after-NF4-preflight",
+        "gpu_forbidden": "24GiB-without-NF4-preflight",
+        "sequence": "sequential",
+        "no_hosted_api": True,
+    }
+    if set(runtime) != set(expected):
+        raise ValueError(f"{path}: runtime_policy schema mismatch")
+    for key, value in expected.items():
+        if runtime.get(key) != value:
+            raise ValueError(f"{path}: runtime_policy {key} mismatch")
+
+
+def _validate_distillation_renderer(payload: dict[str, Any], path: Path) -> None:
+    renderer = payload.get("renderer_contracts")
+    if not isinstance(renderer, dict):
+        raise ValueError(f"{path}: renderer_contracts must be an object")
+    expected: dict[str, Any] = {
+        "kev_rendering_function_digest": (
+            "9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66"
+        ),
+        "candidate_renderer_source_revision": "9c41005b2180347c3c646dfc9e50c4428483ec6b",
+        "candidate_renderer_source_sha256": (
+            "d78fab645f29513a62816e594d10296b02bf166ba77835c55db5eda80c7f1978"
+        ),
+        "candidate_rendering_digest": (
+            "0f5592b54f096ac0328b45d69e5a74b9cb579a804f2349fc4ceea9b1f8a40e40"
+        ),
+        "candidate_renderer_config": {
+            "max_state": 384,
+            "max_branch": 1024,
+            "max_packed": 2048,
+            "strict": True,
+            "option_isolation": False,
+            "special_embeddings": False,
+            "lora_targets": "all",
+            "head_dim": 256,
+        },
+        "max_rendered_input_tokens": 512,
+        "truncation_disabled": True,
+        "preflight_before_every_call": True,
+    }
+    if set(renderer) != set(expected):
+        raise ValueError(f"{path}: renderer_contracts schema mismatch")
+    for key, value in expected.items():
+        if key == "candidate_renderer_config":
+            config = renderer.get(key)
+            if not isinstance(config, dict):
+                raise ValueError(f"{path}: renderer config schema mismatch")
+            config_dict: dict[str, Any] = config
+            if set(config_dict) != set(value):
+                raise ValueError(f"{path}: renderer config schema mismatch")
+            for k, v in value.items():
+                if config_dict.get(k) != v:
+                    raise ValueError(f"{path}: renderer config {k} mismatch")
+        else:
+            if renderer.get(key) != value:
+                raise ValueError(f"{path}: renderer {key} mismatch")
+
+
+def _validate_distillation_counts(payload: dict[str, Any], path: Path) -> None:
+    corpus = payload.get("corpus_plan")
+    if not isinstance(corpus, dict):
+        raise ValueError(f"{path}: corpus_plan must be an object")
+    expected_corpus_keys = frozenset(
+        {
+            "namespace",
+            "total_slots",
+            "seed",
+            "splits",
+            "total_bilingual_pairs",
+            "domains",
+            "scenario_codes",
+            "criterion_roles",
+            "domain_scenario_map",
+            "option_counts",
+            "locale_totals",
+            "acceptance_floor",
+        }
+    )
+    if set(corpus) != expected_corpus_keys:
+        missing = expected_corpus_keys - set(corpus)
+        extra = set(corpus) - expected_corpus_keys
+        if missing:
+            raise ValueError(f"{path}: corpus_plan missing fields: {sorted(missing)}")
+        raise ValueError(f"{path}: corpus_plan schema mismatch: extra {sorted(extra)}")
+    if corpus.get("namespace") != "saracura-v02-cleanroom-v1":
+        raise ValueError(f"{path}: namespace mismatch")
+    if corpus.get("total_slots") != 1600:
+        raise ValueError(f"{path}: total_slots mismatch")
+    if corpus.get("seed") != 20260929:
+        raise ValueError(f"{path}: seed mismatch")
+    if corpus.get("total_bilingual_pairs") != 300:
+        raise ValueError(f"{path}: bilingual_pairs mismatch")
+    if set(corpus.get("domains", [])) != _DISTILLATION_DOMAINS:
+        raise ValueError(f"{path}: domains mismatch")
+    if corpus.get("domains") != _FROZEN_DOMAINS_ORDERED:
+        raise ValueError(f"{path}: domain order mismatch")
+    _validate_ordered_list(
+        corpus.get("scenario_codes"), _FROZEN_SCENARIO_CODES, path, "scenario_codes"
+    )
+    _validate_ordered_list(
+        corpus.get("criterion_roles"), _FROZEN_CRITERION_ROLES, path, "criterion_roles"
+    )
+    _validate_domain_scenario_map(corpus.get("domain_scenario_map"), path)
+    if corpus.get("option_counts") != [2, 3, 4, 5, 6, 7, 8]:
+        raise ValueError(f"{path}: option_counts mismatch")
+    splits = corpus.get("splits")
+    if not isinstance(splits, dict) or set(splits) != {"train", "internal_dev"}:
+        raise ValueError(f"{path}: splits schema mismatch")
+    train = splits.get("train")
+    internal_dev = splits.get("internal_dev")
+    for split_name, split_data in (("train", train), ("internal_dev", internal_dev)):
+        if not isinstance(split_data, dict):
+            raise ValueError(f"{path}: split {split_name} must be an object")
+        split_keys = {"total", "locale_pt_br", "locale_english", "bilingual_pairs"}
+        if set(split_data) != split_keys:
+            raise ValueError(f"{path}: split {split_name} schema mismatch")
+    if train is None or internal_dev is None:
+        raise ValueError(f"{path}: split data must be objects")
+    if train.get("total") != 1360 or internal_dev.get("total") != 240:
+        raise ValueError(f"{path}: split totals mismatch")
+    if train.get("locale_pt_br") != 816 or train.get("locale_english") != 544:
+        raise ValueError(f"{path}: train locale mismatch")
+    if internal_dev.get("locale_pt_br") != 144 or internal_dev.get("locale_english") != 96:
+        raise ValueError(f"{path}: internal_dev locale mismatch")
+    if train.get("bilingual_pairs") != 255 or internal_dev.get("bilingual_pairs") != 45:
+        raise ValueError(f"{path}: bilingual pair split mismatch")
+    locales = corpus.get("locale_totals")
+    if not isinstance(locales, dict) or set(locales) != {"pt_br", "english"}:
+        raise ValueError(f"{path}: locale_totals schema mismatch")
+    if locales.get("pt_br") != 960 or locales.get("english") != 640:
+        raise ValueError(f"{path}: locale totals mismatch")
+    floor = corpus.get("acceptance_floor")
+    if not isinstance(floor, dict):
+        raise ValueError(f"{path}: acceptance_floor must be an object")
+    floor_keys = {
+        "min_accepted_rows",
+        "min_train_accepted",
+        "min_internal_dev_accepted",
+        "min_ptbr_pct",
+        "min_english_pct",
+        "min_train_cell",
+        "min_internal_dev_cell",
+        "min_train_domain",
+        "min_internal_dev_domain",
+        "min_complete_bilingual_pairs",
+    }
+    if set(floor) != floor_keys:
+        raise ValueError(f"{path}: acceptance_floor schema mismatch")
+    floor_values = {
+        "min_accepted_rows": 1200,
+        "min_train_accepted": 1020,
+        "min_internal_dev_accepted": 180,
+        "min_ptbr_pct": 0.6,
+        "min_english_pct": 0.2,
+        "min_train_cell": 20,
+        "min_internal_dev_cell": 10,
+        "min_train_domain": 60,
+        "min_internal_dev_domain": 10,
+        "min_complete_bilingual_pairs": 120,
+    }
+    for key, value in floor_values.items():
+        if floor.get(key) != value:
+            raise ValueError(f"{path}: acceptance_floor {key} mismatch")
+
+    file_schemas = payload.get("file_schemas")
+    _validate_file_schemas(file_schemas, path)
+    privacy = payload.get("privacy_boundary")
+    _validate_privacy_boundary(privacy, path)
+
+    sealed = payload.get("sealed_plan")
+    if not isinstance(sealed, dict):
+        raise ValueError(f"{path}: sealed_plan must be an object")
+    sealed_keys = {
+        "seed",
+        "total_identities",
+        "identities_per_option_count",
+        "option_counts",
+        "pilot_prefix_count",
+        "pilot_per_option_count",
+        "permutation_selection_seed",
+        "permutation_subset_size",
+        "author_target_hidden",
+    }
+    if set(sealed) != sealed_keys:
+        raise ValueError(f"{path}: sealed_plan schema mismatch")
+    if sealed.get("seed") != 20260930:
+        raise ValueError(f"{path}: sealed seed mismatch")
+    if sealed.get("total_identities") != 140:
+        raise ValueError(f"{path}: sealed total_identities mismatch")
+    if sealed.get("identities_per_option_count") != 20:
+        raise ValueError(f"{path}: sealed identities_per_option_count mismatch")
+    if sealed.get("option_counts") != [2, 3, 4, 5, 6, 7, 8]:
+        raise ValueError(f"{path}: sealed option_counts mismatch")
+    if sealed.get("pilot_prefix_count") != 21:
+        raise ValueError(f"{path}: sealed pilot_prefix_count mismatch")
+    if sealed.get("pilot_per_option_count") != 3:
+        raise ValueError(f"{path}: sealed pilot_per_option_count mismatch")
+    if sealed.get("permutation_selection_seed") != "saracura-v02-sealed-permutation-v1":
+        raise ValueError(f"{path}: sealed permutation seed mismatch")
+    if sealed.get("permutation_subset_size") != 50:
+        raise ValueError(f"{path}: sealed permutation subset mismatch")
+    if sealed.get("author_target_hidden") is not True:
+        raise ValueError(f"{path}: author_target_hidden must be true")
+
+
+def _validate_distillation_terminal(payload: dict[str, Any], path: Path) -> None:
+    terminals = payload.get("terminal_values")
+    if not isinstance(terminals, dict):
+        raise ValueError(f"{path}: terminal_values must be an object")
+    expected = {
+        "READY": "all-artifacts-sealed-validated-review-passed",
+        "NO_GO": "feasibility-stop-proves-acceptance-floor-unreachable",
+        "BLOCKED_DATA_RIGHTS": "rights-license-readiness-receipt-negative",
+        "BLOCKED_SEALED_TEST": "frozen-sealed-plan-cannot-produce-compliant-capsule",
+        "BLOCKED_REVIEW": "independent-review-returns-negative",
+        "BLOCKED_RUNTIME": "pinned-models-cannot-pass-frozen-self-hosted-runtime-preflight",
+    }
+    if set(terminals) != set(expected):
+        raise ValueError(f"{path}: terminal_values schema mismatch")
+    for key, value in expected.items():
+        if terminals.get(key) != value:
+            raise ValueError(f"{path}: terminal {key} mismatch")
+
+
+def _validate_distillation_pilot(payload: dict[str, Any], path: Path) -> None:
+    pilot = payload.get("pilot")
+    if not isinstance(pilot, dict):
+        raise ValueError(f"{path}: pilot must be an object")
+    expected = {
+        "training_slots": 140,
+        "train_slots": 119,
+        "internal_dev_slots": 21,
+        "complete_bilingual_pairs": 21,
+        "slots_per_locale_cardinality_cell": 10,
+        "acceptance_floor_total": 106,
+        "acceptance_floor_per_locale": 53,
+        "acceptance_floor_per_option_count": 15,
+        "assignment": "seeded-round-robin-preserving-final-plan-totals",
+    }
+    if set(pilot) != set(expected):
+        raise ValueError(f"{path}: pilot schema mismatch")
+    for key, value in expected.items():
+        if pilot.get(key) != value:
+            raise ValueError(f"{path}: pilot {key} mismatch")
+
+
+def _validate_distillation_digest(payload: dict[str, Any], path: Path) -> None:
+    digest = payload.get("protocol_digest")
+    if not isinstance(digest, str) or digest != "b1-offline-plan-r4":
+        raise ValueError(f"{path}: protocol_digest mismatch")
 
 
 def validate_committed_phase5b_report(repository: Path | None = None) -> None:
