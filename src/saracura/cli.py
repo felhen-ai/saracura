@@ -20,7 +20,11 @@ from saracura.backends import (
     SystemOneBackend,
 )
 from saracura.backends.base import BackendCapabilities
-from saracura.backends.julia import JULIA_MODEL_REVISION, JULIA_WORKFLOW_REVISION
+from saracura.backends.julia import (
+    JULIA_MODEL_REVISION,
+    JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION,
+    JULIA_WORKFLOW_REVISION,
+)
 from saracura.backends.saracura_universal import (
     SaracuraBackendError,
     VerifiedSaracuraCapsule,
@@ -109,16 +113,21 @@ _SYSTEMONE_PREVALIDATION_CAPABILITIES = BackendCapabilities(
     dynamic_workflows=frozenset({("universal-choice", "phase5c-systemone.v1")}),
 )
 
-_JULIA_PREVALIDATION_CAPABILITIES = BackendCapabilities(
-    execution_tier="universal",
-    decision_types=frozenset({"choice"}),
-    max_questions=10,
-    max_criteria=20,
-    execution_boundary="direct-local-julia-1-cpu",
-    cold_warm_semantics="resident-after-first-request",
-    quality_claims=False,
-    dynamic_workflows=frozenset({("universal-choice", JULIA_WORKFLOW_REVISION)}),
-)
+
+def _julia_prevalidation_capabilities(position_ensemble: bool) -> BackendCapabilities:
+    revision = (
+        JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION if position_ensemble else JULIA_WORKFLOW_REVISION
+    )
+    return BackendCapabilities(
+        execution_tier="universal",
+        decision_types=frozenset({"choice"}),
+        max_questions=10,
+        max_criteria=21 if position_ensemble else 20,
+        execution_boundary="direct-local-julia-1-cpu",
+        cold_warm_semantics="resident-after-first-request",
+        quality_claims=False,
+        dynamic_workflows=frozenset({("universal-choice", revision)}),
+    )
 
 
 class _ArgumentFailure(ValueError):
@@ -232,7 +241,11 @@ def _require_julia_arguments(values: argparse.Namespace) -> JuliaBackend:
             "Julia commands reject arguments for other backends.",
             "/backend",
         )
-    return JuliaBackend(model_snapshot=values.model_snapshot, device=values.device)
+    return JuliaBackend(
+        model_snapshot=values.model_snapshot,
+        device=values.device,
+        position_ensemble=getattr(values, "julia_position_ensemble", False),
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -259,6 +272,14 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("--request", type=Path, required=True)
     decide.add_argument("--calibration", type=Path)
     decide.add_argument("--timing", action="store_true")
+    decide.add_argument(
+        "--julia-position-ensemble",
+        action="store_true",
+        help=(
+            "use cyclic mean for Julia; performs one inference per criterion and trades "
+            "latency for reduced position bias"
+        ),
+    )
     _add_minilm_arguments(decide)
     _add_laya_arguments(decide)
     _add_systemone_arguments(decide)
@@ -786,7 +807,7 @@ def _run_julia_decide(values: argparse.Namespace) -> int:
         request, _state_payload = _prevalidate_request(
             values.request,
             execution_tier="universal",
-            capabilities=_JULIA_PREVALIDATION_CAPABILITIES,
+            capabilities=_julia_prevalidation_capabilities(values.julia_position_ensemble),
             expected_model_revision=JULIA_MODEL_REVISION,
         )
         backend = _require_julia_arguments(values)
@@ -1094,6 +1115,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         values = _parser().parse_args(argv)
         if values.command == "decide":
+            if values.backend != "julia" and values.julia_position_ensemble:
+                raise SaracuraError(
+                    ErrorCode.REQUEST_INVALID,
+                    "--julia-position-ensemble is valid only with --backend julia.",
+                    "/backend",
+                )
             if values.backend == "laya-universal":
                 return _run_laya_decide(values)
             if values.backend == "saracura-universal":

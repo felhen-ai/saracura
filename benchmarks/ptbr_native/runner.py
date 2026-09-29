@@ -16,7 +16,13 @@ from typing import Any, cast
 
 from pydantic import JsonValue, ValidationError
 
-from benchmarks.ptbr_native.models import BenchmarkReport, load_protocol_manifest, load_report
+from benchmarks.ptbr_native.models import (
+    BenchmarkReportAny,
+    BenchmarkReportV2,
+    load_position_ensemble_manifest,
+    load_protocol_manifest,
+    load_report,
+)
 from benchmarks.ptbr_native.protocol import (
     OPTION_IDS,
     build_plan,
@@ -54,6 +60,7 @@ DATA_FILES = {
 _RELEASE_PATHS = (
     "benchmarks/ptbr_native",
     "benchmarks/manifests/phase5d-ptbr-native.v1.json",
+    "benchmarks/manifests/phase5d1-position-ensemble.v1.json",
     "benchmarks/manifests/training-data-source-policies.v4.json",
     "benchmarks/data_policy_registry.py",
     "benchmarks/validate_manifests.py",
@@ -102,25 +109,66 @@ def _git_output(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def release_code_sha256(root: Path) -> str:
-    files: set[str] = set()
-    for path in _RELEASE_PATHS:
-        candidate = root / path
-        if candidate.is_dir():
-            for child in candidate.rglob("*"):
-                if child.is_file() and "__pycache__" not in child.parts:
-                    files.add(child.relative_to(root).as_posix())
-        elif candidate.is_file():
-            files.add(candidate.relative_to(root).as_posix())
+def release_code_sha256(root: Path, commit: str = "HEAD") -> str:
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", commit, "--", *_RELEASE_PATHS],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    files: list[tuple[str, str]] = []
+    for entry in listing.split(b"\0"):
+        if not entry:
+            continue
+        metadata, raw_path = entry.split(b"\t", 1)
+        mode, kind, object_id = metadata.decode("ascii").split(" ")
+        relative = raw_path.decode("utf-8")
+        if kind == "blob" and mode in {"100644", "100755", "120000"}:
+            files.append((relative, object_id))
     digest = hashlib.sha256()
-    for relative in sorted(files):
+    for relative, object_id in sorted(files):
         encoded = relative.encode("utf-8")
-        content = (root / relative).read_bytes()
+        content = subprocess.run(
+            ["git", "cat-file", "blob", object_id],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        ).stdout
         digest.update(len(encoded).to_bytes(8, "big"))
         digest.update(encoded)
         digest.update(len(content).to_bytes(8, "big"))
         digest.update(content)
     return digest.hexdigest()
+
+
+def _assert_release_paths_clean(root: Path) -> None:
+    status = _git_output(
+        root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--",
+        *_RELEASE_PATHS,
+    )
+    changed = []
+    for line in status.splitlines():
+        relative = line[3:].strip().strip('"')
+        if "__pycache__" in Path(relative).parts or relative.endswith(".pyc"):
+            continue
+        changed.append(relative)
+    if changed:
+        raise ValueError("benchmark release paths have tracked, untracked, or ignored changes")
+
+
+def _git_blob_sha256(root: Path, commit: str, path: str) -> str:
+    content = subprocess.run(
+        ["git", "show", f"{commit}:{path}"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    return hashlib.sha256(content).hexdigest()
 
 
 def _dependency_versions() -> dict[str, str]:
@@ -139,11 +187,16 @@ def _backend(
     model_snapshot: Path | None,
     encoder_snapshot: Path | None,
     training_capsule: Path | None,
+    inference_strategy: str = "single_pass",
 ) -> JuliaBackend | SaracuraUniversalBackend:
     if name == "julia":
         if model_snapshot is None or not model_snapshot.is_absolute():
             raise ValueError("Julia requires an absolute model snapshot")
-        return JuliaBackend(model_snapshot=model_snapshot, device="cpu")
+        return JuliaBackend(
+            model_snapshot=model_snapshot,
+            device="cpu",
+            position_ensemble=inference_strategy == "cyclic_mean",
+        )
     if name == "saracura-universal":
         if (
             encoder_snapshot is None
@@ -186,15 +239,29 @@ def run_benchmark(
     model_snapshot: Path | None = None,
     encoder_snapshot: Path | None = None,
     training_capsule: Path | None = None,
-) -> BenchmarkReport:
+    inference_strategy: str = "single_pass",
+) -> BenchmarkReportAny:
+    root = Path(__file__).resolve().parents[2]
+    _assert_release_paths_clean(root)
+    if inference_strategy not in {"single_pass", "cyclic_mean"}:
+        raise ValueError("unsupported inference strategy")
+    if inference_strategy == "cyclic_mean" and backend_name != "julia":
+        raise ValueError("cyclic_mean strategy is supported only by Julia")
     manifest_raw = MANIFEST_PATH.read_bytes()
     load_protocol_manifest(manifest_raw)
+    ensemble_manifest_raw = None
+    if inference_strategy == "cyclic_mean":
+        ensemble_manifest_raw = (
+            MANIFEST_PATH.parent / "phase5d1-position-ensemble.v1.json"
+        ).read_bytes()
+        load_position_ensemble_manifest(ensemble_manifest_raw)
     plan = build_plan(*load_dataset(data_root))
     backend = _backend(
         backend_name,
         model_snapshot=model_snapshot,
         encoder_snapshot=encoder_snapshot,
         training_capsule=training_capsule,
+        inference_strategy=inference_strategy,
     )
     engine = DecisionEngine(backend=backend, workflows=WorkflowRegistry(()), calibrations={})
     valid = correct = rejected = errors = divergences = 0
@@ -211,7 +278,12 @@ def run_benchmark(
     try:
         for row in plan:
             positions[row.gold_position]["planned"] += 1
-            request = build_request(row, model=backend.model.revision, backend=backend_name)
+            request = build_request(
+                row,
+                model=backend.model.revision,
+                backend=backend_name,
+                strategy=inference_strategy,
+            )
             row_started = time.perf_counter()
             try:
                 response = engine.decide(request)
@@ -237,7 +309,7 @@ def run_benchmark(
     finally:
         backend.close()
     elapsed = time.perf_counter() - started
-    root = Path(__file__).resolve().parents[2]
+    code_commit = _git_output(root, "rev-parse", "HEAD")
     counts = {
         "planned": 373,
         "valid": valid,
@@ -246,12 +318,30 @@ def run_benchmark(
         "rejected": rejected,
         "error": errors,
     }
+    limitations = [
+        "Single four-way Banco Central FAQ answer-selection task; not a general quality claim.",
+        "Julia-1 training overlap with this public dataset is unknown.",
+        "The Saracura-owned ranker remains synthetic_only_research.",
+    ]
+    if inference_strategy == "cyclic_mean":
+        limitations.extend(
+            [
+                "Cyclic mean was selected post-hoc on this development benchmark "
+                "and has no held-out confirmation.",
+                "Rotating criterion IDs with descriptions cannot separate position "
+                "bias from label-token preference.",
+            ]
+        )
     report = {
-        "schema_version": "phase5d-ptbr-faq-bacen-report.v1",
+        "schema_version": (
+            "phase5d-ptbr-faq-bacen-report.v2"
+            if inference_strategy == "cyclic_mean"
+            else "phase5d-ptbr-faq-bacen-report.v1"
+        ),
         "benchmark_id": "phase5d-ptbr-faq-bacen",
         "generated_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "code_commit": _git_output(root, "rev-parse", "HEAD"),
-        "release_code_sha256": release_code_sha256(root),
+        "code_commit": code_commit,
+        "release_code_sha256": release_code_sha256(root, code_commit),
         "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
         "protocol_plan_sha256": "089a83874ed0cc57da45eb143f4b6f6494125dbfabddb660f8e7ca5105175f6f",
         "backend": backend_name,
@@ -290,16 +380,23 @@ def run_benchmark(
         "backend_choice_argmax_divergences": divergences,
         "calibration_status": "uncalibrated",
         "automation_allowed": False,
-        "limitations": [
-            "Single four-way Banco Central FAQ answer-selection task; not a general quality claim.",
-            "Julia-1 training overlap with this public dataset is unknown.",
-            "The Saracura-owned ranker remains synthetic_only_research.",
-        ],
+        "limitations": limitations,
     }
+    if inference_strategy == "cyclic_mean":
+        assert ensemble_manifest_raw is not None
+        report.update(
+            {
+                "inference_strategy": "cyclic_mean",
+                "inferences_per_valid_decision": 4,
+                "position_ensemble_manifest_sha256": hashlib.sha256(
+                    ensemble_manifest_raw
+                ).hexdigest(),
+            }
+        )
     return load_report(canonical_json_bytes(cast(JsonValue, report)))
 
 
-def atomic_write_report(path: Path, report: BenchmarkReport) -> None:
+def atomic_write_report(path: Path, report: BenchmarkReportAny) -> None:
     if not path.is_absolute() or not path.parent.is_dir():
         raise ValueError("output must be an absolute path in an existing directory")
     raw = canonical_json_bytes(cast(JsonValue, report.model_dump(mode="json"))) + b"\n"
@@ -326,21 +423,48 @@ def atomic_write_report(path: Path, report: BenchmarkReport) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def verify_report(path: Path) -> BenchmarkReport:
+def verify_report(path: Path) -> BenchmarkReportAny:
     if not path.is_file():
         raise ValueError("report must be an existing file")
     report = load_report(path.read_bytes())
     root = Path(__file__).resolve().parents[2]
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", report.code_commit, "HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    if ancestor.returncode != 0:
+        raise ValueError("report code commit is not an ancestor of the checkout")
+    strategy = getattr(report, "inference_strategy", None)
     expected_names = {
-        "julia": "phase5d-ptbr-faq-bacen-julia-cpu.json",
-        "saracura-universal": "phase5d-ptbr-faq-bacen-saracura-universal-cpu.json",
+        ("phase5d-ptbr-faq-bacen-report.v1", "julia", None): (
+            "phase5d-ptbr-faq-bacen-julia-cpu.json"
+        ),
+        ("phase5d-ptbr-faq-bacen-report.v1", "saracura-universal", None): (
+            "phase5d-ptbr-faq-bacen-saracura-universal-cpu.json"
+        ),
+        ("phase5d-ptbr-faq-bacen-report.v2", "julia", "cyclic_mean"): (
+            "phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json"
+        ),
     }
-    if path.name != expected_names[report.backend]:
-        raise ValueError("report filename does not match its backend")
-    if report.manifest_sha256 != hashlib.sha256(MANIFEST_PATH.read_bytes()).hexdigest():
-        raise ValueError("report manifest digest does not match the checkout")
-    if report.release_code_sha256 != release_code_sha256(root):
-        raise ValueError("report code digest does not match the checkout")
+    if path.name != expected_names.get((report.schema_version, report.backend, strategy)):
+        raise ValueError("report filename does not match its schema, backend, and strategy")
+    expected_manifest = _git_blob_sha256(
+        root, report.code_commit, "benchmarks/manifests/phase5d-ptbr-native.v1.json"
+    )
+    if report.manifest_sha256 != expected_manifest:
+        raise ValueError("report manifest digest does not match its historical Git tree")
+    if report.release_code_sha256 != release_code_sha256(root, report.code_commit):
+        raise ValueError("report code digest does not match its historical Git tree")
+    if isinstance(report, BenchmarkReportV2):
+        ensemble_manifest = _git_blob_sha256(
+            root,
+            report.code_commit,
+            "benchmarks/manifests/phase5d1-position-ensemble.v1.json",
+        )
+        if report.position_ensemble_manifest_sha256 != ensemble_manifest:
+            raise ValueError("report ensemble manifest digest does not match its Git tree")
     model_identity = (
         (JULIA_MODEL_ID, JULIA_MODEL_REVISION, JULIA_CHECKPOINT_SHA256)
         if report.backend == "julia"
@@ -356,12 +480,4 @@ def verify_report(path: Path) -> BenchmarkReport:
         report.checkpoint_sha256,
     ) != model_identity:
         raise ValueError("report model identity does not match the checkout")
-    ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", report.code_commit, "HEAD"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-    )
-    if ancestor.returncode != 0:
-        raise ValueError("report code commit is not an ancestor of the checkout")
     return report

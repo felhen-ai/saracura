@@ -191,11 +191,17 @@ def lexical_baseline_correct(plan: tuple[PlannedRow, ...]) -> int:
     return correct
 
 
-def build_request(row: PlannedRow, *, model: str, backend: str) -> DecisionRequest:
+def build_request(
+    row: PlannedRow, *, model: str, backend: str, strategy: str = "single_pass"
+) -> DecisionRequest:
     revisions = {
         "julia": "phase5c-julia.v1",
         "saracura-universal": "phase4e-saracura-ranker.v1",
     }
+    if backend == "julia" and strategy == "cyclic_mean":
+        revisions["julia"] = "phase5d1-julia-cyclic-mean.v1"
+    elif strategy != "single_pass":
+        raise ValueError("cyclic_mean strategy is supported only by Julia")
     try:
         revision = revisions[backend]
     except KeyError:

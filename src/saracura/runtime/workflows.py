@@ -24,6 +24,7 @@ UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4d-laya.v1"
 SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION = "phase4e-saracura-ranker.v1"
 SYSTEMONE_CHOICE_WORKFLOW_REVISION = "phase5c-systemone.v1"
 JULIA_CHOICE_WORKFLOW_REVISION = "phase5c-julia.v1"
+JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION = "phase5d1-julia-cyclic-mean.v1"
 _UNIVERSAL_CHOICE_LOCALES = frozenset({"pt-BR", "en"})
 _UNIVERSAL_CHOICE_MAX_QUESTIONS = 10
 _UNIVERSAL_CHOICE_MAX_CRITERIA = 20
@@ -57,6 +58,7 @@ class WorkflowRegistry:
                 (UNIVERSAL_CHOICE_WORKFLOW_ID, SARACURA_UNIVERSAL_CHOICE_WORKFLOW_REVISION),
                 (UNIVERSAL_CHOICE_WORKFLOW_ID, SYSTEMONE_CHOICE_WORKFLOW_REVISION),
                 (UNIVERSAL_CHOICE_WORKFLOW_ID, JULIA_CHOICE_WORKFLOW_REVISION),
+                (UNIVERSAL_CHOICE_WORKFLOW_ID, JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION),
             ):
                 return self._validate_universal_choice(request, execution_tier, capabilities)
             raise SaracuraError(
@@ -134,6 +136,15 @@ class WorkflowRegistry:
             raise SaracuraError(
                 ErrorCode.CARDINALITY_EXCEEDED,
                 "Dynamic universal workflows support at most ten questions.",
+                "/questions",
+            )
+        if (
+            request.workflow.revision == JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION
+            and sum(len(question.criteria) for question in request.questions) > 20
+        ):
+            raise SaracuraError(
+                ErrorCode.CARDINALITY_EXCEEDED,
+                "Julia position ensemble supports at most 20 criteria per request.",
                 "/questions",
             )
         if any(len(question.criteria) > maximum_criteria for question in request.questions):

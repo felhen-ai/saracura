@@ -141,6 +141,43 @@ qualidade, não uma alegação de superioridade. Os relatórios agregados
 versionados preservam a procedência exata de modelo, código, protocolo,
 latência e rejeições sem incluir registros do dataset.
 
+A estratégia Julia opcional da Fase 5D.1 testa se a média do conjunto completo
+de rotações cíclicas dos critérios reduz esse viés de posição. Ela executa uma
+inferência Julia por critério (quatro neste benchmark), portanto a latência
+cresce com o número de alternativas. O relatório CPU verificado acerta 161/373
+(`43,16%`) com `98,66%` de cobertura, ganho de `8,85` pontos percentuais sobre
+os 128/373 (`34,32%`) do single-pass. A acurácia planejada por posição sai da
+faixa `16,13%`–`58,51%` para `40,86%`–`46,24%`. A latência warm p50/p95 é
+`87,81/99,75 ms` e a vazão é `10,40 decisões/s`, contra `21,70/25,01 ms` e
+`29,08 decisões/s` no single-pass. Ambos ficam acima dos 25% de acaso e bem
+abaixo dos 265/373 (`71,05%`) do baseline lexical. O experimento foi
+selecionado post-hoc neste mesmo benchmark de desenvolvimento e ainda não tem
+confirmação em conjunto independente; média cíclica foi a única agregação
+explorada nesse ciclo. A estratégia envolve um checkpoint Julia-1 de terceiro,
+que não pertence ao Saracura. Como os IDs giram junto com as descrições, a
+rotação também não separa viés de posição de preferência por tokens dos rótulos.
+O resultado permanece sem calibração e não autoriza automação.
+
+Para gerar o relatório v2 separado de média cíclica, use `--strategy
+cyclic_mean` e o nome canônico:
+
+```bash
+uv run --no-sync python -m benchmarks.ptbr_native run \
+  --backend julia --strategy cyclic_mean --device cpu \
+  --model-snapshot /path/absoluto/para/Julia-1 \
+  --data-root /path/absoluto/para/revisao-MTEB-BR-faq-bacen \
+  --output /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
+
+uv run --no-sync python -m benchmarks.ptbr_native verify \
+  /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
+```
+
+O relatório v2 versionado registra a estratégia e a quantidade de inferências por decisão
+junto das métricas de acurácia, posição, cobertura, latência e vazão. Os hashes
+de código e do manifesto do ensemble são conferidos contra a árvore Git
+ancestral indicada no próprio relatório, preservando a evidência histórica
+após futuras mudanças no código.
+
 ```bash
 uv sync --locked --dev --extra ptbr-benchmark
 uv pip install -e /path/absoluto/para/Julia-1

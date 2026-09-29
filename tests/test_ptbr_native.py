@@ -3,12 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from benchmarks.ptbr_native.models import EXPECTED_MANIFEST, load_protocol_manifest, load_report
+from benchmarks.ptbr_native.models import (
+    EXPECTED_MANIFEST,
+    EXPECTED_POSITION_ENSEMBLE_MANIFEST,
+    BenchmarkReportV2,
+    load_position_ensemble_manifest,
+    load_protocol_manifest,
+    load_report,
+)
 from benchmarks.ptbr_native.protocol import (
     build_plan,
     build_request,
@@ -17,7 +25,11 @@ from benchmarks.ptbr_native.protocol import (
     lexical_tokens,
     percentile,
 )
-from benchmarks.ptbr_native.runner import atomic_write_report, verify_report
+from benchmarks.ptbr_native.runner import (
+    atomic_write_report,
+    release_code_sha256,
+    verify_report,
+)
 from saracura.backends.julia import (
     JULIA_CHECKPOINT_SHA256,
     JULIA_MODEL_ID,
@@ -109,6 +121,19 @@ def valid_report() -> dict[str, Any]:
     }
 
 
+def valid_report_v2() -> dict[str, Any]:
+    payload = valid_report()
+    payload.update(
+        {
+            "schema_version": "phase5d-ptbr-faq-bacen-report.v2",
+            "inference_strategy": "cyclic_mean",
+            "inferences_per_valid_decision": 4,
+            "position_ensemble_manifest_sha256": "e" * 64,
+        }
+    )
+    return payload
+
+
 def test_bundled_manifest_is_exact_and_duplicate_keys_fail() -> None:
     parsed = load_protocol_manifest(MANIFEST.read_bytes())
     assert parsed.model_dump(mode="json") == EXPECTED_MANIFEST
@@ -120,6 +145,16 @@ def test_bundled_manifest_is_exact_and_duplicate_keys_fail() -> None:
     )
     with pytest.raises(ValueError, match="invalid Phase 5D"):
         load_protocol_manifest(raw)
+
+
+def test_position_ensemble_manifest_is_closed_and_immutable() -> None:
+    path = ROOT / "benchmarks/manifests/phase5d1-position-ensemble.v1.json"
+    parsed = load_position_ensemble_manifest(path.read_bytes())
+    assert parsed.model_dump(mode="json") == EXPECTED_POSITION_ENSEMBLE_MANIFEST
+    drift = json.loads(path.read_text())
+    drift["max_criteria_per_request"] = 21
+    with pytest.raises(ValueError):
+        load_position_ensemble_manifest(json.dumps(drift))
 
 
 def test_manifest_rejects_unknown_fields_and_protocol_drift() -> None:
@@ -176,6 +211,19 @@ def test_request_is_identical_except_for_backend_owned_identity() -> None:
     assert julia.questions == owned.questions
     assert julia.workflow.revision == "phase5c-julia.v1"
     assert owned.workflow.revision == "phase4e-saracura-ranker.v1"
+    ensemble = build_request(
+        row,
+        model="julia-revision",
+        backend="julia",
+        strategy="cyclic_mean",
+    )
+    assert ensemble.state == julia.state
+    assert ensemble.questions == julia.questions
+    assert ensemble.workflow.revision == "phase5d1-julia-cyclic-mean.v1"
+    with pytest.raises(ValueError, match="only by Julia"):
+        build_request(
+            row, model="owned-revision", backend="saracura-universal", strategy="cyclic_mean"
+        )
 
 
 def test_lexical_token_argmax_and_percentile_rules() -> None:
@@ -199,6 +247,22 @@ def test_report_recomputes_metrics_and_rejects_sensitive_content() -> None:
     sensitive["limitations"] = ["found at /Users/person/private"]
     with pytest.raises(ValueError, match="forbidden"):
         load_report(json.dumps(sensitive))
+
+
+def test_v2_report_requires_exact_strategy_cost_and_closed_fields() -> None:
+    payload = valid_report_v2()
+    report = load_report(json.dumps(payload))
+    assert isinstance(report, BenchmarkReportV2)
+    assert report.inference_strategy == "cyclic_mean"
+    assert report.inferences_per_valid_decision == 4
+    wrong_cost = valid_report_v2()
+    wrong_cost["inferences_per_valid_decision"] = 1
+    with pytest.raises(ValueError, match="invalid Phase 5D"):
+        load_report(json.dumps(wrong_cost))
+    extra = valid_report_v2()
+    extra["raw_rows"] = []
+    with pytest.raises(ValueError, match="invalid Phase 5D"):
+        load_report(json.dumps(extra))
 
 
 @pytest.mark.parametrize(
@@ -245,25 +309,18 @@ def test_offline_verifier_binds_filename_manifest_code_and_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     payload = valid_report()
-    payload["code_commit"] = (
-        __import__("subprocess")
-        .run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        .stdout.strip()
-    )
+    payload["code_commit"] = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     payload["manifest_sha256"] = hashlib.sha256(MANIFEST.read_bytes()).hexdigest()
     payload["model_id"] = JULIA_MODEL_ID
     payload["model_revision"] = JULIA_MODEL_REVISION
     payload["checkpoint_sha256"] = JULIA_CHECKPOINT_SHA256
-    monkeypatch.setattr(
-        "benchmarks.ptbr_native.runner.release_code_sha256",
-        lambda root: payload["release_code_sha256"],
-    )
+    payload["release_code_sha256"] = release_code_sha256(ROOT, payload["code_commit"])
     report = tmp_path / "phase5d-ptbr-faq-bacen-julia-cpu.json"
     report.write_text(json.dumps(payload))
     assert verify_report(report).model_id == JULIA_MODEL_ID
@@ -271,6 +328,75 @@ def test_offline_verifier_binds_filename_manifest_code_and_model(
     report.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="manifest digest"):
         verify_report(report)
+
+
+def test_historical_report_survives_later_source_edit_and_rejects_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "benchmarks/ptbr_native").mkdir(parents=True)
+    (repo / "benchmarks/manifests").mkdir(parents=True)
+    (repo / "benchmarks/ptbr_native/release.py").write_text("VERSION = 1\n")
+    manifest = repo / "benchmarks/manifests/phase5d-ptbr-native.v1.json"
+    manifest.write_text("{}\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "base",
+        ],
+        check=True,
+    )
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setattr(
+        "benchmarks.ptbr_native.runner.__file__",
+        str(repo / "benchmarks/ptbr_native/runner.py"),
+    )
+    monkeypatch.setattr(
+        "benchmarks.ptbr_native.runner._RELEASE_PATHS",
+        ("benchmarks/ptbr_native", "benchmarks/manifests/phase5d-ptbr-native.v1.json"),
+    )
+    payload = valid_report()
+    payload.update(
+        {
+            "code_commit": commit,
+            "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "model_id": JULIA_MODEL_ID,
+            "model_revision": JULIA_MODEL_REVISION,
+            "checkpoint_sha256": JULIA_CHECKPOINT_SHA256,
+        }
+    )
+    payload["release_code_sha256"] = release_code_sha256(repo, commit)
+    report_path = tmp_path / "phase5d-ptbr-faq-bacen-julia-cpu.json"
+    report_path.write_text(json.dumps(payload))
+    source = repo / "benchmarks/ptbr_native/release.py"
+    source.write_text("VERSION = 2\n")
+    assert verify_report(report_path).code_commit == commit
+
+    payload["release_code_sha256"] = "0" * 64
+    report_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="historical Git tree"):
+        verify_report(report_path)
+    payload["release_code_sha256"] = release_code_sha256(repo, commit)
+    payload["code_commit"] = "f" * 40
+    report_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="not an ancestor"):
+        verify_report(report_path)
 
 
 def test_report_publication_is_atomic_create_if_absent(tmp_path: Path) -> None:
