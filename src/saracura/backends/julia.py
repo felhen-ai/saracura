@@ -11,13 +11,20 @@ from typing import Any, Protocol, cast
 
 from saracura.backends.base import BackendCapabilities, ScoredChoice
 from saracura.contracts.errors import ErrorCode, SaracuraError
-from saracura.contracts.models import ChoiceQuestion, DecisionRequest, ModelReference
+from saracura.contracts.models import (
+    ChoiceCriterion,
+    ChoiceQuestion,
+    DecisionRequest,
+    ModelReference,
+)
 
 JULIA_MODEL_ID = "supersoniclabs/julia-1"
 JULIA_MODEL_REVISION = "a85b127321d580d65176c89ced8273f305745d85"
 JULIA_CHECKPOINT_SHA256 = "df853bf7fe424420011f3d0c47a05d7341aa9eefa7fb9f203ea4aada4ad95b72"
 JULIA_WORKFLOW_ID = "universal-choice"
 JULIA_WORKFLOW_REVISION = "phase5c-julia.v1"
+JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION = "phase5d1-julia-cyclic-mean.v1"
+JULIA_POSITION_ENSEMBLE_MAX_CRITERIA = 20
 
 
 class _JuliaEngine(Protocol):
@@ -33,7 +40,13 @@ class _JuliaEngine(Protocol):
 class JuliaBackend:
     """Load the pinned Julia-1 checkpoint directly from a local snapshot."""
 
-    def __init__(self, *, model_snapshot: Path, device: str = "cpu") -> None:
+    def __init__(
+        self,
+        *,
+        model_snapshot: Path,
+        device: str = "cpu",
+        position_ensemble: bool = False,
+    ) -> None:
         if device != "cpu":
             raise SaracuraError(
                 ErrorCode.REQUEST_INVALID,
@@ -57,7 +70,16 @@ class JuliaBackend:
                 "/model",
             )
         self._model_snapshot = model_snapshot
+        self._position_ensemble = position_ensemble
         self._engine: _JuliaEngine | None = None
+
+    @property
+    def workflow_revision(self) -> str:
+        return (
+            JULIA_POSITION_ENSEMBLE_WORKFLOW_REVISION
+            if self._position_ensemble
+            else JULIA_WORKFLOW_REVISION
+        )
 
     @property
     def capabilities(self) -> BackendCapabilities:
@@ -65,11 +87,13 @@ class JuliaBackend:
             execution_tier="universal",
             decision_types=frozenset({"choice"}),
             max_questions=10,
-            max_criteria=20,
+            # Let the workflow validator report the ensemble's aggregate
+            # request budget at /questions before enforcing the 20-item total.
+            max_criteria=21 if self._position_ensemble else 20,
             execution_boundary="direct-local-julia-1-cpu",
             cold_warm_semantics="resident-after-first-request",
             quality_claims=False,
-            dynamic_workflows=frozenset({(JULIA_WORKFLOW_ID, JULIA_WORKFLOW_REVISION)}),
+            dynamic_workflows=frozenset({(JULIA_WORKFLOW_ID, self.workflow_revision)}),
         )
 
     @property
@@ -83,12 +107,22 @@ class JuliaBackend:
     def validate_request(self, request: DecisionRequest) -> None:
         if (request.workflow.id, request.workflow.revision) != (
             JULIA_WORKFLOW_ID,
-            JULIA_WORKFLOW_REVISION,
+            self.workflow_revision,
         ):
             raise SaracuraError(
                 ErrorCode.WORKFLOW_UNSUPPORTED,
-                "Julia accepts only universal-choice@phase5c-julia.v1.",
+                f"Julia accepts only universal-choice@{self.workflow_revision}.",
                 "/workflow",
+            )
+        if (
+            self._position_ensemble
+            and sum(len(question.criteria) for question in request.questions)
+            > JULIA_POSITION_ENSEMBLE_MAX_CRITERIA
+        ):
+            raise SaracuraError(
+                ErrorCode.CARDINALITY_EXCEEDED,
+                "Julia position ensemble supports at most 20 criteria per request.",
+                "/questions",
             )
         if request.locale not in {"pt-BR", "en"}:
             raise SaracuraError(
@@ -135,21 +169,24 @@ class JuliaBackend:
     ) -> ScoredChoice:
         del state_payload
         self.validate_request(request)
-        self.prepare()
-        assert self._engine is not None
         criteria = {criterion.id: criterion.description for criterion in question.criteria}
         try:
-            result = self._engine.predict(
-                state=request.state,
-                questions={
-                    question.id: {
-                        "type": "choice",
-                        "instructions": question.instruction,
-                        "criteria": criteria,
-                    }
-                },
-            )
-            answer = _choice_answer(result, question)
+            if not self._position_ensemble:
+                self.prepare()
+                assert self._engine is not None
+                result = self._engine.predict(
+                    state=request.state,
+                    questions={
+                        question.id: {
+                            "type": "choice",
+                            "instructions": question.instruction,
+                            "criteria": criteria,
+                        }
+                    },
+                )
+                answer = _choice_answer(result, question)
+            else:
+                answer = self._cyclic_mean(request, question)
         except SaracuraError:
             raise
         except Exception as error:
@@ -165,6 +202,49 @@ class JuliaBackend:
             selected_choice=cast(str, answer["choice"]),
             input_tokens=0,
         )
+
+    def _cyclic_mean(self, request: DecisionRequest, question: ChoiceQuestion) -> dict[str, Any]:
+        self.prepare()
+        assert self._engine is not None
+        criteria = [(criterion.id, criterion.description) for criterion in question.criteria]
+        collected: dict[str, list[float]] = {criterion_id: [] for criterion_id, _ in criteria}
+        for offset in range(len(criteria)):
+            rotated = criteria[offset:] + criteria[:offset]
+            rotated_question = ChoiceQuestion(
+                id=question.id,
+                type="choice",
+                instruction=question.instruction,
+                criteria=tuple(
+                    ChoiceCriterion(id=criterion_id, description=description)
+                    for criterion_id, description in rotated
+                ),
+            )
+            result = self._engine.predict(
+                state=request.state,
+                questions={
+                    question.id: {
+                        "type": "choice",
+                        "instructions": question.instruction,
+                        "criteria": dict(rotated),
+                    }
+                },
+            )
+            answer = _choice_answer(result, rotated_question)
+            for criterion_id, probability in answer["probabilities"].items():
+                collected[criterion_id].append(probability)
+        means = {
+            criterion_id: math.fsum(values) / len(criteria)
+            for criterion_id, values in collected.items()
+        }
+        total = math.fsum(means.values())
+        if not math.isfinite(total) or total <= 0:
+            raise _invalid_response(question)
+        normalized = {criterion_id: value / total for criterion_id, value in means.items()}
+        selected = max(
+            (criterion.id for criterion in question.criteria),
+            key=normalized.__getitem__,
+        )
+        return {"choice": selected, "probabilities": normalized}
 
 
 def _choice_answer(result: object, question: ChoiceQuestion) -> dict[str, Any]:

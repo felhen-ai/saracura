@@ -141,6 +141,39 @@ qualidade, não uma alegação de superioridade. Os relatórios agregados
 versionados preservam a procedência exata de modelo, código, protocolo,
 latência e rejeições sem incluir registros do dataset.
 
+A estratégia Julia opcional da Fase 5D.1 testa se a média do conjunto completo
+de rotações cíclicas dos critérios reduz esse viés de posição. Ela executa uma
+inferência Julia por critério (quatro neste benchmark), portanto a latência
+cresce com o número de alternativas. O resultado single-pass de 34,32%, o
+acaso de 25% e o baseline lexical de 71,05% continuam sendo a comparação
+publicada até que o novo relatório agregado seja produzido. O experimento foi
+selecionado post-hoc neste mesmo benchmark de desenvolvimento e ainda não tem
+confirmação em conjunto independente; média cíclica foi a única agregação
+explorada nesse ciclo. A estratégia envolve um checkpoint Julia-1 de terceiro,
+que não pertence ao Saracura. Como os IDs giram junto com as descrições, a
+rotação também não separa viés de posição de preferência por tokens dos rótulos.
+O resultado permanece sem calibração e não autoriza automação.
+
+Para gerar o relatório v2 separado de média cíclica, use `--strategy
+cyclic_mean` e o nome canônico:
+
+```bash
+uv run --no-sync python -m benchmarks.ptbr_native run \
+  --backend julia --strategy cyclic_mean --device cpu \
+  --model-snapshot /path/absoluto/para/Julia-1 \
+  --data-root /path/absoluto/para/revisao-MTEB-BR-faq-bacen \
+  --output /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
+
+uv run --no-sync python -m benchmarks.ptbr_native verify \
+  /path/absoluto/para/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json
+```
+
+O relatório v2 registra a estratégia e a quantidade de inferências por decisão
+junto das métricas de acurácia, posição, cobertura, latência e vazão. Os hashes
+de código e do manifesto do ensemble são conferidos contra a árvore Git
+ancestral indicada no próprio relatório, preservando a evidência histórica
+após futuras mudanças no código.
+
 ```bash
 uv sync --locked --dev --extra ptbr-benchmark
 uv pip install -e /path/absoluto/para/Julia-1

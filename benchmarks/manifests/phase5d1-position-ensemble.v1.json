@@ -1,0 +1,13 @@
+{
+  "schema_version": "phase5d1-position-ensemble.v1",
+  "benchmark_id": "phase5d-ptbr-faq-bacen",
+  "protocol_manifest_sha256": "af983ce181018a2f6c5abec351ce1b78e875764616875aed3f59aa416a499ff6",
+  "backend": "julia",
+  "inference_strategy": "cyclic_mean",
+  "workflow_revision": "phase5d1-julia-cyclic-mean.v1",
+  "rotations": "complete_cyclic_in_declared_order",
+  "aggregation": "arithmetic_mean_probabilities_then_math_fsum_normalization",
+  "max_criteria_per_request": 20,
+  "report_schema": "phase5d-ptbr-faq-bacen-report.v2",
+  "report_filename": "phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json"
+}

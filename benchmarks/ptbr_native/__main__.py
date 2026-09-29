@@ -20,6 +20,11 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run")
     run.add_argument("--backend", choices=("julia", "saracura-universal"), required=True)
+    run.add_argument(
+        "--strategy",
+        choices=("single_pass", "cyclic_mean"),
+        default="single_pass",
+    )
     run.add_argument("--device", choices=("cpu",), required=True)
     run.add_argument("--data-root", type=_absolute, required=True)
     run.add_argument("--output", type=_absolute, required=True)
@@ -43,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         model_snapshot=args.model_snapshot,
         encoder_snapshot=args.encoder_snapshot,
         training_capsule=args.training_capsule,
+        inference_strategy=args.strategy,
     )
     atomic_write_report(args.output, report)
     print(

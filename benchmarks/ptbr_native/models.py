@@ -155,8 +155,8 @@ class RejectionCounts(ClosedModel):
     other_error: int = Field(ge=0)
 
 
-class BenchmarkReport(ClosedModel):
-    schema_version: Literal["phase5d-ptbr-faq-bacen-report.v1"]
+class BenchmarkReportBase(ClosedModel):
+    schema_version: Literal["phase5d-ptbr-faq-bacen-report.v1", "phase5d-ptbr-faq-bacen-report.v2"]
     benchmark_id: Literal["phase5d-ptbr-faq-bacen"]
     generated_at_utc: str
     code_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
@@ -188,7 +188,7 @@ class BenchmarkReport(ClosedModel):
     limitations: list[str] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def consistent_metrics(self) -> BenchmarkReport:
+    def consistent_metrics(self) -> BenchmarkReportBase:
         counts = self.counts
         if self.chance_accuracy != 0.25:
             raise ValueError("chance baseline drifted")
@@ -243,6 +243,64 @@ class BenchmarkReport(ClosedModel):
         return self
 
 
+class BenchmarkReport(BenchmarkReportBase):
+    schema_version: Literal["phase5d-ptbr-faq-bacen-report.v1"]
+
+
+EXPECTED_POSITION_ENSEMBLE_MANIFEST: dict[str, Any] = {
+    "schema_version": "phase5d1-position-ensemble.v1",
+    "benchmark_id": "phase5d-ptbr-faq-bacen",
+    "protocol_manifest_sha256": "af983ce181018a2f6c5abec351ce1b78e875764616875aed3f59aa416a499ff6",
+    "backend": "julia",
+    "inference_strategy": "cyclic_mean",
+    "workflow_revision": "phase5d1-julia-cyclic-mean.v1",
+    "rotations": "complete_cyclic_in_declared_order",
+    "aggregation": "arithmetic_mean_probabilities_then_math_fsum_normalization",
+    "max_criteria_per_request": 20,
+    "report_schema": "phase5d-ptbr-faq-bacen-report.v2",
+    "report_filename": "phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json",
+}
+
+
+class PositionEnsembleManifest(ClosedModel):
+    schema_version: Literal["phase5d1-position-ensemble.v1"]
+    benchmark_id: Literal["phase5d-ptbr-faq-bacen"]
+    protocol_manifest_sha256: str = Field(pattern=HEX64)
+    backend: Literal["julia"]
+    inference_strategy: Literal["cyclic_mean"]
+    workflow_revision: Literal["phase5d1-julia-cyclic-mean.v1"]
+    rotations: Literal["complete_cyclic_in_declared_order"]
+    aggregation: Literal["arithmetic_mean_probabilities_then_math_fsum_normalization"]
+    max_criteria_per_request: Literal[20]
+    report_schema: Literal["phase5d-ptbr-faq-bacen-report.v2"]
+    report_filename: Literal["phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json"]
+
+    @model_validator(mode="after")
+    def exact_manifest(self) -> PositionEnsembleManifest:
+        if self.model_dump(mode="json") != EXPECTED_POSITION_ENSEMBLE_MANIFEST:
+            raise ValueError("Phase 5D.1 ensemble manifest is immutable")
+        return self
+
+
+class BenchmarkReportV2(BenchmarkReportBase):
+    schema_version: Literal["phase5d-ptbr-faq-bacen-report.v2"]
+    inference_strategy: Literal["single_pass", "cyclic_mean"]
+    inferences_per_valid_decision: Literal[1, 4]
+    position_ensemble_manifest_sha256: str = Field(pattern=HEX64)
+
+    @model_validator(mode="after")
+    def strategy_metrics(self) -> BenchmarkReportV2:
+        if self.backend != "julia":
+            raise ValueError("Phase 5D v2 evidence must describe the Julia backend")
+        expected = 1 if self.inference_strategy == "single_pass" else 4
+        if self.inferences_per_valid_decision != expected:
+            raise ValueError("inference count does not match the selected strategy")
+        return self
+
+
+BenchmarkReportAny = BenchmarkReport | BenchmarkReportV2
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -260,10 +318,24 @@ def load_protocol_manifest(raw: bytes | str) -> ProtocolManifest:
         raise ValueError("invalid Phase 5D protocol manifest") from None
 
 
-def load_report(raw: bytes | str) -> BenchmarkReport:
+def load_position_ensemble_manifest(raw: bytes | str) -> PositionEnsembleManifest:
     try:
         payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
-        report = BenchmarkReport.model_validate(payload)
+        return PositionEnsembleManifest.model_validate(payload)
+    except (ValueError, TypeError):
+        raise ValueError("invalid Phase 5D.1 position ensemble manifest") from None
+
+
+def load_report(raw: bytes | str) -> BenchmarkReportAny:
+    try:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+        schema = payload.get("schema_version") if isinstance(payload, dict) else None
+        if schema == "phase5d-ptbr-faq-bacen-report.v1":
+            report: BenchmarkReportAny = BenchmarkReport.model_validate(payload)
+        elif schema == "phase5d-ptbr-faq-bacen-report.v2":
+            report = BenchmarkReportV2.model_validate(payload)
+        else:
+            raise ValueError("unknown Phase 5D report schema")
     except (ValueError, TypeError):
         raise ValueError("invalid Phase 5D aggregate report") from None
     serialized = json.dumps(payload, ensure_ascii=False)

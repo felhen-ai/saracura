@@ -121,6 +121,11 @@ def validate_routed_manifest(path: Path) -> None:
 
         load_protocol_manifest(raw)
         return
+    if schema_version == "phase5d1-position-ensemble.v1":
+        from benchmarks.ptbr_native.models import load_position_ensemble_manifest
+
+        load_position_ensemble_manifest(raw)
+        return
     if schema_version == "phase4e-protocol-pilot-policy.v1":
         validate_pilot_policy(path)
         return
@@ -1432,8 +1437,14 @@ def validate_committed_phase5d_reports(repository: Path | None = None) -> None:
     root = repository or Path(__file__).resolve().parents[1]
     from benchmarks.ptbr_native.runner import verify_report
 
-    for path in sorted((root / "benchmarks/results").glob("phase5d-ptbr-faq-bacen-*-cpu.json")):
-        verify_report(path)
+    report_paths = (
+        root / "benchmarks/results/phase5d-ptbr-faq-bacen-julia-cpu.json",
+        root / "benchmarks/results/phase5d-ptbr-faq-bacen-saracura-universal-cpu.json",
+        root / "benchmarks/results/phase5d1-ptbr-faq-bacen-julia-cyclic-mean-cpu.json",
+    )
+    for path in report_paths:
+        if path.is_file():
+            verify_report(path)
 
 
 def main() -> int:

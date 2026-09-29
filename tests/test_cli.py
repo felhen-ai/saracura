@@ -20,6 +20,7 @@ from saracura.contracts import (
     ModelReference,
     SaracuraError,
     WorkflowReference,
+    parse_request_json,
 )
 from saracura.runtime import known_scaling_questions
 from saracura.shadow import (
@@ -112,6 +113,128 @@ def test_cli_maps_io_failure_without_exposing_local_path(
     assert exit_code == 2
     assert payload["error"]["code"] == "INTERNAL_ERROR"
     assert str(tmp_path) not in stderr
+
+
+@pytest.mark.parametrize(
+    ("request_revision", "use_flag"),
+    [
+        ("phase5d1-julia-cyclic-mean.v1", False),
+        ("phase5c-julia.v1", True),
+    ],
+)
+def test_julia_cli_rejects_mode_workflow_mismatch_before_model_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    request_revision: str,
+    use_flag: bool,
+) -> None:
+    source = Path(__file__).parents[1] / "examples/ptbr-julia-request.json"
+    request = parse_request_json(source.read_bytes()).model_copy(
+        update={"workflow": WorkflowReference(id="universal-choice", revision=request_revision)}
+    )
+    request_path = tmp_path / "request.json"
+    request_path.write_text(request.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "JuliaBackend",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("model path touched")),
+    )
+    argv = [
+        "decide",
+        "--backend",
+        "julia",
+        "--request",
+        str(request_path),
+        "--model-snapshot",
+        str(tmp_path / "missing-model"),
+        "--device",
+        "cpu",
+    ]
+    if use_flag:
+        argv.append("--julia-position-ensemble")
+    assert cli.main(argv) == 2
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["error"]["code"] == "WORKFLOW_UNSUPPORTED"
+
+
+def test_julia_ensemble_flag_rejects_other_backends_before_backend_work(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        cli.main(
+            [
+                "decide",
+                "--backend",
+                "fixture",
+                "--request",
+                "/missing.json",
+                "--julia-position-ensemble",
+            ]
+        )
+        == 2
+    )
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["error"]["code"] == "REQUEST_INVALID"
+
+
+def test_julia_cli_ensemble_budget_fails_before_model_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = Path(__file__).parents[1] / "examples/ptbr-julia-request.json"
+    request = parse_request_json(source.read_bytes())
+    questions = tuple(
+        request.questions[0].model_copy(
+            update={
+                "id": f"decision-{question_index}",
+                "criteria": tuple(
+                    ChoiceCriterion(
+                        id=f"choice-{question_index}-{index:02d}",
+                        description=f"Option {index}",
+                    )
+                    for index in range(count)
+                ),
+            }
+        )
+        for question_index, count in enumerate((10, 11))
+    )
+    request = request.model_copy(
+        update={
+            "workflow": WorkflowReference(
+                id="universal-choice", revision="phase5d1-julia-cyclic-mean.v1"
+            ),
+            "questions": questions,
+        }
+    )
+    request_path = tmp_path / "oversized.json"
+    request_path.write_text(request.model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "JuliaBackend",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("model path touched")),
+    )
+    assert (
+        cli.main(
+            [
+                "decide",
+                "--backend",
+                "julia",
+                "--request",
+                str(request_path),
+                "--model-snapshot",
+                str(tmp_path / "missing-model"),
+                "--device",
+                "cpu",
+                "--julia-position-ensemble",
+            ]
+        )
+        == 2
+    )
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["error"]["code"] == "CARDINALITY_EXCEEDED"
+    assert payload["error"]["path"] == "/questions"
 
 
 def test_cli_never_falls_back_from_an_identifiable_invalid_v2_envelope(
