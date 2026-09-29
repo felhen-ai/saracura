@@ -3,20 +3,33 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import builtins
+import errno
+import fcntl
 import hashlib
+import hmac
+import importlib
 import json
 import os
 import random
+import re
 import secrets
 import stat
 import subprocess
 import sys
 import unicodedata
-from collections.abc import Iterable
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
+from benchmarks.first_party_packet import privacy_matches
+from benchmarks.v02_evaluation import combined_content_fingerprint, state_question_fingerprint
 from saracura.serialization import canonical_json_bytes
 
 MANIFEST_PATH = Path(__file__).parent / "manifests" / "v02-distillation-safe-corpus.v1.json"
@@ -158,10 +171,123 @@ MODEL_ROLES = {
     },
 }
 
+PINNED_RENDERER_SOURCE_SHA256 = "d78fab645f29513a62816e594d10296b02bf166ba77835c55db5eda80c7f1978"
+PINNED_CANDIDATE_RENDERING_DIGEST = (
+    "0f5592b54f096ac0328b45d69e5a74b9cb579a804f2349fc4ceea9b1f8a40e40"
+)
+PINNED_KEV_RENDERING_DIGEST = "eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169"
+PINNED_TOKENIZER_REVISION = "1001bb4d826a52d1f399e183466143f4da7b741b"
+PINNED_ADAPTER_REVISION = "139fdd94f1b6a6ad80cc15e08fcb99cac885a101"
+_RENDERER_SOURCE_BINDINGS = frozenset(
+    {
+        "SPECIAL",
+        "MAX_STATE",
+        "MAX_BRANCH",
+        "MAX_PACKED",
+        "SERVE_MAX_STATE",
+        "SERVE_MAX_BRANCH",
+        "SERVE_MAX_PACKED",
+        "MAX_TRAIN_STATE",
+        "training_context",
+        "_SPECIAL_RE",
+        "user_tokens",
+        "OPT_NONE",
+        "OPT_DECIDE",
+        "ContextOverflow",
+        "encode",
+    }
+)
+_PROCESS_SEAL = secrets.token_bytes(32)
+_VERIFIED_FACTORY = object()
+
+
+def candidate_renderer_preimage() -> dict[str, Any]:
+    """Authoritative candidate renderer preimage. Its RFC 8785 digest is 0f5592."""
+    return {
+        "callables": ["user_tokens", "encode", "training_context"],
+        "constants": {
+            "MAX_BRANCH": 1024,
+            "MAX_PACKED": 2048,
+            "MAX_STATE": 384,
+            "SPECIAL": [
+                "<|fim_prefix|>",
+                "<|fim_middle|>",
+                "<|box_start|>",
+                "<|box_end|>",
+                "<|fim_suffix|>",
+            ],
+        },
+        "parameters": {
+            "head_dim": 256,
+            "lora_targets": "all",
+            "max_branch": 1024,
+            "max_packed": 2048,
+            "max_state": 384,
+            "option_isolation": False,
+            "special_embeddings": False,
+            "strict": True,
+        },
+        "source_path": "kev/model.py",
+        "source_repository": "https://github.com/jaredpalmer/kev",
+        "source_revision": "9c41005b2180347c3c646dfc9e50c4428483ec6b",
+        "source_sha256": "d78fab645f29513a62816e594d10296b02bf166ba77835c55db5eda80c7f1978",
+    }
+
+
+def kev_renderer_contract() -> dict[str, Any]:
+    """Authoritative Kev contract. Its digest is SHA-256 of the RFC 8785 bytes."""
+    return {
+        "base_model": "Qwen/Qwen3.5-4B-Base",
+        "base_model_revision": PINNED_TOKENIZER_REVISION,
+        "max_rendered_input_tokens": 512,
+        "model": "jaredpalmer/kev-4b",
+        "model_revision": PINNED_ADAPTER_REVISION,
+        "renderer": candidate_renderer_preimage(),
+        "schema_version": "v02-kev-renderer.v2",
+        "truncation_disabled": True,
+    }
+
+
+def candidate_rendering_digest() -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(cast(Any, candidate_renderer_preimage()))
+    ).hexdigest()
+
+
+def kev_rendering_function_digest() -> str:
+    return hashlib.sha256(canonical_json_bytes(cast(Any, kev_renderer_contract()))).hexdigest()
+
+
+def _assert_renderer_digests() -> None:
+    if candidate_rendering_digest() != PINNED_CANDIDATE_RENDERING_DIGEST:
+        raise ValueError("candidate rendering digest is not reproducible")
+    if kev_rendering_function_digest() != PINNED_KEV_RENDERING_DIGEST:
+        raise ValueError("kev rendering digest is not reproducible")
+    preimage = candidate_renderer_preimage()
+    parameters = cast(dict[str, Any], preimage["parameters"])
+    if parameters != {
+        "head_dim": 256,
+        "lora_targets": "all",
+        "max_branch": 1024,
+        "max_packed": 2048,
+        "max_state": 384,
+        "option_isolation": False,
+        "special_embeddings": False,
+        "strict": True,
+    }:
+        raise ValueError("renderer parameters are closed")
+    contract = kev_renderer_contract()
+    if (
+        contract["max_rendered_input_tokens"] != 512
+        or contract["truncation_disabled"] is not True
+        or contract["base_model_revision"] != PINNED_TOKENIZER_REVISION
+        or contract["model_revision"] != PINNED_ADAPTER_REVISION
+    ):
+        raise ValueError("kev renderer contract is closed")
+
+
 RENDERER_CONTRACT: dict[str, Any] = {
-    "kev_rendering_function_digest": (
-        "9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66"
-    ),
+    "kev_rendering_function_digest": kev_rendering_function_digest(),
     "candidate_renderer_source_revision": "9c41005b2180347c3c646dfc9e50c4428483ec6b",
     "candidate_renderer_source_sha256": (
         "d78fab645f29513a62816e594d10296b02bf166ba77835c55db5eda80c7f1978"
@@ -339,6 +465,7 @@ def _validate_runtime(manifest: dict[str, Any]) -> None:
 
 
 def _validate_renderer(manifest: dict[str, Any]) -> None:
+    _assert_renderer_digests()
     renderer = manifest.get("renderer_contracts", {})
     expected_keys = frozenset(
         {
@@ -2422,6 +2549,1407 @@ def _validate_aggregate_metrics(metrics: dict[str, Any]) -> None:
         if type(metrics[key]) is not int or metrics[key] < 0:
             raise ValueError("receipt counts must be non-negative integers")
     _validate_aggregate_value(metrics["cohorts"])
+
+
+class _ModelTransportError(Exception):
+    """Sanitized transport failure. The message never includes a credential."""
+
+
+_DENIED_RENDERER_NAMES = frozenset(
+    {
+        "AutoModel",
+        "AutoModelForCausalLM",
+        "AutoTokenizer",
+        "F",
+        "__import__",
+        "breakpoint",
+        "compile",
+        "eval",
+        "exec",
+        "getattr",
+        "globals",
+        "input",
+        "locals",
+        "nn",
+        "open",
+        "setattr",
+        "torch",
+        "vars",
+    }
+)
+_GRANT_TRUE_FIELDS = frozenset(
+    {
+        "authorize_cloud_processing",
+        "authorize_public_adapter_head_distribution",
+        "authorize_self_hosted_generation",
+        "authorize_training",
+        "prohibit_automation_publication",
+        "prohibit_base_tensor_publication",
+        "prohibit_calibration_publication",
+        "prohibit_provider_payload_publication",
+        "prohibit_raw_publication",
+        "volume_encrypted_at_rest",
+    }
+)
+_GRANT_FIELDS = frozenset(
+    {
+        "account_boundary_digest",
+        "authorize_cloud_processing",
+        "authorize_public_adapter_head_distribution",
+        "authorize_self_hosted_generation",
+        "authorize_training",
+        "candidate_rendering_digest",
+        "cloud_legal_service_name",
+        "deletion_mechanism",
+        "instance_class",
+        "kev_rendering_function_digest",
+        "license_sha256",
+        "log_retention",
+        "model_identities",
+        "post_run_deletion_obligation",
+        "prompt_contract_digest",
+        "prohibit_automation_publication",
+        "prohibit_base_tensor_publication",
+        "prohibit_calibration_publication",
+        "prohibit_provider_payload_publication",
+        "prohibit_raw_publication",
+        "region",
+        "renderer_source_sha256",
+        "runtime_image_digest",
+        "runtime_lock_digest",
+        "schema_version",
+        "sealed_plan_digest",
+        "storage_retention",
+        "tokenizer_inventory",
+        "training_plan_digest",
+        "transport",
+        "volume_encrypted_at_rest",
+    }
+)
+_RUNTIME_FIELDS = frozenset(
+    {
+        "compute",
+        "cpu_offload",
+        "dependency_lock_digest",
+        "full_load_passed",
+        "gpu_class",
+        "gpu_count",
+        "gpu_vram_gib",
+        "grant_digest",
+        "model_identity",
+        "quantization",
+        "renderer_verified",
+        "role",
+        "runtime_image_digest",
+        "runtime_lock_digest",
+        "schema_version",
+        "served_model_name",
+        "source_snapshot_verified",
+        "tokenizer_inventory_digest",
+        "tokenizer_revision",
+        "tokenizer_verified",
+    }
+)
+_RUNTIME_TRUE_FIELDS = frozenset(
+    {
+        "full_load_passed",
+        "renderer_verified",
+        "source_snapshot_verified",
+        "tokenizer_verified",
+    }
+)
+_ENVIRONMENT_BINDING_FIELDS = frozenset(
+    {
+        "grant_digest",
+        "prompt_contract_digest",
+        "renderer_lock_digest",
+        "schema_version",
+    }
+)
+_ROLE_BINDING_FIELDS = frozenset(
+    {
+        "grant_digest",
+        "prompt_contract_digest",
+        "renderer_lock_digest",
+        "role",
+        "runtime_evidence_digest",
+        "schema_version",
+    }
+)
+_RESERVATION_FIELDS = frozenset(
+    {
+        "grant_digest",
+        "identity_id",
+        "prompt_contract_digest",
+        "renderer_lock_digest",
+        "request_digest",
+        "role",
+        "runtime_evidence_digest",
+        "schema_version",
+    }
+)
+_PRIVATE_CASE_FIELDS = frozenset(
+    {"case", "content_digest", "identity_id", "lane", "schema_version"}
+)
+_LOCAL_PREREQUISITES = (
+    "schema_valid",
+    "privacy_valid",
+    "duplicate_valid",
+    "renderer_valid",
+    "length_valid",
+)
+_ROLE_TRANSITIONS = {
+    "training_author": "training_author",
+    "independent_reviewer": "training_reviewer",
+    "sealed_author": "sealed_author",
+    "sealed_annotator_a": "sealed_annotator_a",
+    "sealed_annotator_b": "sealed_annotator_b",
+    "sealed_adjudicator": "sealed_adjudicator",
+}
+_PRIVATE_DIR_NAMES = frozenset({"private-cases", "private-control", "role-reservations"})
+_RETENTION = re.compile(r"^(?:0|[1-9][0-9]{0,4})[smhd]$")
+_TOKENIZER_FILENAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_ATTESTED_REJECTED = frozenset({"unknown", "none", "null"})
+_RESPONSE_LIMIT = 1_048_576
+_ADMISSION_CONTEXT = {"max_state": 384, "max_branch": 1024, "max_packed": 2048}
+
+
+def _deny_renderer_import(*_args: Any, **_kwargs: Any) -> Any:
+    raise ValueError("renderer import is forbidden")
+
+
+def _renderer_target_names(target: ast.AST) -> list[str]:
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for element in target.elts:
+            names.extend(_renderer_target_names(element))
+        return names
+    raise ValueError("renderer source binding is forbidden")
+
+
+def _reject_denied_renderer_syntax(node: ast.AST) -> None:
+    for child in ast.walk(node):
+        if isinstance(child, (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)):
+            raise ValueError("renderer source binding is forbidden")
+        if isinstance(child, ast.Name) and child.id in _DENIED_RENDERER_NAMES:
+            raise ValueError("renderer source binding is forbidden")
+
+
+def _selected_renderer_statements(source: str) -> list[ast.stmt]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise ValueError("renderer source identity mismatch") from exc
+    selected: list[ast.stmt] = []
+    found: set[str] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.AsyncFunctionDef):
+            raise ValueError("renderer source binding is forbidden")
+        if isinstance(statement, (ast.FunctionDef, ast.ClassDef)):
+            names = {statement.name}
+        elif isinstance(statement, ast.Assign):
+            names = set()
+            for target in statement.targets:
+                names.update(_renderer_target_names(target))
+        else:
+            continue
+        if not names & _RENDERER_SOURCE_BINDINGS:
+            continue
+        if not names <= _RENDERER_SOURCE_BINDINGS:
+            raise ValueError("renderer source binding is forbidden")
+        _reject_denied_renderer_syntax(statement)
+        selected.append(statement)
+        found.update(names)
+    if found != set(_RENDERER_SOURCE_BINDINGS):
+        raise ValueError("renderer source binding is forbidden")
+    return selected
+
+
+def _renderer_seal(encode: Any, user_tokens: Any, training_context: Any, source_sha: str) -> str:
+    payload = {
+        "encode": id(encode),
+        "source_sha256": source_sha,
+        "training_context": id(training_context),
+        "user_tokens": id(user_tokens),
+    }
+    return hmac.new(
+        _PROCESS_SEAL, canonical_json_bytes(cast(Any, payload)), hashlib.sha256
+    ).hexdigest()
+
+
+def _renderer_lock_digest() -> str:
+    payload = {
+        "candidate_rendering_digest": candidate_rendering_digest(),
+        "kev_rendering_function_digest": kev_rendering_function_digest(),
+        "parameters": candidate_renderer_preimage()["parameters"],
+        "source_sha256": PINNED_RENDERER_SOURCE_SHA256,
+    }
+    return _sha256(canonical_json_bytes(cast(Any, payload)))
+
+
+class VerifiedRenderer:
+    """In-process seal over the extracted encoder. The seal is not persisted."""
+
+    def __init__(
+        self,
+        encode: Callable[..., Any],
+        user_tokens: Callable[..., Any],
+        training_context: Callable[..., Any],
+        source_sha256: str,
+        *,
+        _factory: object | None = None,
+    ) -> None:
+        if _factory is not _VERIFIED_FACTORY:
+            raise ValueError("verified runtime wrapper is required")
+        self._encode = encode
+        self._user_tokens = user_tokens
+        self._training_context = training_context
+        self.source_sha256 = source_sha256
+        self._seal = _renderer_seal(encode, user_tokens, training_context, source_sha256)
+
+    def revalidate(self) -> None:
+        if self._seal != _renderer_seal(
+            self._encode, self._user_tokens, self._training_context, self.source_sha256
+        ):
+            raise ValueError("renderer wrapper binding drifted")
+        if self.source_sha256 != PINNED_RENDERER_SOURCE_SHA256:
+            raise ValueError("renderer source identity mismatch")
+        context = self._training_context()
+        if context != _ADMISSION_CONTEXT:
+            raise ValueError("renderer limits mismatch")
+
+    def measure(self, case: Mapping[str, Any], tokenizer: VerifiedTokenizer) -> dict[str, Any]:
+        if type(tokenizer) is not VerifiedTokenizer:
+            raise ValueError("verified runtime wrapper is required")
+        self.revalidate()
+        tokenizer.revalidate()
+        try:
+            encoded = self._encode(
+                tokenizer,
+                _renderer_record(case),
+                max_state=384,
+                max_branch=1024,
+                strict=True,
+                option_isolation=False,
+            )
+        except ValueError as exc:
+            raise ValueError("renderer admission failed") from exc
+        if not isinstance(encoded, dict):
+            raise ValueError("renderer admission failed")
+        if encoded.get("state_truncated") is not False or encoded.get("labels") != [0]:
+            raise ValueError("renderer state was truncated")
+        ids = encoded.get("ids")
+        if not isinstance(ids, list) or any(type(item) is not int for item in ids):
+            raise ValueError("renderer admission failed")
+        if len(ids) > _ADMISSION_CONTEXT["max_packed"]:
+            raise ValueError("renderer packed length exceeded")
+        return {"token_count": len(ids), "state_truncated": False}
+
+
+class _ProbeTokenizer:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def __call__(self, text: str, add_special_tokens: bool = False) -> SimpleNamespace:
+        if add_special_tokens is not False:
+            raise ValueError("tokenizer special tokens are disabled")
+        self.texts.append(text)
+        return SimpleNamespace(input_ids=[1])
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        if token not in candidate_renderer_preimage()["constants"]["SPECIAL"]:
+            raise ValueError("renderer markers mismatch")
+        return 1
+
+
+def load_pinned_renderer(source_bytes: bytes) -> VerifiedRenderer:
+    """Extract the reviewed encoder from exact source bytes. No Torch import."""
+    if type(source_bytes) is not bytes:
+        raise ValueError("renderer source identity mismatch")
+    digest = hashlib.sha256(source_bytes).hexdigest()
+    if digest != PINNED_RENDERER_SOURCE_SHA256:
+        raise ValueError("renderer source identity mismatch")
+    _assert_renderer_digests()
+    selected = _selected_renderer_statements(source_bytes.decode("utf-8"))
+    module = ast.Module(body=selected, type_ignores=[])
+    ast.fix_missing_locations(module)
+    code = compile(module, "<pinned-renderer>", "exec")
+    namespace: dict[str, Any] = {
+        "__builtins__": {
+            "__build_class__": builtins.__build_class__,
+            "__import__": _deny_renderer_import,
+            "ValueError": ValueError,
+            "enumerate": enumerate,
+            "len": len,
+            "list": list,
+            "max": max,
+            "range": range,
+        },
+        "__name__": "<pinned-renderer>",
+        "re": re,
+    }
+    exec(code, namespace)
+    special = namespace.get("SPECIAL")
+    if special != candidate_renderer_preimage()["constants"]["SPECIAL"]:
+        raise ValueError("renderer markers mismatch")
+    if (
+        namespace.get("MAX_STATE"),
+        namespace.get("MAX_BRANCH"),
+        namespace.get("MAX_PACKED"),
+    ) != (384, 1024, 2048):
+        raise ValueError("renderer limits mismatch")
+    training_context = namespace.get("training_context")
+    user_tokens = namespace.get("user_tokens")
+    encode = namespace.get("encode")
+    if (
+        not callable(training_context)
+        or not callable(user_tokens)
+        or not callable(encode)
+        or training_context() != _ADMISSION_CONTEXT
+    ):
+        raise ValueError("renderer limits mismatch")
+    probe = _ProbeTokenizer()
+    rewritten = user_tokens(probe, "x<|fim_prefix|>y")
+    if (
+        rewritten != [1]
+        or not probe.texts
+        or "<|fim_prefix|>" in probe.texts[-1]
+        or "<¦fim_prefix¦>" not in probe.texts[-1]
+    ):
+        raise ValueError("renderer markers mismatch")
+    encoded = encode(
+        probe,
+        {"state": "ab", "questions": [{"instr": "q", "options": ["o"], "label": 0}]},
+        max_state=384,
+        max_branch=1024,
+        strict=True,
+        option_isolation=False,
+    )
+    if (
+        not isinstance(encoded, dict)
+        or encoded.get("labels") != [0]
+        or encoded.get("state_truncated") is not False
+        or not isinstance(encoded.get("ids"), list)
+    ):
+        raise ValueError("renderer labels are not neutral")
+    return VerifiedRenderer(
+        encode, user_tokens, training_context, digest, _factory=_VERIFIED_FACTORY
+    )
+
+
+def _renderer_record(case: Mapping[str, Any]) -> dict[str, Any]:
+    options = case.get("options")
+    state = case.get("state")
+    question = case.get("question")
+    if type(state) is not str or type(question) is not str or not isinstance(options, list):
+        raise ValueError("case must be an object")
+    descriptions: list[str] = []
+    for option in options:
+        if not isinstance(option, dict) or type(option.get("description")) is not str:
+            raise ValueError("case option must be an object")
+        descriptions.append(cast(str, option["description"]))
+    return {
+        "state": state,
+        "questions": [{"instr": question, "options": descriptions, "label": 0}],
+    }
+
+
+def _validate_tokenizer_inventory(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("tokenizer inventory is closed")
+    inventory: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"filename", "sha256"}:
+            raise ValueError("tokenizer inventory is closed")
+        filename_value = item.get("filename")
+        digest_value = item.get("sha256")
+        if not isinstance(filename_value, str) or not isinstance(digest_value, str):
+            raise ValueError("tokenizer inventory is closed")
+        filename = filename_value
+        digest = digest_value
+        if (
+            _TOKENIZER_FILENAME.fullmatch(filename) is None
+            or filename in {".", ".."}
+            or not _is_digest(digest)
+        ):
+            raise ValueError("tokenizer inventory is closed")
+        if filename in seen:
+            raise ValueError("tokenizer inventory is closed")
+        seen.add(filename)
+        inventory.append({"filename": filename, "sha256": digest})
+    return inventory
+
+
+def _inventory_digest(inventory: list[dict[str, str]]) -> str:
+    return _sha256(canonical_json_bytes(cast(Any, inventory)))
+
+
+def _snapshot_hashes(snapshot: Path, inventory: list[dict[str, str]]) -> dict[str, str]:
+    if not snapshot.is_absolute() or snapshot.is_symlink() or not snapshot.is_dir():
+        raise ValueError("tokenizer snapshot is closed")
+    info = snapshot.stat()
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError("tokenizer snapshot is closed")
+    expected = {item["filename"]: item["sha256"] for item in inventory}
+    found: dict[str, str] = {}
+    for entry in os.scandir(snapshot):
+        if entry.is_symlink() or not entry.is_file() or entry.name not in expected:
+            raise ValueError("tokenizer snapshot is closed")
+        file_info = entry.stat()
+        if file_info.st_uid != os.geteuid() or stat.S_IMODE(file_info.st_mode) != 0o600:
+            raise ValueError("tokenizer snapshot is closed")
+        digest = hashlib.sha256(Path(entry.path).read_bytes()).hexdigest()
+        if digest != expected[entry.name]:
+            raise ValueError("tokenizer file drifted")
+        found[entry.name] = digest
+    if set(found) != set(expected):
+        raise ValueError("tokenizer snapshot is closed")
+    return found
+
+
+def _method_func_id(method: Any) -> int:
+    return id(getattr(method, "__func__", method))
+
+
+def _tokenizer_seal(
+    inner: Any, inventory_digest: str, file_hashes: dict[str, str], call_id: int, convert_id: int
+) -> str:
+    payload = {
+        "call": call_id,
+        "convert": convert_id,
+        "files": file_hashes,
+        "inner": id(inner),
+        "inventory_digest": inventory_digest,
+    }
+    return hmac.new(
+        _PROCESS_SEAL, canonical_json_bytes(cast(Any, payload)), hashlib.sha256
+    ).hexdigest()
+
+
+class VerifiedTokenizer:
+    """Token-only wrapper. Production rejects an arbitrary tokenizer object."""
+
+    def __init__(
+        self,
+        inner: Any,
+        snapshot: Path,
+        inventory: list[dict[str, str]],
+        file_hashes: dict[str, str],
+        *,
+        _factory: object | None = None,
+    ) -> None:
+        if _factory is not _VERIFIED_FACTORY:
+            raise ValueError("verified runtime wrapper is required")
+        convert = getattr(inner, "convert_tokens_to_ids", None)
+        if not callable(inner) or not callable(convert):
+            raise ValueError("tokenizer loader is unavailable")
+        self._inner = inner
+        self._snapshot = snapshot
+        self._inventory = inventory
+        self._file_hashes = dict(file_hashes)
+        self.inventory_digest = _inventory_digest(inventory)
+        self._call_id = _method_func_id(inner.__call__)
+        self._convert_id = _method_func_id(convert)
+        self._inner_id = id(inner)
+        self._seal = _tokenizer_seal(
+            inner, self.inventory_digest, self._file_hashes, self._call_id, self._convert_id
+        )
+
+    def revalidate(self) -> None:
+        hashes = _snapshot_hashes(self._snapshot, self._inventory)
+        convert = getattr(self._inner, "convert_tokens_to_ids", None)
+        if (
+            hashes != self._file_hashes
+            or id(self._inner) != self._inner_id
+            or not callable(convert)
+            or _method_func_id(self._inner.__call__) != self._call_id
+            or _method_func_id(convert) != self._convert_id
+            or self._seal
+            != _tokenizer_seal(
+                self._inner,
+                self.inventory_digest,
+                hashes,
+                self._call_id,
+                self._convert_id,
+            )
+        ):
+            raise ValueError("tokenizer file drifted")
+
+    def __call__(self, text: str, add_special_tokens: bool = False) -> SimpleNamespace:
+        if add_special_tokens is not False:
+            raise ValueError("tokenizer special tokens are disabled")
+        self.revalidate()
+        result = self._inner(text, add_special_tokens=False)
+        ids = getattr(result, "input_ids", None)
+        if not isinstance(ids, list) or any(type(item) is not int for item in ids):
+            raise ValueError("tokenizer ids are closed")
+        return SimpleNamespace(input_ids=list(ids))
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        self.revalidate()
+        value = self._inner.convert_tokens_to_ids(token)
+        if type(value) is not int:
+            raise ValueError("tokenizer ids are closed")
+        return value
+
+
+def _load_transformers_tokenizer(snapshot: Path) -> Any:
+    """Optional local-only loader. Tests replace this; production never accepts a caller object."""
+    try:
+        module = importlib.import_module("transformers")
+    except ImportError as exc:
+        raise ValueError("tokenizer loader is unavailable") from exc
+    loader = getattr(module, "AutoTokenizer", None)
+    from_pretrained = getattr(loader, "from_pretrained", None)
+    if not callable(from_pretrained):
+        raise ValueError("tokenizer loader is unavailable")
+    return from_pretrained(os.fspath(snapshot), local_files_only=True, trust_remote_code=False)
+
+
+def load_verified_tokenizer(
+    local_snapshot: Path, reviewed_inventory: list[dict[str, str]]
+) -> VerifiedTokenizer:
+    """Hash the attested files, then load only that directory with the local-only loader."""
+    inventory = _validate_tokenizer_inventory(reviewed_inventory)
+    hashes = _snapshot_hashes(local_snapshot, inventory)
+    inner = _load_transformers_tokenizer(local_snapshot)
+    if type(inner) is VerifiedTokenizer:
+        raise ValueError("tokenizer loader is unavailable")
+    return VerifiedTokenizer(inner, local_snapshot, inventory, hashes, _factory=_VERIFIED_FACTORY)
+
+
+def _privacy_clear(case: Mapping[str, Any]) -> bool:
+    texts = [cast(str, case["state"]), cast(str, case["question"])]
+    options = cast(list[dict[str, Any]], case["options"])
+    for option in options:
+        texts.append(cast(str, option["description"]))
+        texts.append(cast(str, option["id"]))
+    return all(not privacy_matches(text) for text in texts)
+
+
+def _duplicate_clear(case: Mapping[str, Any], history: Iterable[Mapping[str, Any]]) -> bool:
+    options = cast(list[Any], case["options"])
+    current_state = state_question_fingerprint(case["state"], case["question"])
+    current_combined = combined_content_fingerprint(case["state"], case["question"], options)
+    for prior in history:
+        prior_options = prior.get("options")
+        if not isinstance(prior_options, list):
+            raise ValueError("duplicate history is closed")
+        if state_question_fingerprint(prior.get("state"), prior.get("question")) == current_state:
+            return False
+        if (
+            combined_content_fingerprint(prior.get("state"), prior.get("question"), prior_options)
+            == current_combined
+        ):
+            return False
+    return True
+
+
+def local_case_gates(
+    case: Mapping[str, Any],
+    identity: Mapping[str, Any],
+    renderer: VerifiedRenderer,
+    tokenizer: VerifiedTokenizer,
+    *,
+    duplicate_history: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, bool]:
+    """Local prerequisites only. Model judgments stay true here and are conjoined later."""
+    gates = {name: True for name in LOCAL_GATES}
+    try:
+        validate_case(case, dict(identity))
+    except (ValueError, OSError):
+        for name in _LOCAL_PREREQUISITES:
+            gates[name] = False
+        return gates
+    try:
+        gates["privacy_valid"] = _privacy_clear(case)
+        gates["duplicate_valid"] = _duplicate_clear(case, duplicate_history)
+    except (ValueError, OSError):
+        gates["privacy_valid"] = False
+        gates["duplicate_valid"] = False
+    try:
+        measured = renderer.measure(case, tokenizer)
+        gates["renderer_valid"] = True
+        gates["length_valid"] = measured["token_count"] <= 512
+    except (ValueError, OSError):
+        gates["renderer_valid"] = False
+        gates["length_valid"] = False
+    return gates
+
+
+def _attested_text(value: Any) -> str:
+    if type(value) is not str or not value.strip() or value != unicodedata.normalize("NFC", value):
+        raise ValueError("environment grant value mismatch")
+    if value.casefold() in _ATTESTED_REJECTED or any(
+        unicodedata.category(character) == "Cc" for character in value
+    ):
+        raise ValueError("environment grant value mismatch")
+    return value
+
+
+def _require_digest(value: Any) -> str:
+    if not _is_digest(value):
+        raise ValueError("environment grant value mismatch")
+    return cast(str, value)
+
+
+def validate_environment_grant(
+    grant: Mapping[str, Any], license_bytes_by_role: Mapping[str, bytes]
+) -> str:
+    """Return the canonical grant digest. Evidence is the operator attestation, not discovery."""
+    if not isinstance(grant, dict) or set(grant) != _GRANT_FIELDS:
+        raise ValueError("environment grant fields are closed")
+    if grant.get("schema_version") != "v02-environment-grant.v1":
+        raise ValueError("environment grant value mismatch")
+    for field in sorted(_GRANT_TRUE_FIELDS):
+        if type(grant[field]) is not bool:
+            raise ValueError("environment grant flag is not boolean")
+        if grant[field] is not True:
+            raise ValueError("environment grant value mismatch")
+    if (
+        grant.get("training_plan_digest") != _sha256(_frozen_plan_bytes("training"))
+        or grant.get("sealed_plan_digest") != _sha256(_frozen_plan_bytes("sealed"))
+        or grant.get("prompt_contract_digest") != prompt_contract()["contract_digest"]
+    ):
+        raise ValueError("environment grant value mismatch")
+    expected_models = {role: _model_identity(role) for role in _MODEL_ROLE_NAMES}
+    identities = grant.get("model_identities")
+    if not isinstance(identities, dict) or set(identities) != set(expected_models):
+        raise ValueError("environment grant value mismatch")
+    for role, model in expected_models.items():
+        if identities.get(role) != model:
+            raise ValueError("environment grant value mismatch")
+    if not isinstance(license_bytes_by_role, Mapping) or set(license_bytes_by_role) != set(
+        _MODEL_ROLE_NAMES
+    ):
+        raise ValueError("license bytes are closed")
+    claimed = grant.get("license_sha256")
+    if not isinstance(claimed, dict) or set(claimed) != set(_MODEL_ROLE_NAMES):
+        raise ValueError("license bytes are closed")
+    for role in sorted(_MODEL_ROLE_NAMES):
+        blob = license_bytes_by_role[role]
+        if type(blob) is not bytes or not blob:
+            raise ValueError("license bytes are absent")
+        if claimed.get(role) != _sha256(blob):
+            raise ValueError("environment grant value mismatch")
+    for field in (
+        "runtime_image_digest",
+        "runtime_lock_digest",
+        "account_boundary_digest",
+        "renderer_source_sha256",
+        "candidate_rendering_digest",
+        "kev_rendering_function_digest",
+    ):
+        _require_digest(grant.get(field))
+    if (
+        grant["renderer_source_sha256"] != PINNED_RENDERER_SOURCE_SHA256
+        or grant["candidate_rendering_digest"] != candidate_rendering_digest()
+        or grant["kev_rendering_function_digest"] != kev_rendering_function_digest()
+        or grant.get("transport") != "tls-ssh"
+    ):
+        raise ValueError("environment grant value mismatch")
+    for field in ("cloud_legal_service_name", "instance_class", "region"):
+        _attested_text(grant.get(field))
+    for field in ("post_run_deletion_obligation", "deletion_mechanism"):
+        _attested_text(grant.get(field))
+    for field in ("storage_retention", "log_retention"):
+        retention = grant.get(field)
+        if type(retention) is not str or _RETENTION.fullmatch(retention) is None:
+            raise ValueError("environment grant value mismatch")
+    grant["tokenizer_inventory"] = _validate_tokenizer_inventory(grant.get("tokenizer_inventory"))
+    return _sha256(canonical_json_bytes(cast(Any, grant)))
+
+
+def validate_runtime_evidence(evidence: Mapping[str, Any], role: str, grant_digest: str) -> str:
+    """Return the canonical runtime-evidence digest for one frozen role."""
+    if role not in _MODEL_ROLE_NAMES or not _is_digest(grant_digest):
+        raise ValueError("runtime evidence value mismatch")
+    if not isinstance(evidence, dict) or set(evidence) != _RUNTIME_FIELDS:
+        raise ValueError("runtime evidence fields are closed")
+    if (
+        evidence.get("schema_version") != "v02-runtime-evidence.v1"
+        or evidence.get("role") != role
+        or evidence.get("grant_digest") != grant_digest
+    ):
+        raise ValueError("runtime evidence value mismatch")
+    for field in sorted(_RUNTIME_TRUE_FIELDS):
+        if type(evidence[field]) is not bool:
+            raise ValueError("runtime evidence flag is not boolean")
+        if evidence[field] is not True:
+            raise ValueError("runtime evidence value mismatch")
+    if type(evidence.get("cpu_offload")) is not bool:
+        raise ValueError("runtime evidence flag is not boolean")
+    if evidence["cpu_offload"] is not False:
+        raise ValueError("runtime evidence value mismatch")
+    vram = evidence.get("gpu_vram_gib")
+    gpu_class = evidence.get("gpu_class")
+    if (
+        type(evidence.get("gpu_count")) is not int
+        or evidence["gpu_count"] != 1
+        or type(vram) is not int
+        or vram < 40
+        or type(gpu_class) is not str
+        or "CUDA" not in gpu_class
+        or "24" in gpu_class
+        or evidence.get("quantization") != "bitsandbytes-nf4"
+        or evidence.get("compute") != "bf16"
+        or evidence.get("tokenizer_revision") != PINNED_TOKENIZER_REVISION
+        or evidence.get("model_identity") != _model_identity(role)
+        or evidence.get("served_model_name") != MODEL_ROLES[role]["model"]
+    ):
+        raise ValueError("runtime evidence value mismatch")
+    for field in (
+        "runtime_image_digest",
+        "runtime_lock_digest",
+        "dependency_lock_digest",
+        "tokenizer_inventory_digest",
+    ):
+        if not _is_digest(evidence.get(field)):
+            raise ValueError("runtime evidence value mismatch")
+    return _sha256(canonical_json_bytes(cast(Any, evidence)))
+
+
+def _validate_loopback(base: str) -> str:
+    if type(base) is not str:
+        raise ValueError("loopback base is not local")
+    parsed = urllib.parse.urlsplit(base)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("loopback base is not local")
+    return base.rstrip("/")
+
+
+def _validate_bearer(bearer: str) -> None:
+    if type(bearer) is not str or not bearer or any(character.isspace() for character in bearer):
+        raise ValueError("loopback bearer is closed")
+
+
+def _private_dir(root: Path, name: str) -> Path:
+    if name not in _PRIVATE_DIR_NAMES:
+        raise ValueError("private path is closed")
+    path = root / name
+    events = root / "ledger-events"
+    if path.is_symlink() or path == events:
+        raise ValueError("private path is a symlink")
+    path.mkdir(mode=0o700, exist_ok=True)
+    info = path.stat()
+    if info.st_uid != os.geteuid():
+        raise ValueError("private path must have exact permission mode 0700")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        os.chmod(path, 0o700)
+    if path.stat().st_uid != os.geteuid() or stat.S_IMODE(path.stat().st_mode) != 0o700:
+        raise ValueError("private path must have exact permission mode 0700")
+    return path
+
+
+def _read_private_json(path: Path, name: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{name} is closed")
+    info = path.stat()
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError(f"{name} is closed")
+    return _closed_json_object(path.read_bytes(), name=name)
+
+
+def _read_if_present(path: Path, name: str) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return _read_private_json(path, name)
+
+
+def _write_match_or_create(path: Path, payload: dict[str, Any], message: str) -> None:
+    data = canonical_json_bytes(cast(Any, payload)) + b"\n"
+    if path.exists():
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
+            raise ValueError(message)
+        _read_private_json(path, message)
+        return
+    if path.parent.is_symlink():
+        raise ValueError(message)
+    _atomic_write(path, data)
+
+
+def _case_path(root: Path, lane: str, identity_id: str) -> Path:
+    return root / "private-cases" / f"{_sha256(f'{lane}:{identity_id}'.encode())}.json"
+
+
+def _read_private_case(root: Path, lane: str, identity_id: str) -> dict[str, Any]:
+    payload = _read_private_json(_case_path(root, lane, identity_id), "private case")
+    if (
+        set(payload) != _PRIVATE_CASE_FIELDS
+        or payload.get("schema_version") != "v02-private-case.v1"
+    ):
+        raise ValueError("private case is closed")
+    if payload.get("lane") != lane or payload.get("identity_id") != identity_id:
+        raise ValueError("private case digest mismatch")
+    identity = _frozen_identity_index(lane)[identity_id]
+    case = validate_case(payload.get("case"), identity)
+    digest = case_digest(case)
+    if payload.get("content_digest") != digest:
+        raise ValueError("private case digest mismatch")
+    return {"content_digest": digest, "case": case}
+
+
+def _store_private_case(root: Path, lane: str, identity_id: str, case: dict[str, Any]) -> None:
+    directory = _private_dir(root, "private-cases")
+    payload = {
+        "schema_version": "v02-private-case.v1",
+        "lane": lane,
+        "identity_id": identity_id,
+        "content_digest": case_digest(case),
+        "case": case,
+    }
+    _write_match_or_create(
+        directory / f"{_sha256(f'{lane}:{identity_id}'.encode())}.json",
+        payload,
+        "private case digest mismatch",
+    )
+
+
+def _same_lane_history(ledger: OfflineLedger, identity_id: str) -> list[dict[str, Any]]:
+    author_transition = "training_author" if ledger.lane == "training" else "sealed_author"
+    history: list[dict[str, Any]] = []
+    for event in ledger.events():
+        if event["transition"] != author_transition or event["identity_id"] == identity_id:
+            continue
+        envelope = cast(dict[str, Any], event["envelope"])
+        if "error_code" in envelope:
+            continue
+        stored = _read_private_case(ledger.root, ledger.lane, cast(str, event["identity_id"]))
+        if stored["content_digest"] != envelope["content_digest"]:
+            raise ValueError("private case digest mismatch")
+        history.append(cast(dict[str, Any], stored["case"]))
+    return history
+
+
+def _partner_bilingual(ledger: OfflineLedger, identity_id: str) -> dict[str, Any] | None:
+    if ledger.lane != "training":
+        return None
+    current = _frozen_identity_index("training")[identity_id]
+    pair_id = current.get("bilingual_pair_id")
+    if pair_id is None:
+        return None
+    partner_id = next(
+        (
+            other_id
+            for other_id, other in _frozen_identity_index("training").items()
+            if other_id != identity_id and other.get("bilingual_pair_id") == pair_id
+        ),
+        None,
+    )
+    if partner_id is None:
+        return None
+    author = ledger.by_identity(partner_id).get("training_author")
+    if author is None or "error_code" in author["envelope"]:
+        return None
+    stored = _read_private_case(ledger.root, "training", partner_id)
+    if stored["content_digest"] != author["envelope"]["content_digest"]:
+        raise ValueError("private case digest mismatch")
+    return {"source_identity_id": partner_id, "case": stored["case"]}
+
+
+def _failure_envelope(role: str, identity_id: str, error_code: str) -> dict[str, Any]:
+    return {
+        "schema_version": "v02-envelope.v1",
+        "role": role,
+        "model": _model_identity(role),
+        "lane": _ROLE_LANES[role],
+        "identity_id": identity_id,
+        "error_code": error_code,
+    }
+
+
+def _commit_failure(ledger: OfflineLedger, role: str, identity_id: str, error_code: str) -> str:
+    transition = f"{_ROLE_TRANSITIONS[role]}_failure"
+    ledger.commit(transition, _failure_envelope(role, identity_id, error_code))
+    return transition
+
+
+def _reject_inadmissible(ledger: OfflineLedger, identity_id: str) -> None:
+    metrics = (
+        reduce_training(ledger.plan, ledger.events())
+        if ledger.lane == "training"
+        else reduce_sealed(ledger.plan, ledger.events())
+    )
+    if metrics["status"] == "NO_GO" or metrics["pilot"]["status"] == "NO_GO":
+        raise ValueError("ledger is terminal NO_GO")
+    pilot_ids = (
+        {cast(str, slot_id) for slot_id in ledger.plan["pilot_prefix"]["slot_ids"]}
+        if ledger.lane == "training"
+        else {
+            cast(str, item["identity_id"])
+            for item in cast(list[dict[str, Any]], ledger.plan["pilot_prefix"]["identities"])
+        }
+    )
+    if identity_id not in pilot_ids and metrics["pilot"]["status"] != "PASS":
+        raise ValueError("pilot must settle and pass before full-lane commitments")
+
+
+def _author_prerequisites(envelope: Mapping[str, Any]) -> bool:
+    gates = envelope.get("gates")
+    if not isinstance(gates, dict):
+        return False
+    return all(gates.get(name) is True for name in _LOCAL_PREREQUISITES)
+
+
+def _environment_binding_path(root: Path) -> Path:
+    return root / "private-control" / "environment-binding.json"
+
+
+def _role_binding_path(root: Path, role: str) -> Path:
+    return root / "private-control" / f"{_sha256(role.encode())}.json"
+
+
+def _require_saved_binding(
+    path: Path,
+    fields: frozenset[str],
+    schema_version: str,
+    expected: dict[str, str],
+) -> None:
+    existing = _read_if_present(path, "runtime binding")
+    if existing is None:
+        return
+    if set(existing) != fields or existing.get("schema_version") != schema_version:
+        raise ValueError("runtime binding drift")
+    for key, value in expected.items():
+        if existing.get(key) != value:
+            raise ValueError("runtime binding drift")
+
+
+def _reservation_path(root: Path, identity_id: str, role: str) -> Path:
+    return root / "role-reservations" / f"{_sha256(f'{identity_id}:{role}'.encode())}.json"
+
+
+def _read_reservation(root: Path, identity_id: str, role: str) -> dict[str, Any] | None:
+    path = _reservation_path(root, identity_id, role)
+    existing = _read_if_present(path, "role reservation")
+    if existing is None:
+        return None
+    if (
+        set(existing) != _RESERVATION_FIELDS
+        or existing.get("schema_version") != "v02-role-reservation.v1"
+        or existing.get("identity_id") != identity_id
+        or existing.get("role") != role
+    ):
+        raise ValueError("role reservation is closed")
+    for field in (
+        "grant_digest",
+        "runtime_evidence_digest",
+        "prompt_contract_digest",
+        "renderer_lock_digest",
+        "request_digest",
+    ):
+        if not _is_digest(existing.get(field)):
+            raise ValueError("role reservation is closed")
+    return existing
+
+
+class _RejectRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        del req, fp, code, msg, headers, newurl
+        raise _ModelTransportError("redirect")
+
+
+def _default_transport(request: Mapping[str, Any]) -> dict[str, Any]:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirect)
+    raw_headers = cast(Mapping[str, Any], request["headers"])
+    outgoing = urllib.request.Request(
+        cast(str, request["url"]),
+        data=cast(bytes | None, request.get("body")),
+        headers={str(key): str(value) for key, value in raw_headers.items()},
+        method=cast(str, request["method"]),
+    )
+    try:
+        with opener.open(outgoing, timeout=30) as response:
+            status = response.status
+            raw = response.read(_RESPONSE_LIMIT + 1)
+    except _ModelTransportError:
+        raise
+    except TimeoutError as exc:
+        raise _ModelTransportError("timeout") from exc
+    except urllib.error.HTTPError as exc:
+        raw_error = exc.read(_RESPONSE_LIMIT + 1)
+        return {"status": exc.code, "body": raw_error}
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise _ModelTransportError("timeout") from exc
+        raise _ModelTransportError("transport") from exc
+    if type(status) is not int or type(raw) is not bytes:
+        raise _ModelTransportError("transport")
+    return {"status": status, "body": raw}
+
+
+def _invoke_transport(
+    transport: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+) -> tuple[int, bytes]:
+    try:
+        response = transport({"method": method, "url": url, "headers": headers, "body": body})
+    except TimeoutError as exc:
+        raise _ModelTransportError("timeout") from exc
+    except _ModelTransportError:
+        raise
+    except (OSError, urllib.error.URLError) as exc:
+        raise _ModelTransportError("transport") from exc
+    if not isinstance(response, Mapping):
+        raise _ModelTransportError("transport")
+    status = response.get("status")
+    raw = response.get("body")
+    if type(status) is not int or type(raw) is not bytes or len(raw) > _RESPONSE_LIMIT:
+        raise _ModelTransportError("transport")
+    if status in {301, 302, 303, 307, 308}:
+        raise _ModelTransportError("redirect")
+    return status, raw
+
+
+def _require_served_models(status: int, body: bytes, served_name: str) -> None:
+    if status != 200:
+        raise _ModelTransportError("models status")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise _ModelTransportError("models payload") from exc
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"data"}
+        or not isinstance(data, list)
+        or len(data) != 1
+        or not isinstance(data[0], dict)
+        or set(data[0]) != {"id"}
+        or data[0]["id"] != served_name
+    ):
+        raise _ModelTransportError("models payload")
+
+
+def _chat_content(status: int, body: bytes) -> bytes:
+    if status != 200:
+        raise _ModelTransportError("chat status")
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ValueError("model response is not valid pure JSON") from exc
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise ValueError("model response is not valid pure JSON")
+    message = choices[0].get("message")
+    if not isinstance(message, dict) or type(message.get("content")) is not str:
+        raise ValueError("model response is not valid pure JSON")
+    return cast(str, message["content"]).encode("utf-8")
+
+
+def _acquire_execution_lock(root: Path) -> int | None:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(root / "execution.lock", flags, 0o600)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.EPERM}:
+            raise ValueError("execution lock path is closed") from exc
+        raise
+    try:
+        info = os.fstat(descriptor)
+        if info.st_uid != os.geteuid() or not stat.S_ISREG(info.st_mode):
+            raise ValueError("execution lock path is closed")
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    except OSError as exc:
+        os.close(descriptor)
+        if exc.errno in {errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK}:
+            return None
+        raise
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _derived_request(
+    ledger: OfflineLedger, identity_id: str, role: str
+) -> tuple[dict[str, Any] | None, list[str] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+    history = _same_lane_history(ledger, identity_id)
+    if role == "training_author":
+        return None, None, _partner_bilingual(ledger, identity_id), history
+    if role == "sealed_author":
+        return None, None, None, history
+    author_transition = "training_author" if ledger.lane == "training" else "sealed_author"
+    events = ledger.by_identity(identity_id)
+    author = events.get(author_transition)
+    if author is None or "error_code" in cast(dict[str, Any], author["envelope"]):
+        raise ValueError("author case is unavailable")
+    stored = _read_private_case(ledger.root, ledger.lane, identity_id)
+    if stored["content_digest"] != author["envelope"]["content_digest"]:
+        raise ValueError("private case digest mismatch")
+    labels: list[str] | None = None
+    if role == "sealed_adjudicator":
+        labels = [
+            cast(str, events["sealed_annotator_a"]["envelope"]["label"]),
+            cast(str, events["sealed_annotator_b"]["envelope"]["label"]),
+        ]
+    return cast(dict[str, Any], stored["case"]), labels, None, history
+
+
+def execute_role(
+    ledger: OfflineLedger,
+    identity_id: str,
+    role: str,
+    runtime_evidence: Mapping[str, Any],
+    grant: Mapping[str, Any],
+    license_bytes_by_role: Mapping[str, bytes],
+    loopback_base: str,
+    bearer: str,
+    renderer: VerifiedRenderer,
+    tokenizer: VerifiedTokenizer,
+    *,
+    transport: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Run one frozen role under the root lock. Caller content and history are ignored."""
+    lock = _acquire_execution_lock(ledger.root)
+    if lock is None:
+        return {"status": "busy", "dispatch": False}
+    try:
+        return _execute_role_locked(
+            ledger,
+            identity_id,
+            role,
+            runtime_evidence,
+            grant,
+            license_bytes_by_role,
+            loopback_base,
+            bearer,
+            renderer,
+            tokenizer,
+            transport if transport is not None else _default_transport,
+        )
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        os.close(lock)
+
+
+def _execute_role_locked(
+    ledger: OfflineLedger,
+    identity_id: str,
+    role: str,
+    runtime_evidence: Mapping[str, Any],
+    grant: Mapping[str, Any],
+    license_bytes_by_role: Mapping[str, bytes],
+    loopback_base: str,
+    bearer: str,
+    renderer: VerifiedRenderer,
+    tokenizer: VerifiedTokenizer,
+    transport: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+) -> dict[str, Any]:
+    _role_identity(ledger.plan, identity_id, role)
+    base = _validate_loopback(loopback_base)
+    _validate_bearer(bearer)
+    if type(renderer) is not VerifiedRenderer or type(tokenizer) is not VerifiedTokenizer:
+        raise ValueError("verified runtime wrapper is required")
+    grant_digest = validate_environment_grant(grant, license_bytes_by_role)
+    evidence_digest = validate_runtime_evidence(runtime_evidence, role, grant_digest)
+    if (
+        runtime_evidence["runtime_image_digest"] != grant["runtime_image_digest"]
+        or runtime_evidence["runtime_lock_digest"] != grant["runtime_lock_digest"]
+        or runtime_evidence["tokenizer_inventory_digest"] != tokenizer.inventory_digest
+        or tokenizer.inventory_digest
+        != _inventory_digest(cast(list[dict[str, str]], grant["tokenizer_inventory"]))
+    ):
+        raise ValueError("runtime evidence value mismatch")
+    renderer.revalidate()
+    tokenizer.revalidate()
+    prompt_digest = cast(str, prompt_contract()["contract_digest"])
+    lock_digest = _renderer_lock_digest()
+    _require_saved_binding(
+        _environment_binding_path(ledger.root),
+        _ENVIRONMENT_BINDING_FIELDS,
+        "v02-environment-binding.v1",
+        {
+            "grant_digest": grant_digest,
+            "prompt_contract_digest": prompt_digest,
+            "renderer_lock_digest": lock_digest,
+        },
+    )
+    _require_saved_binding(
+        _role_binding_path(ledger.root, role),
+        _ROLE_BINDING_FIELDS,
+        "v02-role-binding.v1",
+        {
+            "role": role,
+            "grant_digest": grant_digest,
+            "runtime_evidence_digest": evidence_digest,
+            "prompt_contract_digest": prompt_digest,
+            "renderer_lock_digest": lock_digest,
+        },
+    )
+    transition = _ROLE_TRANSITIONS[role]
+    committed = ledger.by_identity(identity_id)
+    if transition in committed:
+        return {"status": "resumed", "dispatch": False, "transition": transition}
+    failure_transition = f"{transition}_failure"
+    if failure_transition in committed:
+        return {"status": "resumed", "dispatch": False, "transition": failure_transition}
+    ledger._validate_legal_transition(
+        transition, _failure_envelope(role, identity_id, "model_error"), committed
+    )
+    _reject_inadmissible(ledger, identity_id)
+    reservation = _read_reservation(ledger.root, identity_id, role)
+    if reservation is not None:
+        locks_match = (
+            reservation["grant_digest"] == grant_digest
+            and reservation["runtime_evidence_digest"] == evidence_digest
+            and reservation["prompt_contract_digest"] == prompt_digest
+            and reservation["renderer_lock_digest"] == lock_digest
+        )
+        if not locks_match:
+            raise ValueError("runtime binding drift")
+        return {
+            "status": "committed",
+            "dispatch": False,
+            "transition": _commit_failure(ledger, role, identity_id, "model_error"),
+        }
+    case, labels, bilingual, history = _derived_request(ledger, identity_id, role)
+    if role not in {"training_author", "sealed_author"}:
+        author_transition = "training_author" if ledger.lane == "training" else "sealed_author"
+        author_envelope = cast(dict[str, Any], committed[author_transition]["envelope"])
+        if not _author_prerequisites(author_envelope):
+            return {
+                "status": "committed",
+                "dispatch": False,
+                "transition": _commit_failure(ledger, role, identity_id, "local_gate_failure"),
+            }
+    messages = role_request(
+        ledger.plan,
+        identity_id,
+        role,
+        case,
+        labels,
+        bilingual,
+    )
+    request_digest = _sha256(canonical_json_bytes(cast(Any, messages)))
+    _private_dir(ledger.root, "private-control")
+    _write_match_or_create(
+        _environment_binding_path(ledger.root),
+        {
+            "schema_version": "v02-environment-binding.v1",
+            "grant_digest": grant_digest,
+            "prompt_contract_digest": prompt_digest,
+            "renderer_lock_digest": lock_digest,
+        },
+        "runtime binding drift",
+    )
+    _write_match_or_create(
+        _role_binding_path(ledger.root, role),
+        {
+            "schema_version": "v02-role-binding.v1",
+            "role": role,
+            "grant_digest": grant_digest,
+            "runtime_evidence_digest": evidence_digest,
+            "prompt_contract_digest": prompt_digest,
+            "renderer_lock_digest": lock_digest,
+        },
+        "runtime binding drift",
+    )
+    _private_dir(ledger.root, "role-reservations")
+    _write_match_or_create(
+        _reservation_path(ledger.root, identity_id, role),
+        {
+            "schema_version": "v02-role-reservation.v1",
+            "identity_id": identity_id,
+            "role": role,
+            "grant_digest": grant_digest,
+            "runtime_evidence_digest": evidence_digest,
+            "prompt_contract_digest": prompt_digest,
+            "renderer_lock_digest": lock_digest,
+            "request_digest": request_digest,
+        },
+        "runtime binding drift",
+    )
+    served_name = MODEL_ROLES[role]["model"]
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {bearer}",
+        "Content-Type": "application/json",
+    }
+    inference = False
+    try:
+        status, body = _invoke_transport(
+            transport, method="GET", url=f"{base}/v1/models", headers=headers, body=None
+        )
+        _require_served_models(status, body, served_name)
+        inference = True
+        chat = canonical_json_bytes(
+            cast(
+                Any,
+                {
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "max_tokens": 2048,
+                    "messages": messages,
+                    "model": served_name,
+                    "seed": SEED_TRAINING if ledger.lane == "training" else SEED_SEALED,
+                    "temperature": 0,
+                },
+            )
+        )
+        status, body = _invoke_transport(
+            transport,
+            method="POST",
+            url=f"{base}/v1/chat/completions",
+            headers=headers,
+            body=chat,
+        )
+        content = _chat_content(status, body)
+        parsed = parse_role_response(content, ledger.plan, identity_id, role, labels)
+    except _ModelTransportError:
+        return {
+            "status": "committed",
+            "dispatch": inference,
+            "transition": _commit_failure(ledger, role, identity_id, "model_error"),
+        }
+    except (ValueError, OSError, UnicodeError, json.JSONDecodeError):
+        return {
+            "status": "committed",
+            "dispatch": inference,
+            "transition": _commit_failure(ledger, role, identity_id, "invalid_output"),
+        }
+    if role in {"training_author", "sealed_author"}:
+        case = case_from_author(parsed, ledger.plan, identity_id)
+        _store_private_case(ledger.root, ledger.lane, identity_id, case)
+    if case is None:
+        raise ValueError("author case is unavailable")
+    gates = local_case_gates(
+        case,
+        _role_identity(ledger.plan, identity_id, role),
+        renderer,
+        tokenizer,
+        duplicate_history=history,
+    )
+    envelope = role_envelope(parsed, ledger.plan, identity_id, role, case, gates, labels)
+    ledger.commit(transition, envelope)
+    return {"status": "committed", "dispatch": True, "transition": transition}
 
 
 def main() -> int:

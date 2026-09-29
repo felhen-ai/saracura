@@ -1806,7 +1806,7 @@ def _validate_distillation_renderer(payload: dict[str, Any], path: Path) -> None
         raise ValueError(f"{path}: renderer_contracts must be an object")
     expected: dict[str, Any] = {
         "kev_rendering_function_digest": (
-            "9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66"
+            "eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169"
         ),
         "candidate_renderer_source_revision": "9c41005b2180347c3c646dfc9e50c4428483ec6b",
         "candidate_renderer_source_sha256": (

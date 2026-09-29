@@ -48,7 +48,7 @@ def _descriptor() -> dict[str, Any]:
         "kev_base_model_revision": "1001bb4d826a52d1f399e183466143f4da7b741b",
         "kev_adapter_revision": CONTROL_REVISIONS["kev"],
         "kev_rendering_function_digest": (
-            "9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66"
+            "eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169"
         ),
         "truncation_disabled": True,
         "all_records_kev_preflight_passed": True,

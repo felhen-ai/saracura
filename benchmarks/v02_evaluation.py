@@ -21,8 +21,8 @@ PHASE5D_MANIFEST_SHA256 = "af983ce181018a2f6c5abec351ce1b78e875764616875aed3f59a
 PROTOCOL_SPEC_PATH = (
     Path(__file__).parent.parent / "docs/action/specs/v02-model-evaluation-protocol.md"
 )
-PROTOCOL_SPEC_SHA256 = "035447830c76c302cd5da6ca0560be64ffa98d10bc1649c7f710d08cfd7f2621"
-PROTOCOL_MANIFEST_SHA256 = "68cd2aa62165029890c13d521bac52ad8ee426604427d16aa93a8e2f6f5453e8"
+PROTOCOL_SPEC_SHA256 = "4e63fe2aa1a52a2fc511620a891ebda6f95ca0b71dbf7aec04e6f81eab1525ca"
+PROTOCOL_MANIFEST_SHA256 = "fb3ca7b7c53f0b384f9763c1842cb56c16b33b9d5e1f7245a04396804c59d476"
 
 DESCRIPTOR_FIELDS = frozenset(
     {
@@ -310,6 +310,13 @@ def combined_content_fingerprint(state: Any, question: Any, options: list[Any]) 
     return hashlib.sha256(combined_content_canonical_bytes(state, question, options)).hexdigest()
 
 
+def state_question_fingerprint(state: Any, question: Any) -> str:
+    """Identity-free #44 fingerprint of normalized state and question/instruction."""
+    return hashlib.sha256(
+        _canonical_json({"question": _normalise(question), "state": _normalise(state)})
+    ).hexdigest()
+
+
 def _validate_manifest_schema(manifest: dict[str, Any]) -> None:
     fields = frozenset(
         {
@@ -473,7 +480,7 @@ def _validate_descriptor(descriptor: dict[str, Any]) -> None:
         or descriptor["kev_base_model_revision"] != "1001bb4d826a52d1f399e183466143f4da7b741b"
         or descriptor["kev_adapter_revision"] != CONTROL_REVISIONS["kev"]
         or descriptor["kev_rendering_function_digest"]
-        != "9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66"
+        != "eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169"
         or descriptor["truncation_disabled"] is not True
         or descriptor["all_records_kev_preflight_passed"] is not True
     ):

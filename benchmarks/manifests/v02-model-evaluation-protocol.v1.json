@@ -1,6 +1,6 @@
 {
   "schema_version": "v02-model-evaluation-protocol.v1",
-  "protocol_digest": "035447830c76c302cd5da6ca0560be64ffa98d10bc1649c7f710d08cfd7f2621",
+  "protocol_digest": "4e63fe2aa1a52a2fc511620a891ebda6f95ca0b71dbf7aec04e6f81eab1525ca",
   "development_lane": {
     "bound_manifest": "benchmarks/manifests/phase5d-ptbr-native.v1.json",
     "bound_manifest_sha256": "af983ce181018a2f6c5abec351ce1b78e875764616875aed3f59aa416a499ff6",
@@ -128,7 +128,7 @@
     "max_rendered_input_tokens": 512,
     "base_model_revision": "1001bb4d826a52d1f399e183466143f4da7b741b",
     "adapter_revision": "139fdd94f1b6a6ad80cc15e08fcb99cac885a101",
-    "rendering_function_digest": "9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66",
+    "rendering_function_digest": "eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169",
     "truncation_disabled": true,
     "input_truncation_detected_must_be_zero_for_every_model": true,
     "preflight_before_every_kev_call": true

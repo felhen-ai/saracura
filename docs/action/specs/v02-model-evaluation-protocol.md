@@ -144,14 +144,17 @@ HTTP transport overhead is part of the declared runtime boundary.
 The comparable v0.2 lane has a frozen maximum of 512 rendered input tokens
 under the pinned Kev tokenizer and adapter rendering function, measured with
 truncation disabled. The protocol manifest binds the adapter revision and the
-digest of the exact rendering template/function. The sealed descriptor proves
-every held-out record fits that envelope. The benchmark client repeats the
-preflight before every Kev call. Every model row records
-`input_truncation_detected`; the valid protocol requires that counter to remain
-zero for every model. A capacity rejection remains in the planned denominator,
-and a response from a request that did not pass the applicable model preflight
-is never scored as valid even if an upstream service returns HTTP 200 after
-truncation.
+rendering-function digest
+`eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169`.
+The 384/1024/2048 encoder limits and the 512-token ceiling are the joint
+admission contract. They do not describe Kev's full standalone serving context.
+The sealed descriptor proves every held-out record fits that envelope. The
+benchmark client repeats the preflight before every Kev call. Every model row
+records `input_truncation_detected`; the valid protocol requires that counter to
+remain zero for every model. A capacity rejection remains in the planned
+denominator, and a response from a request that did not pass the applicable
+model preflight is never scored as valid even if an upstream service returns
+HTTP 200 after truncation.
 
 ## Metrics and slices
 

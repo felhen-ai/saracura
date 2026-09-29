@@ -113,13 +113,15 @@ closed semantic-attestation agreement, and local schema, privacy, fictionality,
 length and duplicate gates. Review never rewrites a row.
 
 Before generation, every planned or authored record must pass both renderers
-with truncation disabled: the frozen #44 Kev rendering function digest
-`9f42035579e68f6c0e535df2e107b189314b9c93f3899b442855a9dd4e6a9c66`
+with truncation disabled: the frozen Kev rendering function digest
+`eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169`
 and the candidate renderer derived exactly from `kev/model.py` revision
 `9c41005b2180347c3c646dfc9e50c4428483ec6b` with `max_state=384`,
 `max_branch=1024`, `max_packed=2048`, `strict=true`,
 `option_isolation=false`, `special_embeddings=false`, `lora_targets=all` and
-`head_dim=256`. Phase B freezes the source-file hash and resulting
+`head_dim=256`. These 384/1024/2048 limits and the 512-token ceiling are the
+joint admission contract for both renderers. They do not describe Kev's full
+standalone serving context. Phase B freezes the source-file hash and resulting
 `candidate_rendering_digest`; live work cannot begin before both digests are in
 the reviewed manifest. Every accepted training and sealed record is at most 512
 candidate-rendered tokens and passes the Kev preflight. A render failure rejects
