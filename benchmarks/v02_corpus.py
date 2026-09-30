@@ -2712,6 +2712,7 @@ _RETENTION = re.compile(r"^(?:0|[1-9][0-9]{0,4})[smhd]$")
 _TOKENIZER_FILENAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _ATTESTED_REJECTED = frozenset({"unknown", "none", "null"})
 _RESPONSE_LIMIT = 1_048_576
+_MODEL_TIMEOUT_SECONDS = 180
 _ADMISSION_CONTEXT = {"max_state": 384, "max_branch": 1024, "max_packed": 2048}
 
 
@@ -3579,7 +3580,7 @@ def _default_transport(request: Mapping[str, Any]) -> dict[str, Any]:
         method=cast(str, request["method"]),
     )
     try:
-        with opener.open(outgoing, timeout=30) as response:
+        with opener.open(outgoing, timeout=_MODEL_TIMEOUT_SECONDS) as response:
             status = response.status
             raw = response.read(_RESPONSE_LIMIT + 1)
     except _ModelTransportError:
