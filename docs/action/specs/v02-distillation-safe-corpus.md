@@ -56,6 +56,10 @@ Different Apache-2.0 model families remove hosted-output restrictions while pres
 
 #### Author contract
 
+> Supersession note (2026-09-30): the original cleanroom namespace and its failed
+> pilot remain historical. Native JSON recovery is specified in
+> `v02-corpus-native-json.md` and uses fresh, non-retry identities.
+
 - Model: `Qwen/Qwen3.5-9B` at immutable revision
   `c202236235762e1c871ad0ccb60c8ee5ba337b9a`. Preflight verifies that the
   downloaded snapshot and license bytes match the frozen identity; it does not

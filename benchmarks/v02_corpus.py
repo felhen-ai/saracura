@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
+import copy
 import errno
 import fcntl
 import hashlib
@@ -36,7 +37,10 @@ MANIFEST_PATH = Path(__file__).parent / "manifests" / "v02-distillation-safe-cor
 
 SEED_TRAINING = 20260929
 SEED_SEALED = 20260930
-NAMESPACE = "saracura-v02-cleanroom-v1"
+NAMESPACE = "saracura-v02-native-json-v1"
+PROTOCOL_DIGEST = "c5-native-json-r1"
+NATIVE_DECODER_POLICY = "v02-native-json-schema-projection.v1"
+AUTHOR_METADATA_CONST_POLICY = "planned-scenario-and-ordered-criterion-roles.v1"
 
 DOMAINS = [
     "email_triage",
@@ -377,7 +381,7 @@ def _validate_closed_schema(manifest: dict[str, Any]) -> None:
 
 
 def _validate_frozen_values(manifest: dict[str, Any]) -> None:
-    if manifest.get("protocol_digest") != "b1-offline-plan-r4":
+    if manifest.get("protocol_digest") != PROTOCOL_DIGEST:
         raise ValueError("protocol_digest mismatch")
     runtime = manifest.get("runtime_policy", {})
     if runtime.get("serving_runtime") != "vLLM":
@@ -972,7 +976,7 @@ def _generate_sealed_plan() -> dict[str, Any]:
         for _i in range(3):
             identities.append(
                 {
-                    "identity_id": _opaque_slot_id("sealed", len(identities), rng),
+                    "identity_id": _opaque_slot_id(f"{NAMESPACE}:sealed", len(identities), rng),
                     "locale": "pt_br",
                     "option_count": oc,
                     "permutation_rank": len(identities),
@@ -982,7 +986,7 @@ def _generate_sealed_plan() -> dict[str, Any]:
         for _i in range(17):
             identities.append(
                 {
-                    "identity_id": _opaque_slot_id("sealed", len(identities), rng),
+                    "identity_id": _opaque_slot_id(f"{NAMESPACE}:sealed", len(identities), rng),
                     "locale": "pt_br",
                     "option_count": oc,
                     "permutation_rank": len(identities),
@@ -1529,6 +1533,60 @@ def _role_response_schema(
     }
 
 
+def native_decoder_schema(
+    role: str, identity: dict[str, Any], labels: list[str] | None = None
+) -> dict[str, Any]:
+    """Return the xgrammar-compatible decoder projection of the full prompt schema."""
+    schema = copy.deepcopy(_role_response_schema(role, identity, labels))
+    properties = cast(dict[str, Any], schema["properties"])
+    if role in {"training_author", "sealed_author"}:
+        option_ids = [f"option_{index}" for index in range(identity["option_count"])]
+        options = cast(dict[str, Any], properties["options"])
+        item_schema = cast(dict[str, Any], options.pop("items"))
+        options["prefixItems"] = [
+            {
+                **item_schema,
+                "properties": {
+                    **cast(dict[str, Any], item_schema["properties"]),
+                    "id": {"const": option_id},
+                },
+            }
+            for option_id in option_ids
+        ]
+        options["items"] = False
+    semantic = schema["properties"].get("semantic")
+    if isinstance(semantic, dict):
+        criterion_roles = semantic.get("properties", {}).get("criterion_roles")
+        if isinstance(criterion_roles, dict):
+            criterion_roles.pop("uniqueItems", None)
+    if role == "training_author":
+        scenario_code = identity.get("scenario_code")
+        criterion_roles = identity.get("criterion_roles")
+        if type(scenario_code) is not str or not isinstance(criterion_roles, list):
+            raise ValueError("training author native schema requires planned semantic metadata")
+        properties["semantic"] = {
+            "const": {
+                "scenario_code": scenario_code,
+                "criterion_roles": criterion_roles,
+            }
+        }
+    return schema
+
+
+def native_response_format(
+    role: str, identity: dict[str, Any], labels: list[str] | None = None
+) -> dict[str, Any]:
+    if role not in _MODEL_ROLE_NAMES:
+        raise ValueError("unknown model role")
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": f"saracura_v02_{role}",
+            "schema": native_decoder_schema(role, identity, labels),
+        },
+    }
+
+
 def prompt_contract() -> dict[str, Any]:
     template_digests = {
         role: _sha256(template.encode("utf-8")) for role, template in sorted(ROLE_TEMPLATES.items())
@@ -1544,6 +1602,38 @@ def prompt_contract() -> dict[str, Any]:
                         Any,
                         [
                             _role_response_schema(role, {"option_count": count, "domain": domain})
+                            for count in OPTION_COUNTS
+                            for domain in DOMAINS
+                        ],
+                    )
+                )
+            )
+            for role in sorted(_MODEL_ROLE_NAMES)
+        },
+        "native_decoder_policy": NATIVE_DECODER_POLICY,
+        "author_metadata_const_policy": AUTHOR_METADATA_CONST_POLICY,
+        "native_decoder_schema_digests": {
+            role: _sha256(
+                canonical_json_bytes(
+                    cast(
+                        Any,
+                        [
+                            native_decoder_schema(
+                                role,
+                                {
+                                    "option_count": count,
+                                    "domain": domain,
+                                    "scenario_code": _validated_corpus_taxonomy()[3][domain][0],
+                                    "criterion_roles": [
+                                        "matches_rule",
+                                        *[
+                                            candidate
+                                            for candidate in _validated_corpus_taxonomy()[2]
+                                            if candidate != "matches_rule"
+                                        ][: count - 1],
+                                    ],
+                                },
+                            )
                             for count in OPTION_COUNTS
                             for domain in DOMAINS
                         ],
@@ -3911,6 +4001,9 @@ def _execute_role_locked(
                     "max_tokens": 2048,
                     "messages": messages,
                     "model": served_name,
+                    "response_format": native_response_format(
+                        role, _role_identity(ledger.plan, identity_id, role), labels
+                    ),
                     "seed": SEED_TRAINING if ledger.lane == "training" else SEED_SEALED,
                     "temperature": 0,
                 },

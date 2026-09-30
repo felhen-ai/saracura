@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import stat
 import subprocess
 import sys
@@ -302,7 +303,7 @@ def test_plan_training_creates_exact_counts(tmp_path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema_version"] == "v02-plan.v1"
     assert data["lane"] == "training"
-    assert data["namespace"] == "saracura-v02-cleanroom-v1"
+    assert data["namespace"] == "saracura-v02-native-json-v1"
     assert data["seed"] == 20260929
     slot_ids = data["slot_ids"]
     assert len(slot_ids) == 1600
@@ -1264,6 +1265,9 @@ def test_c1_prompt_contract_is_deterministic_and_six_roles_are_bound() -> None:
     )
     assert first["one_invocation_per_role_identity"] is True
     assert first["retry_policy"] == "forbidden"
+    assert (
+        first["author_metadata_const_policy"] == "planned-scenario-and-ordered-criterion-roles.v1"
+    )
     training = v02_corpus._generate_training_plan()
     slot = training["slots"][0]
     request = v02_corpus.role_request(training, slot["slot_id"], "training_author")
@@ -1473,6 +1477,134 @@ def test_c1_all_requests_provide_explicit_closed_response_schema(role: str) -> N
         assert "gold_position" not in context and "family_id" not in context
 
 
+@pytest.mark.parametrize("role", sorted(v02_corpus.MODEL_ROLES))
+@pytest.mark.parametrize("option_count", range(2, 9))
+def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments(
+    role: str, option_count: int
+) -> None:
+    lane = v02_corpus._ROLE_LANES[role]
+    plan = (
+        v02_corpus._generate_training_plan()
+        if lane == "training"
+        else v02_corpus._generate_sealed_plan()
+    )
+    identity = next(
+        item
+        for item in (plan["slots"] if lane == "training" else plan["identities"])
+        if item["option_count"] == option_count
+    )
+    identity_id = cast(str, identity.get("slot_id", identity.get("identity_id")))
+    labels = ["option_0", "option_1"] if role == "sealed_adjudicator" else None
+    prompt_schema = v02_corpus._role_response_schema(role, identity, labels)
+    response_format = v02_corpus.native_response_format(role, identity, labels)
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == f"saracura_v02_{role}"
+    schema = response_format["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == v02_corpus._response_fields(role)
+    assert prompt_schema == v02_corpus._role_response_schema(role, identity, labels)
+    for judgment in v02_corpus._JUDGMENT_FIELDS:
+        assert schema["properties"][judgment] == {"type": "boolean"}
+    label_field = {
+        "training_author": "answer",
+        "independent_reviewer": "answer",
+        "sealed_author": "target",
+        "sealed_annotator_a": "label",
+        "sealed_annotator_b": "label",
+        "sealed_adjudicator": "choice",
+    }[role]
+    assert schema["properties"][label_field] == {
+        "type": "string",
+        "enum": labels or [f"option_{index}" for index in range(option_count)],
+    }
+    if role in {"training_author", "sealed_author"}:
+        prompt_options = prompt_schema["properties"]["options"]
+        assert "prefixItems" not in prompt_options
+        assert prompt_options["items"]["properties"]["id"] == {
+            "type": "string",
+            "enum": [f"option_{index}" for index in range(option_count)],
+        }
+        options = schema["properties"]["options"]
+        assert options["items"] is False
+        assert [item["properties"]["id"] for item in options["prefixItems"]] == [
+            {"const": f"option_{index}"} for index in range(identity["option_count"])
+        ]
+    if role == "training_author":
+        assert (
+            prompt_schema["properties"]["semantic"]["properties"]["criterion_roles"]["uniqueItems"]
+            is True
+        )
+        assert schema["properties"]["semantic"]["const"] == {
+            "scenario_code": identity["scenario_code"],
+            "criterion_roles": identity["criterion_roles"],
+        }
+    else:
+        for judgment in v02_corpus._JUDGMENT_FIELDS:
+            assert schema["properties"][judgment] == {"type": "boolean"}
+    if role == "independent_reviewer":
+        prompt_schema = v02_corpus._role_response_schema(role, identity)
+        prompt_roles = prompt_schema["properties"]["semantic"]["properties"]["criterion_roles"]
+        native_roles = schema["properties"]["semantic"]["properties"]["criterion_roles"]
+        assert prompt_roles["uniqueItems"] is True
+        assert "uniqueItems" not in native_roles
+    if role == "sealed_adjudicator":
+        assert schema["properties"]["choice"]["enum"] == labels
+    assert identity_id
+
+
+def test_c5a_fresh_lane_ids_reject_legacy_plans_and_grants(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    current_training = v02_corpus._generate_training_plan()
+    current_sealed = v02_corpus._generate_sealed_plan()
+    taxonomy = v02_corpus._validated_corpus_taxonomy()
+    old_namespace = "saracura-v02-cleanroom-v1"
+    with monkeypatch.context() as legacy:
+        legacy.setattr(v02_corpus, "NAMESPACE", old_namespace)
+        legacy.setattr(v02_corpus, "_validated_corpus_taxonomy", lambda: taxonomy)
+        v02_corpus._frozen_plan_bytes.cache_clear()
+        v02_corpus._frozen_identity_index.cache_clear()
+        old_training = v02_corpus._generate_training_plan()
+    # The legacy source used the literal "sealed" prefix; it was not namespace-derived.
+    legacy_rng = random.Random(v02_corpus.SEED_SEALED)
+    old_sealed_ids = {
+        v02_corpus._opaque_slot_id("sealed", index, legacy_rng) for index in range(140)
+    }
+    assert len(old_sealed_ids) == 140
+    assert set(current_training["slot_ids"]).isdisjoint(old_training["slot_ids"])
+    assert {item["identity_id"] for item in current_sealed["identities"]}.isdisjoint(old_sealed_ids)
+    v02_corpus._frozen_plan_bytes.cache_clear()
+    v02_corpus._frozen_identity_index.cache_clear()
+    legacy_root = tmp_path / "legacy"
+    _mkdir_0700(legacy_root)
+    with pytest.raises(ValueError, match="frozen plan"):
+        v02_corpus.OfflineLedger(old_training, legacy_root)
+    assert not (legacy_root / "role-reservations").exists()
+    root = tmp_path / "current"
+    _mkdir_0700(root)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    grant["training_plan_digest"] = v02_corpus._sha256(
+        canonical_json_bytes(cast(JsonValue, old_training))
+    )
+    ledger = v02_corpus.OfflineLedger(current_training, root)
+    slot = _pilot_training_slot(current_training, pilot=True)
+    transport = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], "{}")
+    with pytest.raises(ValueError, match="environment grant value mismatch"):
+        _run_role(
+            ledger,
+            cast(str, slot["slot_id"]),
+            "training_author",
+            grant,
+            _license_bytes(),
+            renderer,
+            tokenizer,
+            transport,
+        )
+    assert transport.calls == []
+    assert not (root / "role-reservations").exists()
+
+
 def test_c1_adjudicator_needs_case_and_cannot_choose_a_third_label() -> None:
     plan = v02_corpus._generate_sealed_plan()
     identity = next(row for row in plan["identities"] if row["option_count"] == 3)
@@ -1589,6 +1721,21 @@ def test_c1_schema_and_system_changes_change_contract_digest(
     original = v02_corpus.prompt_contract()
     assert set(original["response_schema_digests"]) == set(v02_corpus.MODEL_ROLES)
     monkeypatch.setattr(v02_corpus, "_ROLE_SYSTEM_TEMPLATE", "changed")
+    assert v02_corpus.prompt_contract()["contract_digest"] != original["contract_digest"]
+    monkeypatch.undo()
+    monkeypatch.setattr(v02_corpus, "NATIVE_DECODER_POLICY", "changed")
+    assert v02_corpus.prompt_contract()["contract_digest"] != original["contract_digest"]
+    monkeypatch.undo()
+    native_decoder_schema = v02_corpus.native_decoder_schema
+
+    def changed_native_decoder_schema(
+        role: str, identity: dict[str, Any], labels: list[str] | None = None
+    ) -> dict[str, Any]:
+        schema = native_decoder_schema(role, identity, labels)
+        schema["native_schema_mutation"] = True
+        return schema
+
+    monkeypatch.setattr(v02_corpus, "native_decoder_schema", changed_native_decoder_schema)
     assert v02_corpus.prompt_contract()["contract_digest"] != original["contract_digest"]
 
 
@@ -2315,6 +2462,7 @@ def test_c2_six_roles_dispatch_once_and_resume_without_network(
     assert chat["temperature"] == 0
     assert chat["max_tokens"] == 2048
     assert chat["seed"] == v02_corpus.SEED_TRAINING
+    assert chat["response_format"] == v02_corpus.native_response_format("training_author", slot)
     assert chat["chat_template_kwargs"] == {"enable_thinking": False}
     assert chat["model"] == v02_corpus.MODEL_ROLES["training_author"]["model"]
     assert "no retry" in cast(str, chat["messages"][0]["content"])
@@ -2378,7 +2526,12 @@ def test_c2_six_roles_dispatch_once_and_resume_without_network(
             sealed_ledger, sealed_id, role, grant, licenses, renderer, tokenizer, transport
         )
         assert result["dispatch"] is True and len(transport.posts()) == 1
-        assert _chat_body(transport.posts()[0])["seed"] == v02_corpus.SEED_SEALED
+        payload = _chat_body(transport.posts()[0])
+        assert payload["seed"] == v02_corpus.SEED_SEALED
+        labels = ["option_0", "option_1"] if role == "sealed_adjudicator" else None
+        assert payload["response_format"] == v02_corpus.native_response_format(
+            role, identity, labels
+        )
         if role == "sealed_adjudicator":
             adjudication = _message_context(transport.posts()[0])
             assert set(cast(list[str], adjudication["labels"])) == {"option_0", "option_1"}
