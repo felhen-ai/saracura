@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pydantic import JsonValue
 
 import benchmarks.v02_corpus as v02_corpus
+from benchmarks.v02_evaluation import combined_content_fingerprint, state_question_fingerprint
 from benchmarks.validate_manifests import (
     validate_routed_manifest,
     validate_v02_distillation_safe_corpus,
@@ -1617,3 +1621,1293 @@ def test_c1_semantic_disagreement_is_committed_then_rejected(tmp_path: Path) -> 
     metrics = v02_corpus.reduce_training(plan, ledger.events())
     assert metrics["accepted"] == 0 and metrics["resolved"] == 1
     assert metrics["denominator"] == 1600
+
+
+_RENDERER_SOURCE = """\
+SPECIAL = [
+    "<|fim_prefix|>",
+    "<|fim_middle|>",
+    "<|box_start|>",
+    "<|box_end|>",
+    "<|fim_suffix|>",
+]
+MAX_STATE = 384
+MAX_BRANCH = 1024
+MAX_PACKED = 2048
+SERVE_MAX_STATE = 384
+SERVE_MAX_BRANCH = 1024
+SERVE_MAX_PACKED = 2048
+MAX_TRAIN_STATE = 384
+OPT_NONE = 0
+OPT_DECIDE = 1
+_SPECIAL_RE = re.compile("fim")
+
+
+class ContextOverflow(ValueError):
+    pass
+
+
+def training_context():
+    return {"max_branch": MAX_BRANCH, "max_packed": MAX_PACKED, "max_state": MAX_STATE}
+
+
+def user_tokens(tokenizer, text):
+    rewritten = text
+    for marker in SPECIAL:
+        name = marker[2:-2]
+        rewritten = rewritten.replace(marker, "<\u00a6" + name + "\u00a6>")
+    return tokenizer(rewritten, add_special_tokens=False).input_ids
+
+
+def encode(tokenizer, record, max_state=384, max_branch=1024, strict=True, option_isolation=False):
+    if (
+        max_state != 384
+        or max_branch != 1024
+        or strict is not True
+        or option_isolation is not False
+    ):
+        raise ValueError("closed")
+    state = record["state"]
+    if len(state) > max_state:
+        raise ContextOverflow("state")
+    ids = user_tokens(tokenizer, state)
+    return {"ids": ids, "labels": [OPT_NONE], "state_truncated": "TRUNCATE" in state}
+"""
+
+_LOCK_HOLDER = """\
+import fcntl
+import os
+import sys
+
+fd = os.open(sys.argv[1] + "/execution.lock", os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+sys.stdout.write("locked\\n")
+sys.stdout.flush()
+sys.stdin.readline()
+"""
+
+
+class _FixedTokenizer:
+    def __init__(self, count: int = 4) -> None:
+        self.count = count
+
+    def __call__(self, text: str, add_special_tokens: bool = False) -> SimpleNamespace:
+        del text
+        if add_special_tokens:
+            raise ValueError("tokenizer special tokens are disabled")
+        return SimpleNamespace(input_ids=[1] * self.count)
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        del token
+        return 3
+
+
+class _Loopback:
+    def __init__(self, served: str, content: str, *, fail: str | None = None) -> None:
+        self.served = served
+        self.content = content
+        self.fail = fail
+        self.calls: list[Mapping[str, Any]] = []
+
+    def __call__(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        self.calls.append(request)
+        if self.fail == "timeout":
+            raise TimeoutError("timed out")
+        if self.fail == "redirect":
+            return {"status": 302, "body": b"redirect"}
+        url = request["url"]
+        if not isinstance(url, str):
+            raise AssertionError("url")
+        if url.endswith("/v1/models"):
+            return {"status": 200, "body": json.dumps({"data": [{"id": self.served}]}).encode()}
+        payload = {"choices": [{"message": {"content": self.content}}]}
+        return {"status": 200, "body": json.dumps(payload).encode()}
+
+    def posts(self) -> list[Mapping[str, Any]]:
+        return [call for call in self.calls if str(call["url"]).endswith("/chat/completions")]
+
+
+def _reject_network(request: Mapping[str, Any]) -> dict[str, Any]:
+    del request
+    raise AssertionError("network")
+
+
+def _case_any(
+    option_count: int, *, state: str = "Fictional target label semantic state"
+) -> dict[str, Any]:
+    return cast(dict[str, Any], _case(option_count, state=state))
+
+
+def _pin_renderer(monkeypatch: pytest.MonkeyPatch, source: str) -> bytes:
+    raw = source.encode()
+    monkeypatch.setattr(
+        v02_corpus, "PINNED_RENDERER_SOURCE_SHA256", hashlib.sha256(raw).hexdigest()
+    )
+    return raw
+
+
+def _write_snapshot(
+    root: Path, payload: bytes = b"reviewed-tokenizer"
+) -> tuple[Path, list[dict[str, str]]]:
+    path = root / "tokenizer"
+    path.mkdir(parents=True)
+    os.chmod(path, 0o700)
+    target = path / "tokenizer.json"
+    target.write_bytes(payload)
+    os.chmod(target, 0o600)
+    digest = hashlib.sha256(payload).hexdigest()
+    return path, [{"filename": "tokenizer.json", "sha256": digest}]
+
+
+def _license_bytes() -> dict[str, bytes]:
+    return {role: f"license:{role}".encode() for role in sorted(v02_corpus._MODEL_ROLE_NAMES)}
+
+
+def _grant(inventory: list[dict[str, str]]) -> dict[str, Any]:
+    licenses = _license_bytes()
+    grant: dict[str, Any] = {
+        "account_boundary_digest": "33" * 32,
+        "candidate_rendering_digest": v02_corpus.candidate_rendering_digest(),
+        "cloud_legal_service_name": "reviewed-operator",
+        "deletion_mechanism": "operator-volume-delete",
+        "instance_class": "gpu-40gib",
+        "kev_rendering_function_digest": v02_corpus.kev_rendering_function_digest(),
+        "license_sha256": {role: v02_corpus._sha256(blob) for role, blob in licenses.items()},
+        "log_retention": "24h",
+        "model_identities": {
+            role: v02_corpus._model_identity(role) for role in sorted(v02_corpus._MODEL_ROLE_NAMES)
+        },
+        "post_run_deletion_obligation": "delete-volumes-after-run",
+        "prompt_contract_digest": v02_corpus.prompt_contract()["contract_digest"],
+        "region": "reviewed-region",
+        "renderer_source_sha256": v02_corpus.PINNED_RENDERER_SOURCE_SHA256,
+        "runtime_image_digest": "11" * 32,
+        "runtime_lock_digest": "22" * 32,
+        "schema_version": "v02-environment-grant.v1",
+        "sealed_plan_digest": v02_corpus._sha256(v02_corpus._frozen_plan_bytes("sealed")),
+        "storage_retention": "24h",
+        "tokenizer_inventory": inventory,
+        "training_plan_digest": v02_corpus._sha256(v02_corpus._frozen_plan_bytes("training")),
+        "transport": "tls-ssh",
+    }
+    for field in v02_corpus._GRANT_TRUE_FIELDS:
+        grant[field] = True
+    assert set(grant) == v02_corpus._GRANT_FIELDS
+    return grant
+
+
+def _runtime(
+    role: str, grant: Mapping[str, Any], grant_digest: str, inventory_digest: str
+) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "compute": "bf16",
+        "cpu_offload": False,
+        "dependency_lock_digest": "44" * 32,
+        "full_load_passed": True,
+        "gpu_class": "NVIDIA-L40S-CUDA",
+        "gpu_count": 1,
+        "gpu_vram_gib": 48,
+        "grant_digest": grant_digest,
+        "model_identity": v02_corpus._model_identity(role),
+        "quantization": "bitsandbytes-nf4",
+        "renderer_verified": True,
+        "role": role,
+        "runtime_image_digest": grant["runtime_image_digest"],
+        "runtime_lock_digest": grant["runtime_lock_digest"],
+        "schema_version": "v02-runtime-evidence.v1",
+        "served_model_name": v02_corpus.MODEL_ROLES[role]["model"],
+        "source_snapshot_verified": True,
+        "tokenizer_inventory_digest": inventory_digest,
+        "tokenizer_revision": v02_corpus.PINNED_TOKENIZER_REVISION,
+        "tokenizer_verified": True,
+    }
+    assert set(evidence) == v02_corpus._RUNTIME_FIELDS
+    return evidence
+
+
+def _load_runtime(
+    monkeypatch: pytest.MonkeyPatch, root: Path, *, count: int = 4, source: str = _RENDERER_SOURCE
+) -> tuple[v02_corpus.VerifiedRenderer, v02_corpus.VerifiedTokenizer, list[dict[str, str]]]:
+    raw = _pin_renderer(monkeypatch, source)
+
+    def load_tokenizer(snapshot: Path) -> _FixedTokenizer:
+        del snapshot
+        return _FixedTokenizer(count)
+
+    monkeypatch.setattr(v02_corpus, "_load_transformers_tokenizer", load_tokenizer)
+    renderer = v02_corpus.load_pinned_renderer(raw)
+    snapshot, inventory = _write_snapshot(root)
+    tokenizer = v02_corpus.load_verified_tokenizer(snapshot, inventory)
+    return renderer, tokenizer, inventory
+
+
+def _run_role(
+    ledger: v02_corpus.OfflineLedger,
+    identity_id: str,
+    role: str,
+    grant: dict[str, Any],
+    licenses: dict[str, bytes],
+    renderer: v02_corpus.VerifiedRenderer,
+    tokenizer: v02_corpus.VerifiedTokenizer,
+    transport: _Loopback | Any,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if evidence is None:
+        grant_digest = v02_corpus.validate_environment_grant(grant, licenses)
+        evidence = _runtime(role, grant, grant_digest, tokenizer.inventory_digest)
+    return v02_corpus.execute_role(
+        ledger,
+        identity_id,
+        role,
+        evidence,
+        grant,
+        licenses,
+        "http://127.0.0.1:9",
+        "test-bearer",
+        renderer,
+        tokenizer,
+        transport=transport,
+    )
+
+
+def _pilot_training_slot(plan: Mapping[str, Any], *, pilot: bool) -> dict[str, Any]:
+    slots = cast(list[dict[str, Any]], plan["slots"])
+    return next(slot for slot in slots if bool(slot["in_pilot"]) is pilot)
+
+
+def _pilot_pair(plan: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for slot in cast(list[dict[str, Any]], plan["slots"]):
+        pair_id = slot.get("bilingual_pair_id")
+        if slot.get("in_pilot") is True and isinstance(pair_id, str):
+            groups.setdefault(pair_id, []).append(slot)
+    pair = next(group for group in groups.values() if len(group) == 2)
+    return pair[0], pair[1]
+
+
+def _training_content(
+    slot: Mapping[str, Any],
+    *,
+    state: str = "Fictional target label semantic state",
+    fictionality: bool = True,
+) -> str:
+    case = _case(cast(int, slot["option_count"]), state=state)
+    payload: dict[str, Any] = {
+        **case,
+        "answer": f"option_{slot['gold_position']}",
+        "semantic": {
+            "scenario_code": slot["scenario_code"],
+            "criterion_roles": slot["criterion_roles"],
+        },
+        **_judgments(),
+    }
+    payload["fictionality_valid"] = fictionality
+    return json.dumps(payload)
+
+
+def _reviewer_content(slot: Mapping[str, Any]) -> str:
+    return json.dumps(
+        {
+            "answer": f"option_{slot['gold_position']}",
+            "semantic": {
+                "scenario_code": slot["scenario_code"],
+                "criterion_roles": slot["criterion_roles"],
+            },
+            **_judgments(),
+        }
+    )
+
+
+def _sealed_author_content(identity: Mapping[str, Any]) -> str:
+    case = _case(
+        cast(int, identity["option_count"]),
+        state=f"Fictional sealed state {identity['identity_id']}",
+    )
+    return json.dumps({**case, "target": "option_0", **_judgments()})
+
+
+def _message_context(call: Mapping[str, Any]) -> dict[str, Any]:
+    body = json.loads(cast(bytes, call["body"]))
+    content = cast(str, body["messages"][1]["content"])
+    context = json.loads(content.split("\n", 1)[1])
+    assert isinstance(context, dict)
+    return cast(dict[str, Any], context)
+
+
+def _chat_body(call: Mapping[str, Any]) -> dict[str, Any]:
+    body = json.loads(cast(bytes, call["body"]))
+    assert isinstance(body, dict)
+    return cast(dict[str, Any], body)
+
+
+def test_c2_canonical_preimages_reproduce_authorized_digests() -> None:
+    assert v02_corpus.candidate_rendering_digest() == (
+        "0f5592b54f096ac0328b45d69e5a74b9cb579a804f2349fc4ceea9b1f8a40e40"
+    )
+    assert v02_corpus.kev_rendering_function_digest() == (
+        "eca2a60af37c539c984e89cf920c53e8d1c93cff6e980dea1a24dd520f86e169"
+    )
+    preimage = v02_corpus.candidate_renderer_preimage()
+    contract = v02_corpus.kev_renderer_contract()
+    assert preimage["source_repository"] == "https://github.com/jaredpalmer/kev"
+    assert preimage["source_revision"] == "9c41005b2180347c3c646dfc9e50c4428483ec6b"
+    assert preimage["source_sha256"] == v02_corpus.PINNED_RENDERER_SOURCE_SHA256
+    assert preimage["parameters"] == {
+        "head_dim": 256,
+        "lora_targets": "all",
+        "max_branch": 1024,
+        "max_packed": 2048,
+        "max_state": 384,
+        "option_isolation": False,
+        "special_embeddings": False,
+        "strict": True,
+    }
+    assert contract["schema_version"] == "v02-kev-renderer.v2"
+    assert contract["model"] == "jaredpalmer/kev-4b"
+    assert contract["model_revision"] == v02_corpus.PINNED_ADAPTER_REVISION
+    assert contract["base_model"] == "Qwen/Qwen3.5-4B-Base"
+    assert contract["base_model_revision"] == v02_corpus.PINNED_TOKENIZER_REVISION
+    assert contract["max_rendered_input_tokens"] == 512
+    assert contract["truncation_disabled"] is True
+    assert contract["renderer"] == preimage
+
+
+def test_c2_direct_wrapper_construction_and_tamper_are_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="verified runtime wrapper is required"):
+        v02_corpus.VerifiedRenderer(
+            lambda *_args, **_kwargs: None,
+            lambda *_args, **_kwargs: None,
+            lambda: {},
+            "ab" * 32,
+        )
+    snapshot, inventory = _write_snapshot(tmp_path)
+    with pytest.raises(ValueError, match="verified runtime wrapper is required"):
+        v02_corpus.VerifiedTokenizer(
+            _FixedTokenizer(), snapshot, inventory, {"tokenizer.json": "ab" * 32}
+        )
+    renderer, tokenizer, _inventory = _load_runtime(monkeypatch, tmp_path / "loaded")
+    renderer._encode = lambda *_args, **_kwargs: None
+    with pytest.raises(ValueError, match="drifted"):
+        renderer.revalidate()
+    tokenizer._inner = _FixedTokenizer()
+    with pytest.raises(ValueError, match="drift"):
+        tokenizer.revalidate()
+
+
+def test_c2_renderer_source_identity_and_extraction_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _RENDERER_SOURCE.encode()
+    with pytest.raises(ValueError, match="renderer source identity mismatch"):
+        v02_corpus.load_pinned_renderer(raw)
+    ignored_import = "import not_a_real_torch_module\n" + _RENDERER_SOURCE
+    loaded = v02_corpus.load_pinned_renderer(_pin_renderer(monkeypatch, ignored_import))
+    encoded = loaded._encode(
+        _FixedTokenizer(),
+        {"state": "ab", "questions": [{"instr": "q", "options": ["o"], "label": 4}]},
+        max_state=384,
+        max_branch=1024,
+        strict=True,
+        option_isolation=False,
+    )
+    assert encoded["labels"] == [0]
+    variants = {
+        _RENDERER_SOURCE.replace("OPT_DECIDE = 1\n", ""): "binding",
+        _RENDERER_SOURCE.replace(
+            '    state = record["state"]\n', '    import torch\n    state = record["state"]\n'
+        ): "binding",
+        _RENDERER_SOURCE.replace("<|fim_suffix|>", "<|fim_pad|>"): "markers",
+        _RENDERER_SOURCE.replace(
+            """def user_tokens(tokenizer, text):
+    rewritten = text
+    for marker in SPECIAL:
+        name = marker[2:-2]
+        rewritten = rewritten.replace(marker, "<\u00a6" + name + "\u00a6>")
+    return tokenizer(rewritten, add_special_tokens=False).input_ids
+""",
+            """def user_tokens(tokenizer, text):
+    return tokenizer(text, add_special_tokens=False).input_ids
+""",
+        ): "markers",
+        _RENDERER_SOURCE.replace("[OPT_NONE]", "[OPT_DECIDE]"): "neutral",
+    }
+    for source, match in variants.items():
+        with pytest.raises(ValueError, match=match):
+            v02_corpus.load_pinned_renderer(_pin_renderer(monkeypatch, source))
+
+
+def test_c2_renderer_bounds_truncation_and_local_gates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    renderer, tokenizer, _inventory = _load_runtime(monkeypatch, tmp_path)
+    identity = {"option_count": 2}
+
+    def gates(
+        count: int, *, state: str = "Fictional target label semantic state"
+    ) -> dict[str, bool]:
+        def load_tokenizer(snapshot: Path) -> _FixedTokenizer:
+            del snapshot
+            return _FixedTokenizer(count)
+
+        monkeypatch.setattr(v02_corpus, "_load_transformers_tokenizer", load_tokenizer)
+        directory = tmp_path / f"count-{count}-{len(state)}"
+        directory.mkdir()
+        snapshot, inventory = _write_snapshot(directory)
+        measured = v02_corpus.load_verified_tokenizer(snapshot, inventory)
+        return v02_corpus.local_case_gates(_case_any(2, state=state), identity, renderer, measured)
+
+    accepted = gates(512)
+    assert accepted["renderer_valid"] is True and accepted["length_valid"] is True
+    boundary = gates(513)
+    assert boundary["renderer_valid"] is True and boundary["length_valid"] is False
+    packed = gates(2048)
+    assert packed["renderer_valid"] is True and packed["length_valid"] is False
+    overflow = gates(2049)
+    assert overflow["renderer_valid"] is False and overflow["length_valid"] is False
+    truncated = gates(4, state="TRUNCATE fictional state")
+    assert truncated["renderer_valid"] is False and truncated["length_valid"] is False
+    schema_only = v02_corpus.local_case_gates(_case_any(1), identity, renderer, tokenizer)
+    assert schema_only["schema_valid"] is False
+    assert schema_only["fictionality_valid"] is True
+    assert schema_only["exclusive_options_valid"] is True
+    assert schema_only["ambiguity_free"] is True
+    leaked_state = _case_any(2, state="Reach person@example.com today")
+    assert (
+        v02_corpus.local_case_gates(leaked_state, identity, renderer, tokenizer)["privacy_valid"]
+        is False
+    )
+    leaked_question = _case_any(2)
+    leaked_question["question"] = "See https://example.test/path"
+    assert (
+        v02_corpus.local_case_gates(leaked_question, identity, renderer, tokenizer)["privacy_valid"]
+        is False
+    )
+    for index in (0, 1):
+        leaked_option = _case_any(2)
+        cast(list[dict[str, Any]], leaked_option["options"])[index]["description"] = (
+            "token secret=value"
+        )
+        result = v02_corpus.local_case_gates(leaked_option, identity, renderer, tokenizer)
+        assert result["schema_valid"] is True and result["privacy_valid"] is False
+    leaked_id = _case_any(2)
+    cast(list[dict[str, Any]], leaked_id["options"])[0]["id"] = "@someone"
+    assert v02_corpus._privacy_clear(leaked_id) is False
+    left = _case_any(2, state="Same fictional facts")
+    right = _case_any(2, state="same   fictional   facts")
+    assert state_question_fingerprint(
+        left["state"], left["question"]
+    ) == state_question_fingerprint(right["state"], right["question"])
+    assert (
+        v02_corpus.local_case_gates(right, identity, renderer, tokenizer, duplicate_history=[left])[
+            "duplicate_valid"
+        ]
+        is False
+    )
+    distinct = _case_any(2, state="Entirely different fictional facts")
+    assert (
+        v02_corpus.local_case_gates(
+            distinct, identity, renderer, tokenizer, duplicate_history=[left]
+        )["duplicate_valid"]
+        is True
+    )
+    options = [{"id": "b", "description": "beta"}, {"id": "a", "description": "alpha"}]
+    flipped = [{"description": "alpha"}, {"id": "zzz", "description": "beta"}]
+    assert combined_content_fingerprint("S", "Q", options) == combined_content_fingerprint(
+        "S", "Q", flipped
+    )
+    again = v02_corpus.local_case_gates(
+        right, identity, renderer, tokenizer, duplicate_history=[left]
+    )
+    assert again["duplicate_valid"] is False
+
+
+def test_c2_tokenizer_loader_is_local_only_and_inventory_is_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(path: str, **kwargs: object) -> _FixedTokenizer:
+            seen["path"] = path
+            seen["kwargs"] = dict(kwargs)
+            return _FixedTokenizer()
+
+    module = ModuleType("transformers")
+    vars(module)["AutoTokenizer"] = AutoTokenizer
+    monkeypatch.setitem(sys.modules, "transformers", module)
+    snapshot, inventory = _write_snapshot(tmp_path)
+    loaded = v02_corpus.load_verified_tokenizer(snapshot, inventory)
+    assert seen["kwargs"] == {"local_files_only": True, "trust_remote_code": False}
+    assert seen["path"] == os.fspath(snapshot)
+    (snapshot / "tokenizer.json").write_bytes(b"changed-bytes")
+    os.chmod(snapshot / "tokenizer.json", 0o600)
+    with pytest.raises(ValueError, match="drift"):
+        loaded.revalidate()
+    fresh, fresh_inventory = _write_snapshot(tmp_path / "fresh", b"other-reviewed-bytes")
+    extra = fresh / "extra.json"
+    extra.write_bytes(b"x")
+    os.chmod(extra, 0o600)
+    with pytest.raises(ValueError, match="closed"):
+        v02_corpus.load_verified_tokenizer(fresh, fresh_inventory)
+    extra.unlink()
+    wrong = [{"filename": "tokenizer.json", "sha256": "ab" * 32}]
+    with pytest.raises(ValueError, match="drift"):
+        v02_corpus.load_verified_tokenizer(fresh, wrong)
+
+
+def test_c2_grant_and_runtime_evidence_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _mkdir_0700(tmp_path)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    licenses = _license_bytes()
+    grant = _grant(inventory)
+    grant_digest = v02_corpus.validate_environment_grant(grant, licenses)
+    evidence = _runtime("training_author", grant, grant_digest, tokenizer.inventory_digest)
+    assert v02_corpus.validate_runtime_evidence(evidence, "training_author", grant_digest) == (
+        v02_corpus._sha256(canonical_json_bytes(cast(JsonValue, evidence)))
+    )
+    forty = dict(evidence)
+    forty["gpu_vram_gib"] = 40
+    v02_corpus.validate_runtime_evidence(forty, "training_author", grant_digest)
+    mutations: list[tuple[dict[str, Any], dict[str, bytes], str]] = []
+    missing = dict(grant)
+    missing.pop("region")
+    mutations.append((missing, licenses, "closed"))
+    extra = dict(grant)
+    extra["unexpected"] = "x"
+    mutations.append((extra, licenses, "closed"))
+    nonbool = dict(grant)
+    nonbool["authorize_training"] = "yes"
+    mutations.append((nonbool, licenses, "not boolean"))
+    denied = dict(grant)
+    denied["prohibit_raw_publication"] = False
+    mutations.append((denied, licenses, "value mismatch"))
+    unknown = dict(grant)
+    unknown["region"] = "unknown"
+    mutations.append((unknown, licenses, "value mismatch"))
+    absent = dict(licenses)
+    absent["training_author"] = b""
+    mutations.append((dict(grant), absent, "absent"))
+    partial = dict(licenses)
+    partial.pop("sealed_adjudicator")
+    mutations.append((dict(grant), partial, "closed"))
+    for mutated_grant, mutated_licenses, match in mutations:
+        with pytest.raises(ValueError, match=match):
+            v02_corpus.validate_environment_grant(mutated_grant, mutated_licenses)
+    runtime_mutations: list[tuple[dict[str, Any], str]] = []
+    low = dict(evidence)
+    low["gpu_vram_gib"] = 39
+    runtime_mutations.append((low, "value mismatch"))
+    fallback = dict(evidence)
+    fallback["gpu_class"] = "CUDA-24GiB"
+    runtime_mutations.append((fallback, "value mismatch"))
+    offload = dict(evidence)
+    offload["cpu_offload"] = True
+    runtime_mutations.append((offload, "value mismatch"))
+    offload_text = dict(evidence)
+    offload_text["cpu_offload"] = "false"
+    runtime_mutations.append((offload_text, "not boolean"))
+    missing_runtime = dict(evidence)
+    missing_runtime.pop("quantization")
+    runtime_mutations.append((missing_runtime, "closed"))
+    extra_runtime = dict(evidence)
+    extra_runtime["driver"] = "moving"
+    runtime_mutations.append((extra_runtime, "closed"))
+    renamed = dict(evidence)
+    renamed["model_identity"] = "other-model@revision"
+    runtime_mutations.append((renamed, "value mismatch"))
+    for mutated, match in runtime_mutations:
+        with pytest.raises(ValueError, match=match):
+            v02_corpus.validate_runtime_evidence(mutated, "training_author", grant_digest)
+    plan = v02_corpus._generate_training_plan()
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    slot = _pilot_training_slot(plan, pilot=True)
+    other_inventory = [{"filename": "tokenizer.json", "sha256": "ab" * 32}]
+    drifted_grant = _grant(other_inventory)
+    with pytest.raises(ValueError, match="runtime evidence value mismatch"):
+        _run_role(
+            ledger,
+            cast(str, slot["slot_id"]),
+            "training_author",
+            drifted_grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    assert ledger.events() == []
+    del renderer
+
+
+def test_c2_six_roles_dispatch_once_and_resume_without_network(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    training_root = tmp_path / "training"
+    sealed_root = tmp_path / "sealed"
+    _mkdir_0700(training_root)
+    _mkdir_0700(sealed_root)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    licenses = _license_bytes()
+    training = v02_corpus._generate_training_plan()
+    slot = _pilot_training_slot(training, pilot=True)
+    identity_id = cast(str, slot["slot_id"])
+    ledger = v02_corpus.OfflineLedger(training, training_root)
+    author = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], _training_content(slot))
+    first = _run_role(
+        ledger, identity_id, "training_author", grant, licenses, renderer, tokenizer, author
+    )
+    assert first == {"status": "committed", "dispatch": True, "transition": "training_author"}
+    assert len(author.calls) == 2 and len(author.posts()) == 1
+    chat = _chat_body(author.posts()[0])
+    assert chat["temperature"] == 0
+    assert chat["max_tokens"] == 2048
+    assert chat["seed"] == v02_corpus.SEED_TRAINING
+    assert chat["chat_template_kwargs"] == {"enable_thinking": False}
+    assert chat["model"] == v02_corpus.MODEL_ROLES["training_author"]["model"]
+    assert "no retry" in cast(str, chat["messages"][0]["content"])
+    resumed = _run_role(
+        ledger,
+        identity_id,
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        _reject_network,
+    )
+    assert resumed["dispatch"] is False and resumed["status"] == "resumed"
+    reservation = training_root / "role-reservations"
+    reservation_name = v02_corpus._sha256(f"{identity_id}:training_author".encode()) + ".json"
+    reservation_path = reservation / reservation_name
+    assert reservation_path.is_file()
+    assert stat.S_IMODE(reservation.stat().st_mode) == 0o700
+    assert stat.S_IMODE(reservation_path.stat().st_mode) == 0o600
+    assert reservation_path.parent == training_root / "role-reservations"
+    assert reservation_path.resolve().parent != (training_root / "ledger-events").resolve()
+    reviewer = _Loopback(
+        v02_corpus.MODEL_ROLES["independent_reviewer"]["model"], _reviewer_content(slot)
+    )
+    reviewed = _run_role(
+        ledger,
+        identity_id,
+        "independent_reviewer",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        reviewer,
+    )
+    assert reviewed["dispatch"] is True and len(reviewer.posts()) == 1
+    context = _message_context(reviewer.posts()[0])
+    assert "gold_position" not in context and "target" not in context and "answer" not in context
+    assert context["case"]["state"] == "Fictional target label semantic state"
+    author_envelope = cast(
+        dict[str, Any], ledger.by_identity(identity_id)["training_author"]["envelope"]
+    )
+    reviewer_envelope = cast(
+        dict[str, Any], ledger.by_identity(identity_id)["training_reviewer"]["envelope"]
+    )
+    assert author_envelope["content_digest"] == reviewer_envelope["content_digest"]
+    assert author_envelope["gates"]["schema_valid"] is True
+    sealed = v02_corpus._generate_sealed_plan()
+    identity = cast(list[dict[str, Any]], sealed["pilot_prefix"]["identities"])[0]
+    sealed_id = cast(str, identity["identity_id"])
+    sealed_ledger = v02_corpus.OfflineLedger(sealed, sealed_root)
+    roles = (
+        ("sealed_author", _sealed_author_content(identity)),
+        ("sealed_annotator_a", json.dumps({"label": "option_0", **_judgments()})),
+        ("sealed_annotator_b", json.dumps({"label": "option_1", **_judgments()})),
+        ("sealed_adjudicator", json.dumps({"choice": "option_0", **_judgments()})),
+    )
+    for role, content in roles:
+        transport = _Loopback(v02_corpus.MODEL_ROLES[role]["model"], content)
+        result = _run_role(
+            sealed_ledger, sealed_id, role, grant, licenses, renderer, tokenizer, transport
+        )
+        assert result["dispatch"] is True and len(transport.posts()) == 1
+        assert _chat_body(transport.posts()[0])["seed"] == v02_corpus.SEED_SEALED
+        if role == "sealed_adjudicator":
+            adjudication = _message_context(transport.posts()[0])
+            assert set(cast(list[str], adjudication["labels"])) == {"option_0", "option_1"}
+            assert "target" not in adjudication
+    choice = cast(
+        dict[str, Any], sealed_ledger.by_identity(sealed_id)["sealed_adjudicator"]["envelope"]
+    )
+    assert choice["choice"] == "option_0"
+    assert v02_corpus.reduce_training(training, ledger.events())["denominator"] == 1600
+    assert v02_corpus.reduce_sealed(sealed, sealed_ledger.events())["denominator"] == 140
+
+
+def test_c2_transport_errors_are_single_attempt_failures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _mkdir_0700(tmp_path)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    licenses = _license_bytes()
+    plan = v02_corpus._generate_training_plan()
+    slots = [slot for slot in cast(list[dict[str, Any]], plan["slots"]) if slot["in_pilot"]]
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    timeout = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], "{}", fail="timeout")
+    identity_id = cast(str, slots[0]["slot_id"])
+    failed = _run_role(
+        ledger, identity_id, "training_author", grant, licenses, renderer, tokenizer, timeout
+    )
+    assert failed["dispatch"] is False
+    assert failed["transition"] == "training_author_failure"
+    envelope = cast(
+        dict[str, Any], ledger.by_identity(identity_id)["training_author_failure"]["envelope"]
+    )
+    assert envelope["error_code"] == "model_error"
+    assert set(envelope) == {
+        "schema_version",
+        "role",
+        "model",
+        "lane",
+        "identity_id",
+        "error_code",
+    }
+    assert len(timeout.posts()) == 0
+    again = _run_role(
+        ledger,
+        identity_id,
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        _reject_network,
+    )
+    assert again["dispatch"] is False and again["status"] == "resumed"
+    redirect = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], "{}", fail="redirect")
+    redirect_id = cast(str, slots[1]["slot_id"])
+    redirected = _run_role(
+        ledger, redirect_id, "training_author", grant, licenses, renderer, tokenizer, redirect
+    )
+    assert redirected["dispatch"] is False
+    assert (
+        cast(
+            dict[str, Any], ledger.by_identity(redirect_id)["training_author_failure"]["envelope"]
+        )["error_code"]
+        == "model_error"
+    )
+    invalid = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], "not-json")
+    invalid_id = cast(str, slots[2]["slot_id"])
+    parsed = _run_role(
+        ledger, invalid_id, "training_author", grant, licenses, renderer, tokenizer, invalid
+    )
+    assert parsed["dispatch"] is True and len(invalid.posts()) == 1
+    assert (
+        cast(dict[str, Any], ledger.by_identity(invalid_id)["training_author_failure"]["envelope"])[
+            "error_code"
+        ]
+        == "invalid_output"
+    )
+    retry = _Loopback(
+        v02_corpus.MODEL_ROLES["training_author"]["model"], _training_content(slots[2])
+    )
+    resumed = _run_role(
+        ledger, invalid_id, "training_author", grant, licenses, renderer, tokenizer, retry
+    )
+    assert resumed["dispatch"] is False and retry.calls == []
+    for base in ("http://example.test", "https://127.0.0.1:9", "http://127.0.0.1:9/v1"):
+        with pytest.raises(ValueError, match="loopback"):
+            v02_corpus.execute_role(
+                ledger,
+                cast(str, slots[3]["slot_id"]),
+                "training_author",
+                _runtime(
+                    "training_author",
+                    grant,
+                    v02_corpus.validate_environment_grant(grant, licenses),
+                    tokenizer.inventory_digest,
+                ),
+                grant,
+                licenses,
+                base,
+                "test-bearer",
+                renderer,
+                tokenizer,
+                transport=_reject_network,
+            )
+    assert "training_author" not in ledger.by_identity(cast(str, slots[3]["slot_id"]))
+    assert v02_corpus.reduce_training(plan, ledger.events())["denominator"] == 1600
+
+
+def test_c2_role_errors_cover_every_model_and_skip_downstream_gpu(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    training_root = tmp_path / "training"
+    sealed_root = tmp_path / "sealed"
+    _mkdir_0700(training_root)
+    _mkdir_0700(sealed_root)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    licenses = _license_bytes()
+    training = v02_corpus._generate_training_plan()
+    slot = _pilot_training_slot(training, pilot=True)
+    identity_id = cast(str, slot["slot_id"])
+    ledger = v02_corpus.OfflineLedger(training, training_root)
+    leaked = _Loopback(
+        v02_corpus.MODEL_ROLES["training_author"]["model"],
+        _training_content(slot, state="Reach person@example.com today"),
+    )
+    _run_role(ledger, identity_id, "training_author", grant, licenses, renderer, tokenizer, leaked)
+    author_gates = cast(
+        dict[str, Any], ledger.by_identity(identity_id)["training_author"]["envelope"]
+    )["gates"]
+    assert author_gates["privacy_valid"] is False and author_gates["schema_valid"] is True
+    blocked = _run_role(
+        ledger,
+        identity_id,
+        "independent_reviewer",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        _reject_network,
+    )
+    assert blocked == {
+        "status": "committed",
+        "dispatch": False,
+        "transition": "training_reviewer_failure",
+    }
+    failure = cast(
+        dict[str, Any], ledger.by_identity(identity_id)["training_reviewer_failure"]["envelope"]
+    )
+    assert failure["error_code"] == "local_gate_failure"
+    sealed = v02_corpus._generate_sealed_plan()
+    identities = cast(list[dict[str, Any]], sealed["pilot_prefix"]["identities"])
+    sealed_ledger = v02_corpus.OfflineLedger(sealed, sealed_root)
+    specs = (
+        (identities[0], "sealed_author", None),
+        (identities[3], "sealed_annotator_a", "sealed_author"),
+        (identities[6], "sealed_annotator_b", "sealed_author"),
+        (identities[9], "sealed_adjudicator", "both"),
+    )
+    for identity, role, prior in specs:
+        sealed_id = cast(str, identity["identity_id"])
+        if prior is not None:
+            prepared = _Loopback(
+                v02_corpus.MODEL_ROLES["sealed_author"]["model"], _sealed_author_content(identity)
+            )
+            _run_role(
+                sealed_ledger,
+                sealed_id,
+                "sealed_author",
+                grant,
+                licenses,
+                renderer,
+                tokenizer,
+                prepared,
+            )
+        if prior == "both":
+            for annotator, label in (
+                ("sealed_annotator_a", "option_0"),
+                ("sealed_annotator_b", "option_1"),
+            ):
+                prepared = _Loopback(
+                    v02_corpus.MODEL_ROLES[annotator]["model"],
+                    json.dumps({"label": label, **_judgments()}),
+                )
+                _run_role(
+                    sealed_ledger,
+                    sealed_id,
+                    annotator,
+                    grant,
+                    licenses,
+                    renderer,
+                    tokenizer,
+                    prepared,
+                )
+        transport = _Loopback(v02_corpus.MODEL_ROLES[role]["model"], "{}", fail="timeout")
+        result = _run_role(
+            sealed_ledger, sealed_id, role, grant, licenses, renderer, tokenizer, transport
+        )
+        assert result["dispatch"] is False and transport.posts() == []
+        transition = f"{v02_corpus._ROLE_TRANSITIONS[role]}_failure"
+        assert result["transition"] == transition
+        assert (
+            cast(dict[str, Any], sealed_ledger.by_identity(sealed_id)[transition]["envelope"])[
+                "error_code"
+            ]
+            == "model_error"
+        )
+
+
+def test_c2_admission_gates_do_not_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, runtime_root)
+    grant = _grant(inventory)
+    licenses = _license_bytes()
+    training = v02_corpus._generate_training_plan()
+    order_root = tmp_path / "order"
+    _mkdir_0700(order_root)
+    order = v02_corpus.OfflineLedger(training, order_root)
+    slot = _pilot_training_slot(training, pilot=True)
+    with pytest.raises(ValueError, match="out of order"):
+        _run_role(
+            order,
+            cast(str, slot["slot_id"]),
+            "independent_reviewer",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    assert order.events() == []
+    sealed = v02_corpus._generate_sealed_plan()
+    sealed_root = tmp_path / "sealed-order"
+    _mkdir_0700(sealed_root)
+    sealed_ledger = v02_corpus.OfflineLedger(sealed, sealed_root)
+    identity = cast(list[dict[str, Any]], sealed["pilot_prefix"]["identities"])[0]
+    sealed_id = cast(str, identity["identity_id"])
+    with pytest.raises(ValueError, match="out of order"):
+        _run_role(
+            sealed_ledger,
+            sealed_id,
+            "sealed_annotator_a",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    sealed_ledger.commit("sealed_author", _sealed_envelope(sealed, "sealed_author"))
+    with pytest.raises(ValueError, match="out of order"):
+        _run_role(
+            sealed_ledger,
+            sealed_id,
+            "sealed_adjudicator",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    concordant_root = tmp_path / "concordant"
+    _mkdir_0700(concordant_root)
+    concordant = v02_corpus.OfflineLedger(sealed, concordant_root)
+    concordant.commit("sealed_author", _sealed_envelope(sealed, "sealed_author"))
+    concordant.commit(
+        "sealed_annotator_a", _sealed_envelope(sealed, "sealed_annotator_a", "option_0")
+    )
+    concordant.commit(
+        "sealed_annotator_b", _sealed_envelope(sealed, "sealed_annotator_b", "option_0")
+    )
+    with pytest.raises(ValueError, match="agreement"):
+        _run_role(
+            concordant,
+            sealed_id,
+            "sealed_adjudicator",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    assert "sealed_adjudicator" not in concordant.by_identity(sealed_id)
+    assert "sealed_adjudicator_failure" not in concordant.by_identity(sealed_id)
+    full_root = tmp_path / "full"
+    _mkdir_0700(full_root)
+    full = v02_corpus.OfflineLedger(training, full_root)
+    full_slot = _pilot_training_slot(training, pilot=False)
+    with pytest.raises(ValueError, match="pilot"):
+        _run_role(
+            full,
+            cast(str, full_slot["slot_id"]),
+            "training_author",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    assert full.events() == []
+    no_go_root = tmp_path / "nogo"
+    _mkdir_0700(no_go_root)
+    no_go = v02_corpus.OfflineLedger(training, no_go_root)
+    indices = [
+        index
+        for index, row in enumerate(cast(list[dict[str, Any]], training["slots"]))
+        if row["in_pilot"] and row["option_count"] == 2
+    ]
+    for index in indices[:6]:
+        envelope = _training_envelope(training, "training_author", index=index)
+        for key in ("answer", "semantic", "gates", "content_digest"):
+            envelope.pop(key)
+        envelope["error_code"] = "model_error"
+        no_go.commit("training_author_failure", envelope)
+    assert v02_corpus.reduce_training(training, no_go.events())["status"] == "NO_GO"
+    with pytest.raises(ValueError, match="terminal"):
+        _run_role(
+            no_go,
+            cast(str, training["slots"][indices[6]]["slot_id"]),
+            "training_author",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    assert len(no_go.events()) == 6
+    parameters = set(inspect_signature())
+    assert parameters.isdisjoint(
+        {"case", "bilingual_source", "committed_labels", "duplicate_history"}
+    )
+
+
+def inspect_signature() -> set[str]:
+    import inspect
+
+    return set(inspect.signature(v02_corpus.execute_role).parameters)
+
+
+def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _mkdir_0700(tmp_path)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    licenses = _license_bytes()
+    plan = v02_corpus._generate_training_plan()
+    left, right = _pilot_pair(plan)
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    shared_state = "Shared fictional facts for both locales"
+    first = _Loopback(
+        v02_corpus.MODEL_ROLES["training_author"]["model"],
+        _training_content(left, state=shared_state),
+    )
+    _run_role(
+        ledger,
+        cast(str, left["slot_id"]),
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        first,
+    )
+    second = _Loopback(
+        v02_corpus.MODEL_ROLES["training_author"]["model"],
+        _training_content(right, state=shared_state),
+    )
+    _run_role(
+        ledger,
+        cast(str, right["slot_id"]),
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        second,
+    )
+    context = _message_context(second.posts()[0])
+    source = cast(dict[str, Any], context["bilingual_source"])
+    assert source["source_identity_id"] == left["slot_id"]
+    assert cast(dict[str, Any], source["case"])["state"] == shared_state
+    right_envelope = cast(
+        dict[str, Any],
+        ledger.by_identity(cast(str, right["slot_id"]))["training_author"]["envelope"],
+    )
+    assert right_envelope["gates"]["duplicate_valid"] is False
+    history = v02_corpus._same_lane_history(ledger, cast(str, right["slot_id"]))
+    repeated = v02_corpus.local_case_gates(
+        _case_any(cast(int, right["option_count"]), state=shared_state),
+        right,
+        renderer,
+        tokenizer,
+        duplicate_history=history,
+    )
+    assert repeated["duplicate_valid"] is False
+    resumed = _run_role(
+        ledger,
+        cast(str, right["slot_id"]),
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        _reject_network,
+    )
+    assert resumed["dispatch"] is False
+    case_path = v02_corpus._case_path(ledger.root, "training", cast(str, left["slot_id"]))
+    stored = json.loads(case_path.read_text(encoding="utf-8"))
+    cast(dict[str, Any], stored["case"])["state"] = "Changed fictional state"
+    case_path.write_bytes(canonical_json_bytes(cast(JsonValue, stored)) + b"\n")
+    os.chmod(case_path, 0o600)
+    with pytest.raises(ValueError, match="digest"):
+        _run_role(
+            ledger,
+            cast(str, left["slot_id"]),
+            "independent_reviewer",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    assert "training_reviewer" not in ledger.by_identity(cast(str, left["slot_id"]))
+    drifted = dict(grant)
+    drifted["account_boundary_digest"] = "55" * 32
+    with pytest.raises(ValueError, match="runtime binding drift"):
+        _run_role(
+            ledger,
+            cast(str, right["slot_id"]),
+            "training_author",
+            drifted,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+    moved_runtime = _runtime(
+        "training_author",
+        grant,
+        v02_corpus.validate_environment_grant(grant, licenses),
+        tokenizer.inventory_digest,
+    )
+    moved_runtime["dependency_lock_digest"] = "66" * 32
+    with pytest.raises(ValueError, match="runtime binding drift"):
+        _run_role(
+            ledger,
+            cast(str, right["slot_id"]),
+            "training_author",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+            moved_runtime,
+        )
+    monkeypatch.setitem(v02_corpus.ROLE_TEMPLATES, "training_author", "changed {locale} {domain}")
+    rebound = dict(grant)
+    rebound["prompt_contract_digest"] = v02_corpus.prompt_contract()["contract_digest"]
+    with pytest.raises(ValueError, match="runtime binding drift"):
+        _run_role(
+            ledger,
+            cast(str, right["slot_id"]),
+            "training_author",
+            rebound,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+        )
+
+
+def test_c2_unresolved_reservation_and_foreign_lock_do_not_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _mkdir_0700(tmp_path)
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    licenses = _license_bytes()
+    plan = v02_corpus._generate_training_plan()
+    slot = _pilot_training_slot(plan, pilot=True)
+    identity_id = cast(str, slot["slot_id"])
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    grant_digest = v02_corpus.validate_environment_grant(grant, licenses)
+    evidence = _runtime("training_author", grant, grant_digest, tokenizer.inventory_digest)
+    evidence_digest = v02_corpus.validate_runtime_evidence(
+        evidence, "training_author", grant_digest
+    )
+    payload = {
+        "schema_version": "v02-role-reservation.v1",
+        "identity_id": identity_id,
+        "role": "training_author",
+        "grant_digest": "ab" * 32,
+        "runtime_evidence_digest": evidence_digest,
+        "prompt_contract_digest": v02_corpus.prompt_contract()["contract_digest"],
+        "renderer_lock_digest": v02_corpus._renderer_lock_digest(),
+        "request_digest": "cd" * 32,
+    }
+    v02_corpus._private_dir(ledger.root, "role-reservations")
+    path = v02_corpus._reservation_path(ledger.root, identity_id, "training_author")
+    v02_corpus._write_match_or_create(path, payload, "runtime binding drift")
+    with pytest.raises(ValueError, match="runtime binding drift"):
+        _run_role(
+            ledger,
+            identity_id,
+            "training_author",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+            evidence,
+        )
+    assert ledger.events() == []
+    path.unlink()
+    payload["grant_digest"] = grant_digest
+    v02_corpus._write_match_or_create(path, payload, "runtime binding drift")
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _LOCK_HOLDER, os.fspath(ledger.root)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None and holder.stdin is not None
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        busy = _run_role(
+            ledger,
+            identity_id,
+            "training_author",
+            grant,
+            licenses,
+            renderer,
+            tokenizer,
+            _reject_network,
+            evidence,
+        )
+        assert busy == {"status": "busy", "dispatch": False}
+        assert ledger.events() == []
+        assert json.loads(path.read_text(encoding="utf-8"))["request_digest"] == "cd" * 32
+    finally:
+        holder.stdin.write("\n")
+        holder.stdin.flush()
+        holder.wait(timeout=10)
+    failed = _run_role(
+        ledger,
+        identity_id,
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        _reject_network,
+        evidence,
+    )
+    assert failed["dispatch"] is False
+    assert failed["transition"] == "training_author_failure"
+    assert (
+        cast(
+            dict[str, Any], ledger.by_identity(identity_id)["training_author_failure"]["envelope"]
+        )["error_code"]
+        == "model_error"
+    )
+    resumed = _run_role(
+        ledger,
+        identity_id,
+        "training_author",
+        grant,
+        licenses,
+        renderer,
+        tokenizer,
+        _reject_network,
+        evidence,
+    )
+    assert resumed == {
+        "status": "resumed",
+        "dispatch": False,
+        "transition": "training_author_failure",
+    }
