@@ -112,9 +112,11 @@ least 10; and at least 120 bilingual pairs are complete. Percentage floors use
 the final accepted denominator, while the fixed per-cell/domain/pair minima are
 checked directly by `accepted + unresolved`. No training holdout is created: evaluation
 uses only #44's `public_dev` and independently prepared `sealed_ptbr_test`.
-Every accepted row requires exact author/reviewer answer agreement, exact
-closed semantic-attestation agreement, and local schema, privacy, fictionality,
-length and duplicate gates. Review never rewrites a row.
+Under the original historical acceptance policy, every accepted row required exact author/reviewer answer agreement, exact closed semantic-attestation agreement, and local schema, privacy, fictionality, length and duplicate gates. Review never rewrote a row.
+
+#### Versioned training acceptance amendment
+
+The historical native-JSON pilot remains terminal `NO_GO` under its original acceptance policy. A separately reviewed training-only policy fork, `choice-agreement-and-all-gates.v2`, accepts a row only when the author answer, blind reviewer answer and planned gold position agree and every existing gate passes on the first settled attempt. Reviewer scenario and criterion-role metadata remain closed, domain- and vocabulary-constrained diagnostics; their exact equality is not an acceptance condition. Training aggregate receipts bind this policy and aggregate disagreement counts. Sealed receipt schema and sealed acceptance remain unchanged. The old terminal `NO_GO` stops that historical recovery; this separately reviewed policy fork neither resets it nor authorizes retries. This amendment does not authorize automation, training, or any checkpoint-quality claim.
 
 Before generation, every planned or authored record must pass both renderers
 with truncation disabled: the frozen Kev rendering function digest

@@ -61,6 +61,8 @@ OPTION_COUNTS = [2, 3, 4, 5, 6, 7, 8]
 
 LEDGER_SCHEMA = "v02-offline-ledger.v1"
 RECEIPT_SCHEMA = "v02-aggregate-receipt.v1"
+TRAINING_RECEIPT_SCHEMA = "v02-aggregate-receipt.v2"
+TRAINING_ACCEPTANCE_POLICY = "choice-agreement-and-all-gates.v2"
 LOCAL_GATES = frozenset(
     {
         "schema_valid",
@@ -1136,7 +1138,6 @@ def _validate_inferred_semantic(value: Any, slot: dict[str, Any]) -> None:
         not isinstance(inferred_roles, list)
         or len(inferred_roles) != slot.get("option_count")
         or any(type(item) is not str or item not in roles for item in inferred_roles)
-        or len(set(inferred_roles)) != len(inferred_roles)
     ):
         raise ValueError("reviewer criterion roles are outside the closed vocabulary")
 
@@ -1510,19 +1511,21 @@ def _role_response_schema(
         )
     if role in {"training_author", "independent_reviewer"}:
         _domains, _counts, roles, scenarios = _validated_corpus_taxonomy()
+        criterion_roles: dict[str, Any] = {
+            "type": "array",
+            "minItems": len(option_ids),
+            "maxItems": len(option_ids),
+            "items": {"type": "string", "enum": roles},
+        }
+        if role == "training_author":
+            criterion_roles["uniqueItems"] = True
         properties["semantic"] = {
             "type": "object",
             "additionalProperties": False,
             "required": ["scenario_code", "criterion_roles"],
             "properties": {
                 "scenario_code": {"type": "string", "enum": scenarios[identity["domain"]]},
-                "criterion_roles": {
-                    "type": "array",
-                    "minItems": len(option_ids),
-                    "maxItems": len(option_ids),
-                    "uniqueItems": True,
-                    "items": {"type": "string", "enum": roles},
-                },
+                "criterion_roles": criterion_roles,
             },
         }
     return {
@@ -1612,6 +1615,7 @@ def prompt_contract() -> dict[str, Any]:
         },
         "native_decoder_policy": NATIVE_DECODER_POLICY,
         "author_metadata_const_policy": AUTHOR_METADATA_CONST_POLICY,
+        "training_acceptance_policy": TRAINING_ACCEPTANCE_POLICY,
         "native_decoder_schema_digests": {
             role: _sha256(
                 canonical_json_bytes(
@@ -2111,6 +2115,13 @@ def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]])
     accepted: set[str] = set()
     resolved: set[str] = set()
     cohorts: dict[str, dict[str, int]] = {"split": {}, "locale": {}, "option_count": {}}
+    diagnostics = {
+        "reviewed_rows": 0,
+        "full_agreement": 0,
+        "full_disagreement": 0,
+        "scenario_disagreement": 0,
+        "role_vector_disagreement": 0,
+    }
     for slot in slots:
         identity_id = cast(str, slot["slot_id"])
         transition = grouped.get(identity_id, {})
@@ -2118,13 +2129,24 @@ def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]])
         reviewer = _event_envelope(transition.get("training_reviewer"))
         if reviewer is not None or any(name.endswith("_failure") for name in transition):
             resolved.add(identity_id)
+        if author and reviewer:
+            diagnostics["reviewed_rows"] += 1
+            author_semantic = author["semantic"]
+            reviewer_semantic = reviewer["semantic"]
+            if author_semantic == reviewer_semantic:
+                diagnostics["full_agreement"] += 1
+            else:
+                diagnostics["full_disagreement"] += 1
+                if author_semantic["scenario_code"] != reviewer_semantic["scenario_code"]:
+                    diagnostics["scenario_disagreement"] += 1
+                if author_semantic["criterion_roles"] != reviewer_semantic["criterion_roles"]:
+                    diagnostics["role_vector_disagreement"] += 1
         if (
             author
             and reviewer
             and (
                 author["answer"] == reviewer["answer"]
                 and author["answer"] == f"option_{slot['gold_position']}"
-                and author["semantic"] == reviewer["semantic"]
                 and _all_gates(author)
                 and _all_gates(reviewer)
             )
@@ -2140,11 +2162,13 @@ def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]])
     pilot_slots = [slot for slot in slots if slot["slot_id"] in pilot_ids]
     pilot = _training_pilot_metrics(pilot_slots, accepted, resolved)
     return {
+        "training_acceptance_policy": TRAINING_ACCEPTANCE_POLICY,
         "accepted": len(accepted),
         "resolved": len(resolved),
         "unresolved": len(slots) - len(resolved),
         "denominator": len(slots),
         "cohorts": cohorts,
+        "auxiliary_semantic_diagnostics": diagnostics,
         "pilot": pilot,
         "status": "NO_GO"
         if pilot["status"] == "NO_GO"
@@ -2454,8 +2478,9 @@ def create_aggregate_receipt(
     if metrics != derived or status != derived["status"]:
         raise ValueError("receipt metrics or status differ from verified events")
     _validate_aggregate_metrics(metrics)
+    training = plan_data["lane"] == "training"
     receipt = {
-        "schema_version": RECEIPT_SCHEMA,
+        "schema_version": TRAINING_RECEIPT_SCHEMA if training else RECEIPT_SCHEMA,
         "artifact_id": artifact_id,
         "plan_digest": _sha256(canonical_json_bytes(cast(Any, plan_data))),
         "event_digest": event_digest(event_list),
@@ -2467,6 +2492,9 @@ def create_aggregate_receipt(
         "pilot_metrics": metrics["pilot"],
         "status": status,
     }
+    if training:
+        receipt["training_acceptance_policy"] = TRAINING_ACCEPTANCE_POLICY
+        receipt["auxiliary_semantic_diagnostics"] = metrics["auxiliary_semantic_diagnostics"]
     path = output_parent / f"{artifact_id}.receipt.json"
     _atomic_write(path, canonical_json_bytes(cast(Any, receipt)) + b"\n")
     return path
@@ -2490,24 +2518,29 @@ def verify_receipt(
     ):
         raise ValueError("receipt must be an owned regular mode-0600 file")
     receipt = _closed_json_object(path.read_bytes(), name="aggregate receipt")
-    _require_exact_keys(
-        receipt,
-        frozenset(
-            {
-                "schema_version",
-                "artifact_id",
-                "plan_digest",
-                "event_digest",
-                "ancestry",
-                "counts",
-                "cohort_metrics",
-                "pilot_metrics",
-                "status",
-            }
-        ),
-        name="aggregate receipt",
-    )
-    if receipt["schema_version"] != RECEIPT_SCHEMA or receipt["status"] not in {
+    training = expected_lane == "training"
+    if training and (
+        receipt.get("schema_version") != TRAINING_RECEIPT_SCHEMA
+        or receipt.get("training_acceptance_policy") != TRAINING_ACCEPTANCE_POLICY
+    ):
+        raise ValueError("historical policy/source required for training aggregate receipt")
+    receipt_keys = {
+        "schema_version",
+        "artifact_id",
+        "plan_digest",
+        "event_digest",
+        "ancestry",
+        "counts",
+        "cohort_metrics",
+        "pilot_metrics",
+        "status",
+    }
+    if training:
+        receipt_keys.update({"training_acceptance_policy", "auxiliary_semantic_diagnostics"})
+    _require_exact_keys(receipt, frozenset(receipt_keys), name="aggregate receipt")
+    if not training and receipt["schema_version"] != RECEIPT_SCHEMA:
+        raise ValueError("aggregate receipt schema or status mismatch")
+    if receipt["status"] not in {
         "PENDING",
         "NO_GO",
         "READY",
@@ -2541,6 +2574,8 @@ def verify_receipt(
     ):
         raise ValueError("aggregate receipt count invariants mismatch")
     _validate_aggregate_value(receipt["cohort_metrics"])
+    if training:
+        _validate_auxiliary_semantic_diagnostics(receipt["auxiliary_semantic_diagnostics"])
     metrics = (
         reduce_training(plan_data, event_list)
         if expected_lane == "training"
@@ -2552,6 +2587,11 @@ def verify_receipt(
         or receipt["cohort_metrics"] != metrics["cohorts"]
         or receipt["pilot_metrics"] != metrics["pilot"]
         or receipt["status"] != metrics["status"]
+        or (
+            training
+            and receipt["auxiliary_semantic_diagnostics"]
+            != metrics["auxiliary_semantic_diagnostics"]
+        )
     ):
         raise ValueError("aggregate receipt metrics or status differ from verified events")
     return receipt
@@ -2640,6 +2680,28 @@ def _validate_aggregate_metrics(metrics: dict[str, Any]) -> None:
         if type(metrics[key]) is not int or metrics[key] < 0:
             raise ValueError("receipt counts must be non-negative integers")
     _validate_aggregate_value(metrics["cohorts"])
+    diagnostics = metrics.get("auxiliary_semantic_diagnostics")
+    if diagnostics is not None:
+        _validate_auxiliary_semantic_diagnostics(diagnostics)
+
+
+def _validate_auxiliary_semantic_diagnostics(value: Any) -> None:
+    keys = {
+        "reviewed_rows",
+        "full_agreement",
+        "full_disagreement",
+        "scenario_disagreement",
+        "role_vector_disagreement",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != keys
+        or any(type(count) is not int or count < 0 for count in value.values())
+        or value["full_agreement"] + value["full_disagreement"] != value["reviewed_rows"]
+        or value["scenario_disagreement"] > value["full_disagreement"]
+        or value["role_vector_disagreement"] > value["full_disagreement"]
+    ):
+        raise ValueError("auxiliary semantic diagnostics are closed")
 
 
 class _ModelTransportError(Exception):

@@ -822,6 +822,21 @@ def test_validators_reject_rewrites_unknowns_and_target_leakage() -> None:
         v02_corpus.validate_blind_annotator_decision(annotator, sealed)
 
 
+def test_c6a_reviewer_repeated_roles_are_valid_but_closed_shape_and_vocab_remain_required() -> None:
+    training = v02_corpus._generate_training_plan()
+    reviewer = _training_envelope(training, "independent_reviewer")
+    semantic = cast(dict[str, object], reviewer["semantic"])
+    roles = cast(list[str], semantic["criterion_roles"])
+    semantic["criterion_roles"] = [roles[0]] * len(roles)
+    v02_corpus.validate_training_reviewer_decision(reviewer, training)
+    semantic["criterion_roles"] = ["unknown"] * len(roles)
+    with pytest.raises(ValueError, match="closed vocabulary"):
+        v02_corpus.validate_training_reviewer_decision(reviewer, training)
+    semantic["criterion_roles"] = [roles[0]] * (len(roles) - 1)
+    with pytest.raises(ValueError, match="closed vocabulary"):
+        v02_corpus.validate_training_reviewer_decision(reviewer, training)
+
+
 def test_sealed_ledger_requires_two_blind_labels_before_adjudication(tmp_path: Path) -> None:
     root = tmp_path / "sealed"
     _mkdir_0700(root)
@@ -867,6 +882,68 @@ def test_receipt_is_aggregate_only_and_verifiable(tmp_path: Path) -> None:
         other_root_binding="b" * 64,
     )
     assert verified["status"] == "PENDING"
+    assert verified["schema_version"] == v02_corpus.TRAINING_RECEIPT_SCHEMA
+    assert verified["training_acceptance_policy"] == v02_corpus.TRAINING_ACCEPTANCE_POLICY
+    assert metrics["training_acceptance_policy"] == v02_corpus.TRAINING_ACCEPTANCE_POLICY
+
+
+def test_c6a_training_receipt_requires_current_policy_and_closed_diagnostics(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "training"
+    _mkdir_0700(root)
+    plan = v02_corpus._generate_training_plan()
+    metrics = v02_corpus.reduce_training(plan, [])
+    receipt_path = v02_corpus.create_aggregate_receipt(
+        root,
+        artifact_id="training",
+        plan_data=plan,
+        events=[],
+        metrics=metrics,
+        status="PENDING",
+        ancestry=v02_corpus._root_ancestry(root, "training"),
+    )
+    receipt = json.loads(receipt_path.read_bytes())
+    for field, value in (
+        ("schema_version", v02_corpus.RECEIPT_SCHEMA),
+        ("training_acceptance_policy", "wrong-policy"),
+    ):
+        changed = {**receipt, field: value}
+        receipt_path.write_bytes(canonical_json_bytes(changed) + b"\n")
+        with pytest.raises(ValueError, match="historical policy/source required"):
+            v02_corpus.verify_receipt(
+                receipt_path, plan_data=plan, events=[], expected_lane="training"
+            )
+    historical_v1 = {**receipt, "schema_version": v02_corpus.RECEIPT_SCHEMA}
+    historical_v1.pop("training_acceptance_policy")
+    historical_v1.pop("auxiliary_semantic_diagnostics")
+    receipt_path.write_bytes(canonical_json_bytes(historical_v1) + b"\n")
+    with pytest.raises(ValueError, match="historical policy/source required"):
+        v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="training")
+    changed = {**receipt, "auxiliary_semantic_diagnostics": {"reviewed_rows": True}}
+    receipt_path.write_bytes(canonical_json_bytes(changed) + b"\n")
+    with pytest.raises(ValueError, match="auxiliary semantic diagnostics"):
+        v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="training")
+
+
+def test_c6a_sealed_receipt_stays_v1(tmp_path: Path) -> None:
+    root = tmp_path / "sealed"
+    _mkdir_0700(root)
+    plan = v02_corpus._generate_sealed_plan()
+    metrics = v02_corpus.reduce_sealed(plan, [])
+    receipt_path = v02_corpus.create_aggregate_receipt(
+        root,
+        artifact_id="sealed",
+        plan_data=plan,
+        events=[],
+        metrics=metrics,
+        status="PENDING",
+        ancestry=v02_corpus._root_ancestry(root, "sealed"),
+    )
+    receipt = json.loads(receipt_path.read_bytes())
+    assert receipt["schema_version"] == v02_corpus.RECEIPT_SCHEMA
+    assert "training_acceptance_policy" not in receipt
+    v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="sealed")
 
 
 def test_training_pilot_has_exact_pass_and_impossibility_math() -> None:
@@ -1545,7 +1622,7 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
         prompt_schema = v02_corpus._role_response_schema(role, identity)
         prompt_roles = prompt_schema["properties"]["semantic"]["properties"]["criterion_roles"]
         native_roles = schema["properties"]["semantic"]["properties"]["criterion_roles"]
-        assert prompt_roles["uniqueItems"] is True
+        assert "uniqueItems" not in prompt_roles
         assert "uniqueItems" not in native_roles
     if role == "sealed_adjudicator":
         assert schema["properties"]["choice"]["enum"] == labels
@@ -1803,19 +1880,99 @@ def test_c1_bilingual_context_rejects_other_families_and_blind_roles() -> None:
         v02_corpus.role_request(mutated, destination["slot_id"], "training_author")
 
 
-def test_c1_semantic_disagreement_is_committed_then_rejected(tmp_path: Path) -> None:
+def test_c6a_semantic_disagreement_is_diagnostic_and_three_way_choice_is_accepted(
+    tmp_path: Path,
+) -> None:
     _mkdir_0700(tmp_path)
     plan = v02_corpus._generate_training_plan()
     author = _training_envelope(plan, "training_author")
     reviewer = _training_envelope(plan, "independent_reviewer")
     semantic = cast(dict[str, object], reviewer["semantic"])
-    semantic["criterion_roles"] = list(reversed(cast(list[str], semantic["criterion_roles"])))
+    roles = cast(list[str], semantic["criterion_roles"])
+    semantic["criterion_roles"] = [roles[0]] * len(roles)
     ledger = v02_corpus.OfflineLedger(plan, tmp_path)
     ledger.commit("training_author", author)
     ledger.commit("training_reviewer", reviewer)
     metrics = v02_corpus.reduce_training(plan, ledger.events())
-    assert metrics["accepted"] == 0 and metrics["resolved"] == 1
+    assert metrics["accepted"] == 1 and metrics["resolved"] == 1
     assert metrics["denominator"] == 1600
+    assert metrics["auxiliary_semantic_diagnostics"] == {
+        "reviewed_rows": 1,
+        "full_agreement": 0,
+        "full_disagreement": 1,
+        "scenario_disagreement": 0,
+        "role_vector_disagreement": 1,
+    }
+
+
+def test_c6a_auxiliary_diagnostics_count_successful_reviewer_envelopes() -> None:
+    plan = v02_corpus._generate_training_plan()
+    events: list[dict[str, object]] = []
+    for index in range(3):
+        author = _training_envelope(plan, "training_author", index=index)
+        reviewer = _training_envelope(plan, "independent_reviewer", index=index)
+        semantic = cast(dict[str, object], reviewer["semantic"])
+        if index == 1:
+            slot = cast(list[dict[str, object]], plan["slots"])[index]
+            scenarios = v02_corpus._validated_corpus_taxonomy()[3][cast(str, slot["domain"])]
+            semantic["scenario_code"] = next(
+                code for code in scenarios if code != semantic["scenario_code"]
+            )
+        if index == 2:
+            semantic["criterion_roles"] = list(
+                reversed(cast(list[str], semantic["criterion_roles"]))
+            )
+        events.extend([_event("training_author", author), _event("training_reviewer", reviewer)])
+    metrics = v02_corpus.reduce_training(plan, events)
+    assert metrics["accepted"] == 3
+    assert metrics["auxiliary_semantic_diagnostics"] == {
+        "reviewed_rows": 3,
+        "full_agreement": 1,
+        "full_disagreement": 2,
+        "scenario_disagreement": 1,
+        "role_vector_disagreement": 1,
+    }
+
+
+def test_c6a_rejected_primary_results_still_count_successful_reviewer_diagnostics() -> None:
+    plan = v02_corpus._generate_training_plan()
+    events: list[dict[str, object]] = []
+    for index, rejected_by in enumerate(("wrong_choice", "author_gate", "reviewer_gate")):
+        slot = cast(list[dict[str, object]], plan["slots"])[index]
+        wrong_choice = (
+            f"option_{(cast(int, slot['gold_position']) + 1) % cast(int, slot['option_count'])}"
+        )
+        author = _training_envelope(
+            plan,
+            "training_author",
+            answer=wrong_choice if rejected_by == "wrong_choice" else None,
+            index=index,
+        )
+        reviewer = _training_envelope(
+            plan,
+            "independent_reviewer",
+            answer=wrong_choice if rejected_by == "wrong_choice" else None,
+            index=index,
+        )
+        if rejected_by == "author_gate":
+            cast(dict[str, bool], author["gates"])["privacy_valid"] = False
+        if rejected_by == "reviewer_gate":
+            cast(dict[str, bool], reviewer["gates"])["privacy_valid"] = False
+        events.extend([_event("training_author", author), _event("training_reviewer", reviewer)])
+    failure = _training_envelope(plan, "training_author", index=3)
+    for key in ("answer", "semantic", "gates", "content_digest"):
+        failure.pop(key)
+    failure["error_code"] = "invalid_output"
+    events.append(_event("training_author_failure", failure))
+    metrics = v02_corpus.reduce_training(plan, events)
+    assert metrics["accepted"] == 0
+    assert metrics["auxiliary_semantic_diagnostics"] == {
+        "reviewed_rows": 3,
+        "full_agreement": 3,
+        "full_disagreement": 0,
+        "scenario_disagreement": 0,
+        "role_vector_disagreement": 0,
+    }
 
 
 _RENDERER_SOURCE = """\
