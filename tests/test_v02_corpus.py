@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -44,6 +45,53 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 def _canonical_manifest_bytes(payload: dict[str, object]) -> bytes:
     return canonical_json_bytes(cast(JsonValue, payload)) + b"\n"
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_default_transport_uses_model_timeout_without_retry(
+    monkeypatch: pytest.MonkeyPatch, timed_out: bool
+) -> None:
+    calls: list[tuple[Any, int]] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+        def read(self, size: int) -> bytes:
+            assert size == v02_corpus._RESPONSE_LIMIT + 1
+            return b"{}"
+
+    def open_request(request: Any, *, timeout: int) -> Response:
+        calls.append((request, timeout))
+        if timed_out:
+            raise TimeoutError
+        return Response()
+
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *args: SimpleNamespace(open=open_request),
+    )
+    request = {
+        "url": "http://127.0.0.1:8000/v1/chat/completions",
+        "headers": {},
+        "method": "POST",
+        "body": b"{}",
+    }
+    if timed_out:
+        with pytest.raises(v02_corpus._ModelTransportError, match="timeout"):
+            v02_corpus._default_transport(request)
+    else:
+        assert v02_corpus._default_transport(request) == {"status": 200, "body": b"{}"}
+    assert len(calls) == 1
+    assert calls[0][1] == 180
+    assert calls[0][0].get_method() == "POST"
+    assert calls[0][0].data == b"{}"
 
 
 def test_manifest_is_closed_and_routed() -> None:
