@@ -1873,7 +1873,7 @@ def _validate_distillation_counts(payload: dict[str, Any], path: Path) -> None:
         if missing:
             raise ValueError(f"{path}: corpus_plan missing fields: {sorted(missing)}")
         raise ValueError(f"{path}: corpus_plan schema mismatch: extra {sorted(extra)}")
-    if corpus.get("namespace") != "saracura-v02-cleanroom-v1":
+    if corpus.get("namespace") != "saracura-v02-native-json-v1":
         raise ValueError(f"{path}: namespace mismatch")
     if corpus.get("total_slots") != 1600:
         raise ValueError(f"{path}: total_slots mismatch")
@@ -2037,7 +2037,7 @@ def _validate_distillation_pilot(payload: dict[str, Any], path: Path) -> None:
 
 def _validate_distillation_digest(payload: dict[str, Any], path: Path) -> None:
     digest = payload.get("protocol_digest")
-    if not isinstance(digest, str) or digest != "b1-offline-plan-r4":
+    if not isinstance(digest, str) or digest != "c5-native-json-r1":
         raise ValueError(f"{path}: protocol_digest mismatch")
 
 
