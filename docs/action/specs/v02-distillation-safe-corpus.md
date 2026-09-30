@@ -465,3 +465,8 @@ terminate cloud GPU only after digest-verified copy and provider deletion proof.
 - Calibration, confidence thresholds, automation authorization.
 - Candidate checkpoint training; this issue creates data only.
 - Reuse or transformation of any blocked Phase 4E output.
+
+## C7 supersession note
+
+C7 supersedes this training-author protocol only with `c7-grounded-author-r1`: private
+construction binds a visible rule to ordered option checks. The sealed lane remains frozen.

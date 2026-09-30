@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import random
 import stat
 import subprocess
 import sys
 import urllib.request
 from collections.abc import Mapping
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -189,6 +189,18 @@ def test_manifest_rejects_threshold_change(tmp_path: Path) -> None:
         validate_v02_distillation_safe_corpus(path)
 
 
+def test_c7a_manifest_requires_the_closed_grounding_micro_pilot(tmp_path: Path) -> None:
+    payload = json.loads(MANIFEST_PATH.read_bytes(), object_pairs_hook=_reject_duplicate_keys)
+    assert payload["grounding_micro_pilot"] == v02_corpus.GROUNDING_MICRO_PILOT
+    for field, value in (("training_slots", 27), ("unexpected", True)):
+        changed = json.loads(json.dumps(payload))
+        changed["grounding_micro_pilot"][field] = value
+        path = tmp_path / f"micro-{field}.json"
+        path.write_bytes(_canonical_manifest_bytes(changed))
+        with pytest.raises(ValueError, match="grounding_micro_pilot"):
+            validate_v02_distillation_safe_corpus(path)
+
+
 def test_manifest_rejects_domain_order(tmp_path: Path) -> None:
     raw = MANIFEST_PATH.read_bytes()
     payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
@@ -303,7 +315,7 @@ def test_plan_training_creates_exact_counts(tmp_path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema_version"] == "v02-plan.v1"
     assert data["lane"] == "training"
-    assert data["namespace"] == "saracura-v02-native-json-v1"
+    assert data["namespace"] == "saracura-v02-grounded-author-v1"
     assert data["seed"] == 20260929
     slot_ids = data["slot_ids"]
     assert len(slot_ids) == 1600
@@ -755,20 +767,34 @@ def _training_envelope(
     plan: dict[str, object], role: str, answer: str | None = None, *, index: int = 0
 ) -> dict[str, object]:
     slot = cast(list[dict[str, object]], plan["slots"])[index]
-    return {
-        "schema_version": "v02-envelope.v1",
+    selected = answer or f"option_{slot['gold_position']}"
+    payload: dict[str, object] = {
+        "schema_version": "v02-envelope.v2" if role == "training_author" else "v02-envelope.v1",
         "role": role,
         "model": v02_corpus._model_identity(role),
         "lane": "training",
         "identity_id": slot["slot_id"],
         "content_digest": "c" * 64,
-        "answer": answer or f"option_{slot['gold_position']}",
+        "answer": selected,
         "semantic": {
             "scenario_code": slot["scenario_code"],
             "criterion_roles": slot["criterion_roles"],
         },
         "gates": _all_gates(),
     }
+    if role == "training_author":
+        payload["construction"] = {
+            "rule_quote": "Fictional policy",
+            "option_checks": [
+                {
+                    "option_id": f"option_{index}",
+                    "supported": f"option_{index}" == selected,
+                    "reason": "Fictional policy check",
+                }
+                for index in range(cast(int, slot["option_count"]))
+            ],
+        }
+    return payload
 
 
 def _sealed_envelope(
@@ -917,6 +943,7 @@ def test_c6a_training_receipt_requires_current_policy_and_closed_diagnostics(
     historical_v1 = {**receipt, "schema_version": v02_corpus.RECEIPT_SCHEMA}
     historical_v1.pop("training_acceptance_policy")
     historical_v1.pop("auxiliary_semantic_diagnostics")
+    historical_v1.pop("grounding_micro_pilot_metrics")
     receipt_path.write_bytes(canonical_json_bytes(historical_v1) + b"\n")
     with pytest.raises(ValueError, match="historical policy/source required"):
         v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="training")
@@ -924,6 +951,476 @@ def test_c6a_training_receipt_requires_current_policy_and_closed_diagnostics(
     receipt_path.write_bytes(canonical_json_bytes(changed) + b"\n")
     with pytest.raises(ValueError, match="auxiliary semantic diagnostics"):
         v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="training")
+
+
+def _commit_micro_pass(ledger: v02_corpus.OfflineLedger) -> list[int]:
+    """Commit the self-authored valid micro cohort without bypassing admission."""
+    plan = ledger.plan
+    slots = cast(list[dict[str, Any]], plan["slots"])
+    selected = set(v02_corpus.grounding_micro_pilot(plan))
+    indices = [index for index, slot in enumerate(slots) if slot["slot_id"] in selected]
+    for index in indices:
+        slot = slots[index]
+        case = _case(cast(int, slot["option_count"]))
+        digest = v02_corpus.case_digest(case)
+        author = _training_envelope(plan, "training_author", index=index)
+        reviewer = _training_envelope(plan, "independent_reviewer", index=index)
+        author["content_digest"] = digest
+        cast(dict[str, Any], author["construction"])["rule_quote"] = "Fictional"
+        reviewer["content_digest"] = digest
+        v02_corpus._store_private_case(ledger.root, "training", cast(str, slot["slot_id"]), case)
+        assert ledger.commit("training_author", author)
+    for index in indices:
+        slot = slots[index]
+        case = _case(cast(int, slot["option_count"]))
+        reviewer = _training_envelope(plan, "independent_reviewer", index=index)
+        reviewer["content_digest"] = v02_corpus.case_digest(case)
+        assert ledger.commit("training_reviewer", reviewer)
+    assert v02_corpus.reduce_grounding_micro_pilot(plan, ledger.events())["status"] == "PASS"
+    return indices
+
+
+def test_c7a_ledger_rebinds_author_construction_when_private_case_is_available(
+    tmp_path: Path,
+) -> None:
+    _mkdir_0700(tmp_path)
+    plan = v02_corpus._generate_training_plan()
+    slot = cast(list[dict[str, Any]], plan["slots"])[0]
+    identity_id = cast(str, slot["slot_id"])
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    case = _case(cast(int, slot["option_count"]), state="Stored policy permits fictional action")
+    author = _training_envelope(plan, "training_author")
+    author["content_digest"] = v02_corpus.case_digest(case)
+    construction = cast(dict[str, Any], author["construction"])
+    construction["rule_quote"] = "Stored policy"
+    v02_corpus._store_private_case(ledger.root, "training", identity_id, case)
+    assert ledger.commit("training_author", author)
+    assert ledger.events()
+
+    event_path = next(ledger.events_root.glob("*.json"))
+    event = json.loads(event_path.read_bytes())
+    envelope = cast(dict[str, Any], event["envelope"])
+    envelope["construction"]["rule_quote"] = "Absent policy"
+    event["envelope_digest"] = v02_corpus._sha256(canonical_json_bytes(event["envelope"]))
+    event_path.write_bytes(canonical_json_bytes(event) + b"\n")
+    os.chmod(event_path, 0o600)
+    assert v02_corpus.reduce_training(plan, [event])["resolved"] == 0
+    with pytest.raises(ValueError, match="rule_quote must occur in case state"):
+        ledger.events()
+
+    envelope["construction"]["rule_quote"] = "Stored policy"
+    envelope["content_digest"] = "d" * 64
+    event["envelope_digest"] = v02_corpus._sha256(canonical_json_bytes(event["envelope"]))
+    event_path.write_bytes(canonical_json_bytes(event) + b"\n")
+    with pytest.raises(ValueError, match="private case digest mismatch"):
+        ledger.events()
+
+    envelope["content_digest"] = v02_corpus.case_digest(case)
+    event["envelope_digest"] = v02_corpus._sha256(canonical_json_bytes(event["envelope"]))
+    event_path.write_bytes(canonical_json_bytes(event) + b"\n")
+    case_path = v02_corpus._case_path(ledger.root, "training", identity_id)
+    case_path.unlink()
+    case_path.symlink_to(tmp_path / "missing-private-case.json")
+    with pytest.raises(ValueError, match="private case is closed"):
+        ledger.events()
+
+
+def test_c7a_author_construction_is_closed_and_uses_unicode_code_points() -> None:
+    plan = v02_corpus._generate_training_plan()
+    slot = cast(list[dict[str, Any]], plan["slots"])[0]
+    state = "é" * 240
+    response: dict[str, Any] = {
+        **_case(cast(int, slot["option_count"]), state=state),
+        "answer": f"option_{slot['gold_position']}",
+        "construction": _construction(slot, state, f"option_{slot['gold_position']}"),
+        "semantic": {
+            "scenario_code": slot["scenario_code"],
+            "criterion_roles": slot["criterion_roles"],
+        },
+        **_judgments(),
+    }
+    response["construction"]["rule_quote"] = state
+    response["construction"]["option_checks"][0]["reason"] = "é" * 160
+    escaped = json.dumps(response, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    assert v02_corpus.parse_role_response(escaped, plan, slot["slot_id"], "training_author")
+    mutations: list[dict[str, Any]] = []
+    missing = json.loads(json.dumps(response))
+    missing.pop("construction")
+    mutations.append(missing)
+    missing_quote = json.loads(json.dumps(response))
+    missing_quote["construction"].pop("rule_quote")
+    mutations.append(missing_quote)
+    extra = json.loads(json.dumps(response))
+    extra["construction"]["extra"] = True
+    mutations.append(extra)
+    missing_check = json.loads(json.dumps(response))
+    missing_check["construction"]["option_checks"].pop()
+    mutations.append(missing_check)
+    duplicate_check = json.loads(json.dumps(response))
+    duplicate_check["construction"]["option_checks"].append(
+        duplicate_check["construction"]["option_checks"][0]
+    )
+    mutations.append(duplicate_check)
+    wrong_boolean = json.loads(json.dumps(response))
+    wrong_boolean["construction"]["option_checks"][0]["supported"] = 1
+    mutations.append(wrong_boolean)
+    reordered = json.loads(json.dumps(response))
+    reordered["construction"]["option_checks"].reverse()
+    mutations.append(reordered)
+    too_long = json.loads(json.dumps(response))
+    too_long["construction"]["rule_quote"] = "é" * 241
+    mutations.append(too_long)
+    reason_too_long = json.loads(json.dumps(response))
+    reason_too_long["construction"]["option_checks"][0]["reason"] = "é" * 161
+    mutations.append(reason_too_long)
+    out_of_state = json.loads(json.dumps(response))
+    out_of_state["construction"]["rule_quote"] = "different policy"
+    mutations.append(out_of_state)
+    blank_quote = json.loads(json.dumps(response))
+    blank_quote["construction"]["rule_quote"] = " "
+    mutations.append(blank_quote)
+    control_quote = json.loads(json.dumps(response))
+    control_quote["construction"]["rule_quote"] = "\u0001"
+    mutations.append(control_quote)
+    non_nfc_quote = json.loads(json.dumps(response))
+    non_nfc_quote["construction"]["rule_quote"] = "e\u0301"
+    blank_reason = json.loads(json.dumps(response))
+    blank_reason["construction"]["option_checks"][0]["reason"] = " "
+    mutations.append(blank_reason)
+    control_reason = json.loads(json.dumps(response))
+    control_reason["construction"]["option_checks"][0]["reason"] = "\u0001"
+    mutations.append(control_reason)
+    non_nfc_reason = json.loads(json.dumps(response))
+    non_nfc_reason["construction"]["option_checks"][0]["reason"] = "e\u0301"
+    zero_supports = json.loads(json.dumps(response))
+    for check in zero_supports["construction"]["option_checks"]:
+        check["supported"] = False
+    mutations.append(zero_supports)
+    multiple_supports = json.loads(json.dumps(response))
+    multiple_supports["construction"]["option_checks"][0]["supported"] = True
+    multiple_supports["construction"]["option_checks"][1]["supported"] = True
+    mutations.append(multiple_supports)
+    support_answer_mismatch = json.loads(json.dumps(response))
+    support_answer_mismatch["answer"] = (
+        f"option_{(int(slot['gold_position']) + 1) % int(slot['option_count'])}"
+    )
+    mutations.append(support_answer_mismatch)
+    for invalid in mutations:
+        with pytest.raises(ValueError):
+            v02_corpus.parse_role_response(_raw(invalid), plan, slot["slot_id"], "training_author")
+    for invalid in (non_nfc_quote, non_nfc_reason):
+        with pytest.raises(ValueError):
+            v02_corpus.parse_role_response(
+                json.dumps(invalid, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
+                plan,
+                slot["slot_id"],
+                "training_author",
+            )
+
+
+def test_c7a_author_envelopes_require_v2_but_failure_v1_stays_valid(tmp_path: Path) -> None:
+    _mkdir_0700(tmp_path)
+    plan = v02_corpus._generate_training_plan()
+    author = _training_envelope(plan, "training_author")
+    author["schema_version"] = "v02-envelope.v1"
+    author.pop("construction")
+    with pytest.raises(ValueError, match="historical protocol/source required"):
+        v02_corpus.validate_training_author_output(author, plan)
+    failure = v02_corpus._failure_envelope(
+        "training_author",
+        cast(str, cast(list[dict[str, Any]], plan["slots"])[0]["slot_id"]),
+        "invalid_output",
+    )
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    assert ledger.commit("training_author_failure", failure)
+
+
+def test_c7a_proof_stays_outside_case_and_blind_role_contracts() -> None:
+    plan = v02_corpus._generate_training_plan()
+    slot = cast(list[dict[str, Any]], plan["slots"])[0]
+    case = _case(cast(int, slot["option_count"]), state="Policy allows only fictional action")
+    parsed: dict[str, Any] = {
+        **case,
+        "answer": f"option_{slot['gold_position']}",
+        "construction": _construction(
+            slot, cast(str, case["state"]), f"option_{slot['gold_position']}"
+        ),
+        "semantic": {
+            "scenario_code": slot["scenario_code"],
+            "criterion_roles": slot["criterion_roles"],
+        },
+        **_judgments(),
+    }
+    parsed["construction"]["rule_quote"] = "Policy allows only fictional action"
+    assert v02_corpus.case_from_author(parsed, plan, cast(str, slot["slot_id"])) == case
+    author = v02_corpus.role_envelope(
+        parsed, plan, cast(str, slot["slot_id"]), "training_author", case, _all_gates()
+    )
+    assert "construction" not in v02_corpus.blind_review_binding(author, plan)
+    reviewer_request = v02_corpus.role_request(
+        plan, cast(str, slot["slot_id"]), "independent_reviewer", case
+    )
+    assert "construction" not in reviewer_request[1]["content"]
+    sealed = v02_corpus._generate_sealed_plan()
+    identity = cast(list[dict[str, Any]], sealed["identities"])[0]
+    for role in ("sealed_author", "sealed_annotator_a", "sealed_annotator_b", "sealed_adjudicator"):
+        schema = v02_corpus._role_response_schema(role, identity, ["option_0", "option_1"])
+        assert "construction" not in schema["properties"]
+
+
+def test_c7a_micro_selection_reducer_and_admission_are_terminal(tmp_path: Path) -> None:
+    _mkdir_0700(tmp_path)
+    plan = v02_corpus._generate_training_plan()
+    selected = v02_corpus.grounding_micro_pilot(plan)
+    selected_ids = set(selected)
+    slots = cast(list[dict[str, Any]], plan["slots"])
+    selected_rows = [slot for slot in slots if slot["slot_id"] in selected_ids]
+    assert selected == [slot["slot_id"] for slot in slots if slot["slot_id"] in selected_ids]
+    assert len(selected) == 28 and len(set(selected)) == 28
+    assert all(
+        slot["split"] == "train" and slot["bilingual_pair_id"] is None for slot in selected_rows
+    )
+    cell_counts = {
+        (slot["locale"], slot["option_count"]): sum(
+            other["locale"] == slot["locale"] and other["option_count"] == slot["option_count"]
+            for other in selected_rows
+        )
+        for slot in selected_rows
+    }
+    expected_cell_counts = {
+        (locale, count): 2 for locale in ("pt_br", "english") for count in v02_corpus.OPTION_COUNTS
+    }
+    assert cell_counts == expected_cell_counts
+    assert v02_corpus.reduce_grounding_micro_pilot(plan, [])["status"] == "PENDING"
+    selected_indices = [
+        index for index, slot in enumerate(slots) if slot["slot_id"] in selected_ids
+    ]
+    failed_events = [
+        _event(
+            "training_author_failure",
+            v02_corpus._failure_envelope(
+                "training_author", cast(str, slots[index]["slot_id"]), "model_error"
+            ),
+        )
+        for index in selected_indices[:2]
+    ]
+    assert v02_corpus.reduce_grounding_micro_pilot(plan, failed_events)["status"] == "NO_GO"
+    rejected_cells = {("pt_br", 2), ("english", 3), ("pt_br", 4), ("english", 5)}
+    rejected_ids = {
+        next(
+            cast(str, slot["slot_id"])
+            for slot in selected_rows
+            if (slot["locale"], slot["option_count"]) == cell
+        )
+        for cell in rejected_cells
+    }
+    passing_events: list[dict[str, Any]] = []
+    for index in selected_indices:
+        slot = slots[index]
+        if slot["slot_id"] in rejected_ids:
+            passing_events.append(
+                _event(
+                    "training_author_failure",
+                    v02_corpus._failure_envelope(
+                        "training_author", cast(str, slot["slot_id"]), "invalid_output"
+                    ),
+                )
+            )
+            continue
+        passing_events.extend(
+            [
+                _event("training_author", _training_envelope(plan, "training_author", index=index)),
+                _event(
+                    "training_reviewer",
+                    _training_envelope(plan, "independent_reviewer", index=index),
+                ),
+            ]
+        )
+    passing = v02_corpus.reduce_grounding_micro_pilot(plan, passing_events)
+    assert passing["status"] == "PASS"
+    assert passing["accepted"] == 24 and passing["resolved"] == 28
+    assert passing["locale_accepted"] == {"pt_br": 12, "english": 12}
+    assert all(value >= 3 for value in passing["option_count_accepted"].values())
+    nonselected_index = next(
+        index for index, slot in enumerate(slots) if slot["slot_id"] not in selected_ids
+    )
+    passing_events.extend(
+        [
+            _event(
+                "training_author",
+                _training_envelope(plan, "training_author", index=nonselected_index),
+            ),
+            _event(
+                "training_reviewer",
+                _training_envelope(plan, "independent_reviewer", index=nonselected_index),
+            ),
+        ]
+    )
+    assert v02_corpus.reduce_grounding_micro_pilot(plan, passing_events) == passing
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    non_micro_candidates = (
+        index for index, slot in enumerate(slots) if slot["slot_id"] not in selected_ids
+    )
+    non_micro = next(non_micro_candidates)
+    with pytest.raises(ValueError, match="grounding micro"):
+        ledger.commit(
+            "training_author", _training_envelope(plan, "training_author", index=non_micro)
+        )
+    assert ledger.events() == []
+    _commit_micro_pass(ledger)
+    assert ledger.commit(
+        "training_author", _training_envelope(plan, "training_author", index=non_micro)
+    )
+    reduced = v02_corpus.reduce_training(plan, ledger.events())
+    assert reduced["grounding_micro_pilot"]["accepted"] == 28
+
+
+def test_c7a_micro_receipt_v3_roundtrip_and_tampering(tmp_path: Path) -> None:
+    _mkdir_0700(tmp_path)
+    plan = v02_corpus._generate_training_plan()
+    metrics = v02_corpus.reduce_training(plan, [])
+    receipt_path = v02_corpus.create_aggregate_receipt(
+        tmp_path,
+        artifact_id="c7a-training",
+        plan_data=plan,
+        events=[],
+        metrics=metrics,
+        status="PENDING",
+        ancestry=v02_corpus._root_ancestry(tmp_path, "training"),
+    )
+    receipt = json.loads(receipt_path.read_bytes())
+    assert receipt["schema_version"] == "v02-aggregate-receipt.v3"
+    assert receipt["grounding_micro_pilot_metrics"] == metrics["grounding_micro_pilot"]
+    v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="training")
+    for field, value in (
+        ("accepted", 1),
+        ("resolved", 1),
+        ("unresolved", 27),
+        ("denominator", 27),
+        ("locale_accepted", {"pt_br": 0, "english": 1}),
+        (
+            "option_count_accepted",
+            {str(count): 1 if count == 2 else 0 for count in v02_corpus.OPTION_COUNTS},
+        ),
+        ("status", "PASS"),
+    ):
+        changed = json.loads(json.dumps(receipt))
+        changed["grounding_micro_pilot_metrics"][field] = value
+        receipt_path.write_bytes(canonical_json_bytes(changed) + b"\n")
+        with pytest.raises(ValueError):
+            v02_corpus.verify_receipt(
+                receipt_path, plan_data=plan, events=[], expected_lane="training"
+            )
+    historical = json.loads(json.dumps(receipt))
+    historical["schema_version"] = "v02-aggregate-receipt.v2"
+    receipt_path.write_bytes(canonical_json_bytes(historical) + b"\n")
+    with pytest.raises(ValueError, match="historical policy/source required"):
+        v02_corpus.verify_receipt(receipt_path, plan_data=plan, events=[], expected_lane="training")
+
+
+def test_c7a_micro_no_go_blocks_commit_dispatch_and_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _mkdir_0700(tmp_path)
+    plan = v02_corpus._generate_training_plan()
+    slots = cast(list[dict[str, Any]], plan["slots"])
+    micro_ids = set(v02_corpus.grounding_micro_pilot(plan))
+    same_n_indices = [
+        index
+        for index, slot in enumerate(slots)
+        if slot["slot_id"] in micro_ids and slot["option_count"] == 2
+    ]
+    assert len(same_n_indices) == 4
+    ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    for index in same_n_indices[:2]:
+        assert ledger.commit(
+            "training_author_failure",
+            v02_corpus._failure_envelope(
+                "training_author", cast(str, slots[index]["slot_id"]), "model_error"
+            ),
+        )
+    metrics = v02_corpus.reduce_training(plan, ledger.events())
+    assert metrics["grounding_micro_pilot"]["status"] == "NO_GO"
+    assert metrics["pilot"]["status"] == "PENDING"
+    assert metrics["status"] == "NO_GO"
+    receipt_path = v02_corpus.create_aggregate_receipt(
+        tmp_path,
+        artifact_id="c7a-micro-no-go",
+        plan_data=plan,
+        events=ledger.events(),
+        metrics=metrics,
+        status="NO_GO",
+        ancestry=v02_corpus._root_ancestry(tmp_path, "training"),
+    )
+    verified = v02_corpus.verify_receipt(
+        receipt_path, plan_data=plan, events=ledger.events(), expected_lane="training"
+    )
+    assert verified["schema_version"] == v02_corpus.TRAINING_RECEIPT_SCHEMA
+    assert verified["status"] == "NO_GO"
+    later_index = same_n_indices[2]
+    later_id = cast(str, slots[later_index]["slot_id"])
+    with pytest.raises(ValueError, match="terminal"):
+        ledger.commit(
+            "training_author_failure",
+            v02_corpus._failure_envelope("training_author", later_id, "model_error"),
+        )
+    renderer, tokenizer, inventory = _load_runtime(monkeypatch, tmp_path / "runtime")
+    grant = _grant(inventory)
+    transport = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], "{}")
+    with pytest.raises(ValueError, match="terminal"):
+        _run_role(
+            ledger,
+            later_id,
+            "training_author",
+            grant,
+            _license_bytes(),
+            renderer,
+            tokenizer,
+            transport,
+        )
+    assert transport.calls == []
+    assert not (tmp_path / "role-reservations").exists()
+
+
+def test_c7a_sealed_contract_is_identical_to_source86a67f0(tmp_path: Path) -> None:
+    baseline_root = tmp_path / "baseline" / "benchmarks"
+    (baseline_root / "manifests").mkdir(parents=True)
+    for relative in (
+        "benchmarks/v02_corpus.py",
+        "benchmarks/manifests/v02-distillation-safe-corpus.v1.json",
+    ):
+        result = subprocess.run(
+            ["git", "show", f"86a67f0:{relative}"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+        target = tmp_path / "baseline" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(result.stdout)
+    spec = spec_from_file_location(
+        "v02_corpus_source86", tmp_path / "baseline/benchmarks/v02_corpus.py"
+    )
+    assert spec is not None and spec.loader is not None
+    baseline = module_from_spec(spec)
+    spec.loader.exec_module(baseline)
+    current_plan = v02_corpus._generate_sealed_plan()
+    current_training = v02_corpus._generate_training_plan()
+    baseline_plan = baseline._generate_sealed_plan()
+    assert current_plan == baseline_plan
+    for role in sorted(set(v02_corpus.MODEL_ROLES) - {"training_author"}):
+        assert v02_corpus.ROLE_TEMPLATES[role] == baseline.ROLE_TEMPLATES[role]
+        lane = v02_corpus._ROLE_LANES[role]
+        identity = (
+            current_plan["identities"][0] if lane == "sealed" else current_training["slots"][0]
+        )
+        labels = ["option_0", "option_1"] if role == "sealed_adjudicator" else None
+        assert v02_corpus._role_response_schema(
+            role, identity, labels
+        ) == baseline._role_response_schema(role, identity, labels)
+        assert v02_corpus.native_decoder_schema(
+            role, identity, labels
+        ) == baseline.native_decoder_schema(role, identity, labels)
 
 
 def test_c6a_sealed_receipt_stays_v1(tmp_path: Path) -> None:
@@ -1060,8 +1557,9 @@ def test_model_failure_settles_identity_and_preserves_denominator(tmp_path: Path
     plan = v02_corpus._generate_training_plan()
     ledger = v02_corpus.OfflineLedger(plan, tmp_path)
     failure = _training_envelope(plan, "training_author")
-    for key in ("answer", "semantic", "gates", "content_digest"):
+    for key in ("answer", "semantic", "gates", "content_digest", "construction"):
         failure.pop(key)
+    failure["schema_version"] = "v02-envelope.v1"
     failure["error_code"] = "invalid_output"
     ledger.commit("training_author_failure", failure)
     assert ledger.commit("training_author_failure", failure) is False
@@ -1113,15 +1611,13 @@ def test_terminal_no_go_rejects_further_commits(tmp_path: Path) -> None:
     _mkdir_0700(tmp_path)
     plan = v02_corpus._generate_training_plan()
     ledger = v02_corpus.OfflineLedger(plan, tmp_path)
-    indices = [
-        index
-        for index, slot in enumerate(plan["slots"])
-        if slot["in_pilot"] and slot["option_count"] == 2
-    ]
-    for index in indices[:6]:
+    selected = set(v02_corpus.grounding_micro_pilot(plan))
+    indices = [index for index, slot in enumerate(plan["slots"]) if slot["slot_id"] in selected]
+    for index in indices[:2]:
         envelope = _training_envelope(plan, "training_author", index=index)
-        for key in ("answer", "semantic", "gates", "content_digest"):
+        for key in ("answer", "semantic", "gates", "content_digest", "construction"):
             envelope.pop(key)
+        envelope["schema_version"] = "v02-envelope.v1"
         envelope["error_code"] = "model_error"
         ledger.commit("training_author_failure", envelope)
     assert v02_corpus.reduce_training(plan, ledger.events())["status"] == "NO_GO"
@@ -1329,6 +1825,20 @@ def _judgments() -> dict[str, bool]:
     }
 
 
+def _construction(slot: Mapping[str, Any], state: str, answer: str) -> dict[str, Any]:
+    return {
+        "rule_quote": state.split()[0],
+        "option_checks": [
+            {
+                "option_id": f"option_{index}",
+                "supported": f"option_{index}" == answer,
+                "reason": "Fictional policy check",
+            }
+            for index in range(cast(int, slot["option_count"]))
+        ],
+    }
+
+
 def _raw(value: dict[str, object]) -> bytes:
     return canonical_json_bytes(cast(JsonValue, value))
 
@@ -1364,6 +1874,9 @@ def test_c1_author_reviewer_annotator_and_adjudicator_round_trip() -> None:
     author_response = {
         **training_case,
         "answer": f"option_{slot['gold_position']}",
+        "construction": _construction(
+            slot, cast(str, training_case["state"]), f"option_{slot['gold_position']}"
+        ),
         "semantic": {
             "scenario_code": slot["scenario_code"],
             "criterion_roles": slot["criterion_roles"],
@@ -1494,6 +2007,9 @@ def test_c1_bilingual_source_and_gate_binding_are_constrained() -> None:
     response = {
         **case,
         "answer": f"option_{destination['gold_position']}",
+        "construction": _construction(
+            destination, cast(str, case["state"]), f"option_{destination['gold_position']}"
+        ),
         "semantic": {
             "scenario_code": destination["scenario_code"],
             "criterion_roles": destination["criterion_roles"],
@@ -1615,6 +2131,28 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
             "scenario_code": identity["scenario_code"],
             "criterion_roles": identity["criterion_roles"],
         }
+        prompt_construction = prompt_schema["properties"]["construction"]
+        native_construction = schema["properties"]["construction"]
+        assert prompt_construction["properties"]["rule_quote"] == {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+        }
+        for construction_schema in (prompt_construction, native_construction):
+            checks = construction_schema["properties"]["option_checks"]
+            assert checks["minItems"] == checks["maxItems"] == option_count
+            if "items" in checks and checks["items"] is not False:
+                check_items = [checks["items"]]
+            else:
+                check_items = checks["prefixItems"]
+                assert len(check_items) == option_count
+            for check in check_items:
+                assert check["properties"]["supported"] == {"type": "boolean"}
+                assert check["properties"]["reason"] == {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                }
     else:
         for judgment in v02_corpus._JUDGMENT_FIELDS:
             assert schema["properties"][judgment] == {"type": "boolean"}
@@ -1635,21 +2173,15 @@ def test_c5a_fresh_lane_ids_reject_legacy_plans_and_grants(
     current_training = v02_corpus._generate_training_plan()
     current_sealed = v02_corpus._generate_sealed_plan()
     taxonomy = v02_corpus._validated_corpus_taxonomy()
-    old_namespace = "saracura-v02-cleanroom-v1"
+    old_namespace = "saracura-v02-native-json-v1"
     with monkeypatch.context() as legacy:
-        legacy.setattr(v02_corpus, "NAMESPACE", old_namespace)
+        legacy.setattr(v02_corpus, "TRAINING_NAMESPACE", old_namespace)
         legacy.setattr(v02_corpus, "_validated_corpus_taxonomy", lambda: taxonomy)
         v02_corpus._frozen_plan_bytes.cache_clear()
         v02_corpus._frozen_identity_index.cache_clear()
         old_training = v02_corpus._generate_training_plan()
-    # The legacy source used the literal "sealed" prefix; it was not namespace-derived.
-    legacy_rng = random.Random(v02_corpus.SEED_SEALED)
-    old_sealed_ids = {
-        v02_corpus._opaque_slot_id("sealed", index, legacy_rng) for index in range(140)
-    }
-    assert len(old_sealed_ids) == 140
     assert set(current_training["slot_ids"]).isdisjoint(old_training["slot_ids"])
-    assert {item["identity_id"] for item in current_sealed["identities"]}.isdisjoint(old_sealed_ids)
+    assert current_sealed["namespace"] == v02_corpus.SEALED_NAMESPACE
     v02_corpus._frozen_plan_bytes.cache_clear()
     v02_corpus._frozen_identity_index.cache_clear()
     legacy_root = tmp_path / "legacy"
@@ -1960,8 +2492,9 @@ def test_c6a_rejected_primary_results_still_count_successful_reviewer_diagnostic
             cast(dict[str, bool], reviewer["gates"])["privacy_valid"] = False
         events.extend([_event("training_author", author), _event("training_reviewer", reviewer)])
     failure = _training_envelope(plan, "training_author", index=3)
-    for key in ("answer", "semantic", "gates", "content_digest"):
+    for key in ("answer", "semantic", "gates", "content_digest", "construction"):
         failure.pop(key)
+    failure["schema_version"] = "v02-envelope.v1"
     failure["error_code"] = "invalid_output"
     events.append(_event("training_author_failure", failure))
     metrics = v02_corpus.reduce_training(plan, events)
@@ -2247,6 +2780,7 @@ def _training_content(
     payload: dict[str, Any] = {
         **case,
         "answer": f"option_{slot['gold_position']}",
+        "construction": _construction(slot, state, f"option_{slot['gold_position']}"),
         "semantic": {
             "scenario_code": slot["scenario_code"],
             "criterion_roles": slot["criterion_roles"],
@@ -2709,7 +3243,15 @@ def test_c2_transport_errors_are_single_attempt_failures(
     grant = _grant(inventory)
     licenses = _license_bytes()
     plan = v02_corpus._generate_training_plan()
-    slots = [slot for slot in cast(list[dict[str, Any]], plan["slots"]) if slot["in_pilot"]]
+    micro_ids = set(v02_corpus.grounding_micro_pilot(plan))
+    slots = [
+        next(
+            slot
+            for slot in cast(list[dict[str, Any]], plan["slots"])
+            if slot["slot_id"] in micro_ids and slot["option_count"] == option_count
+        )
+        for option_count in v02_corpus.OPTION_COUNTS
+    ]
     ledger = v02_corpus.OfflineLedger(plan, tmp_path)
     timeout = _Loopback(v02_corpus.MODEL_ROLES["training_author"]["model"], "{}", fail="timeout")
     identity_id = cast(str, slots[0]["slot_id"])
@@ -2993,22 +3535,24 @@ def test_c2_admission_gates_do_not_dispatch(
     no_go_root = tmp_path / "nogo"
     _mkdir_0700(no_go_root)
     no_go = v02_corpus.OfflineLedger(training, no_go_root)
+    micro_ids = set(v02_corpus.grounding_micro_pilot(training))
     indices = [
         index
         for index, row in enumerate(cast(list[dict[str, Any]], training["slots"]))
-        if row["in_pilot"] and row["option_count"] == 2
+        if row["slot_id"] in micro_ids
     ]
-    for index in indices[:6]:
+    for index in indices[:2]:
         envelope = _training_envelope(training, "training_author", index=index)
-        for key in ("answer", "semantic", "gates", "content_digest"):
+        for key in ("answer", "semantic", "gates", "content_digest", "construction"):
             envelope.pop(key)
+        envelope["schema_version"] = "v02-envelope.v1"
         envelope["error_code"] = "model_error"
         no_go.commit("training_author_failure", envelope)
     assert v02_corpus.reduce_training(training, no_go.events())["status"] == "NO_GO"
     with pytest.raises(ValueError, match="terminal"):
         _run_role(
             no_go,
-            cast(str, training["slots"][indices[6]]["slot_id"]),
+            cast(str, training["slots"][indices[2]]["slot_id"]),
             "training_author",
             grant,
             licenses,
@@ -3016,7 +3560,7 @@ def test_c2_admission_gates_do_not_dispatch(
             tokenizer,
             _reject_network,
         )
-    assert len(no_go.events()) == 6
+    assert len(no_go.events()) == 2
     parameters = set(inspect_signature())
     assert parameters.isdisjoint(
         {"case", "bilingual_source", "committed_labels", "duplicate_history"}
@@ -3039,6 +3583,7 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
     plan = v02_corpus._generate_training_plan()
     left, right = _pilot_pair(plan)
     ledger = v02_corpus.OfflineLedger(plan, tmp_path)
+    _commit_micro_pass(ledger)
     shared_state = "Shared fictional facts for both locales"
     first = _Loopback(
         v02_corpus.MODEL_ROLES["training_author"]["model"],
@@ -3098,7 +3643,8 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
     )
     assert resumed["dispatch"] is False
     case_path = v02_corpus._case_path(ledger.root, "training", cast(str, left["slot_id"]))
-    stored = json.loads(case_path.read_text(encoding="utf-8"))
+    original_case_bytes = case_path.read_bytes()
+    stored = json.loads(original_case_bytes)
     cast(dict[str, Any], stored["case"])["state"] = "Changed fictional state"
     case_path.write_bytes(canonical_json_bytes(cast(JsonValue, stored)) + b"\n")
     os.chmod(case_path, 0o600)
@@ -3113,6 +3659,8 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
             tokenizer,
             _reject_network,
         )
+    case_path.write_bytes(original_case_bytes)
+    os.chmod(case_path, 0o600)
     assert "training_reviewer" not in ledger.by_identity(cast(str, left["slot_id"]))
     drifted = dict(grant)
     drifted["account_boundary_digest"] = "55" * 32

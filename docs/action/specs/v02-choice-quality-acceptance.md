@@ -63,3 +63,8 @@ Diagnostics cover the whole training lane and only successfully committed review
 Before the separate C6b combined review, mechanically enumerate private consumers of reduce_training, create_aggregate_receipt, verify_receipt and aggregate-receipt.v1 and account for their compatibility in the private diff. The authoritative original spec must distinguish terminal old-policy NO_GO from a separately reviewed, versioned policy fork; this does not authorize reset or retry.
 
 Old `NO_GO` is never erased or rebranded as PASS. New policy results are separately named and traceable. If the revised primary-quality pilot cannot meet unchanged floors, stop and retain all evidence. Rollback does not authorize inference retries. Model Preview remains uncalibrated and automation-disabled; no checkpoint quality or superiority claim follows from data acceptance.
+
+## C7 supersession note
+
+C7 keeps `choice-agreement-and-all-gates.v2` and every floor unchanged. Its 28-slot
+grounding micro is an earlier terminal gate, not a replacement acceptance policy.

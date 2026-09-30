@@ -63,3 +63,8 @@ Independent critique, executor, root conformance, independent read-only review, 
 - [vLLM structured outputs](https://docs.vllm.ai/en/latest/features/structured_outputs/)
 - [vLLM 0.30 xgrammar backend](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/v1/structured_output/backend_xgrammar.py)
 - [vLLM 0.30 guidance backend](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/v1/structured_output/backend_guidance.py)
+
+## C7 supersession note
+
+C7 changes only the fresh training namespace and author decoder to carry private construction;
+the sealed namespace, plan, non-author schemas and native projections stay source86a67f0-identical.

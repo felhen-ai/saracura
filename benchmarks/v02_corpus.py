@@ -37,10 +37,12 @@ MANIFEST_PATH = Path(__file__).parent / "manifests" / "v02-distillation-safe-cor
 
 SEED_TRAINING = 20260929
 SEED_SEALED = 20260930
-NAMESPACE = "saracura-v02-native-json-v1"
-PROTOCOL_DIGEST = "c5-native-json-r1"
+TRAINING_NAMESPACE = "saracura-v02-grounded-author-v1"
+SEALED_NAMESPACE = "saracura-v02-native-json-v1"
+PROTOCOL_DIGEST = "c7-grounded-author-r1"
 NATIVE_DECODER_POLICY = "v02-native-json-schema-projection.v1"
 AUTHOR_METADATA_CONST_POLICY = "planned-scenario-and-ordered-criterion-roles.v1"
+AUTHOR_GROUNDING_POLICY = "visible-policy-construction.v1"
 
 DOMAINS = [
     "email_triage",
@@ -61,8 +63,15 @@ OPTION_COUNTS = [2, 3, 4, 5, 6, 7, 8]
 
 LEDGER_SCHEMA = "v02-offline-ledger.v1"
 RECEIPT_SCHEMA = "v02-aggregate-receipt.v1"
-TRAINING_RECEIPT_SCHEMA = "v02-aggregate-receipt.v2"
+TRAINING_RECEIPT_SCHEMA = "v02-aggregate-receipt.v3"
 TRAINING_ACCEPTANCE_POLICY = "choice-agreement-and-all-gates.v2"
+GROUNDING_MICRO_PILOT = {
+    "training_slots": 28,
+    "slots_per_locale_cardinality_cell": 2,
+    "acceptance_floor_total": 24,
+    "acceptance_floor_per_locale": 12,
+    "acceptance_floor_per_option_count": 3,
+}
 LOCAL_GATES = frozenset(
     {
         "schema_valid",
@@ -102,10 +111,16 @@ _OPTION_FIELDS = frozenset({"id", "description"})
 # corpus content in Git; callers construct one future request per frozen identity.
 ROLE_TEMPLATES = {
     "training_author": (
-        "Create one fictional {locale} decision case for domain {domain}. Use the assigned "
-        "scenario and criterion roles, put the planned target at the requested option, and "
-        "return only the closed JSON response. A bilingual source, if supplied, is context "
-        "for translating the same facts and question, never for copying its target."
+        "Create one fictional {locale} decision case for domain {domain}. State an explicit "
+        "governing policy in state, including equality behavior for a numeric threshold, then "
+        "ask which action satisfies that policy. Use the assigned scenario and criterion roles, "
+        "put the planned target at the requested option, and return only the closed JSON "
+        "response. Do not invent missing contracts, authority, approvals, stock, locations or "
+        "consent. Every distractor must be a distinct action conflicting with a stated condition. "
+        "In construction, quote the governing policy from state and check each option in order; "
+        "exactly one supported Boolean must match answer. A bilingual source, if supplied, is "
+        "context for translating the same facts and question, never for copying its target or "
+        "construction."
     ),
     "independent_reviewer": (
         "Independently infer the answer and semantic classification from this case. Return "
@@ -356,6 +371,8 @@ def validate_protocol() -> int:
     _validate_counts(manifest)
     _validate_terminal_values(manifest)
     _validate_pilot(manifest)
+    if manifest.get("grounding_micro_pilot") != GROUNDING_MICRO_PILOT:
+        raise ValueError("grounding_micro_pilot mismatch")
     print("protocol valid")
     return 0
 
@@ -369,6 +386,7 @@ def _validate_closed_schema(manifest: dict[str, Any]) -> None:
             "runtime_policy",
             "renderer_contracts",
             "corpus_plan",
+            "grounding_micro_pilot",
             "sealed_plan",
             "pilot",
             "file_schemas",
@@ -424,7 +442,7 @@ def _validate_frozen_values(manifest: dict[str, Any]) -> None:
     if renderer.get("truncation_disabled") is not True:
         raise ValueError("renderer truncation_disabled must be true")
     corpus = manifest.get("corpus_plan", {})
-    if corpus.get("namespace") != NAMESPACE:
+    if corpus.get("namespace") != TRAINING_NAMESPACE:
         raise ValueError("corpus namespace mismatch")
     if corpus.get("total_slots") != 1600:
         raise ValueError("corpus total_slots mismatch")
@@ -753,7 +771,7 @@ def _generate_training_plan() -> dict[str, Any]:
     _assign_bilingual_pairs(slot_rows, pair_config)
 
     for i, row in enumerate(slot_rows):
-        row["slot_id"] = _opaque_slot_id(NAMESPACE, i, rng)
+        row["slot_id"] = _opaque_slot_id(TRAINING_NAMESPACE, i, rng)
     _assign_semantic_targets(slot_rows, criterion_roles, domain_scenario_map)
 
     slot_ids = [r["slot_id"] for r in slot_rows]
@@ -802,7 +820,7 @@ def _generate_training_plan() -> dict[str, Any]:
     return {
         "schema_version": "v02-plan.v1",
         "lane": "training",
-        "namespace": NAMESPACE,
+        "namespace": TRAINING_NAMESPACE,
         "seed": SEED_TRAINING,
         "slot_ids": slot_ids,
         "slots": [
@@ -978,7 +996,9 @@ def _generate_sealed_plan() -> dict[str, Any]:
         for _i in range(3):
             identities.append(
                 {
-                    "identity_id": _opaque_slot_id(f"{NAMESPACE}:sealed", len(identities), rng),
+                    "identity_id": _opaque_slot_id(
+                        f"{SEALED_NAMESPACE}:sealed", len(identities), rng
+                    ),
                     "locale": "pt_br",
                     "option_count": oc,
                     "permutation_rank": len(identities),
@@ -988,7 +1008,9 @@ def _generate_sealed_plan() -> dict[str, Any]:
         for _i in range(17):
             identities.append(
                 {
-                    "identity_id": _opaque_slot_id(f"{NAMESPACE}:sealed", len(identities), rng),
+                    "identity_id": _opaque_slot_id(
+                        f"{SEALED_NAMESPACE}:sealed", len(identities), rng
+                    ),
                     "locale": "pt_br",
                     "option_count": oc,
                     "permutation_rank": len(identities),
@@ -1000,7 +1022,7 @@ def _generate_sealed_plan() -> dict[str, Any]:
     return {
         "schema_version": "v02-plan.v1",
         "lane": "sealed",
-        "namespace": NAMESPACE,
+        "namespace": SEALED_NAMESPACE,
         "seed": SEED_SEALED,
         "identities": identities,
         "identity_count": len(identities),
@@ -1099,8 +1121,19 @@ def _validate_envelope_base(
     lane: str,
     plan: dict[str, Any],
 ) -> dict[str, Any]:
+    expected_schema = (
+        "v02-envelope.v2"
+        if role == "training_author" and "construction" in expected
+        else "v02-envelope.v1"
+    )
+    if (
+        role == "training_author"
+        and expected_schema == "v02-envelope.v2"
+        and envelope.get("schema_version") == "v02-envelope.v1"
+    ):
+        raise ValueError("historical protocol/source required for successful training author")
     _require_exact_keys(envelope, expected, name="envelope")
-    if envelope.get("schema_version") != "v02-envelope.v1":
+    if envelope.get("schema_version") != expected_schema:
         raise ValueError("envelope schema_version mismatch")
     if envelope.get("role") != role or envelope.get("model") != _model_identity(role):
         raise ValueError("envelope role or model mismatch")
@@ -1147,6 +1180,42 @@ def _validate_model_judgments(value: dict[str, Any]) -> None:
         raise ValueError("model judgments must be booleans")
 
 
+def _validate_construction(
+    value: Any, identity: dict[str, Any], answer: Any, *, state: str | None = None
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("construction must be an object")
+    _require_exact_keys(value, frozenset({"rule_quote", "option_checks"}), name="construction")
+    quote = _validate_nfc_text(value.get("rule_quote"), name="rule_quote")
+    if len(quote) > 240:
+        raise ValueError("rule_quote exceeds 240 Unicode code points")
+    if state is not None and quote not in state:
+        raise ValueError("rule_quote must occur in case state")
+    checks = value.get("option_checks")
+    if not isinstance(checks, list) or len(checks) != identity["option_count"]:
+        raise ValueError("option_checks must match planned option count")
+    supports: list[str] = []
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            raise ValueError("option_check must be an object")
+        _require_exact_keys(
+            check, frozenset({"option_id", "supported", "reason"}), name="option_check"
+        )
+        expected_id = f"option_{index}"
+        if check.get("option_id") != expected_id:
+            raise ValueError("option_check id/order differs from the plan")
+        if type(check.get("supported")) is not bool:
+            raise ValueError("option_check supported must be a Boolean")
+        reason = _validate_nfc_text(check.get("reason"), name="option_check reason")
+        if len(reason) > 160:
+            raise ValueError("option_check reason exceeds 160 Unicode code points")
+        if check["supported"]:
+            supports.append(expected_id)
+    if len(supports) != 1 or supports[0] != answer:
+        raise ValueError("construction support must match exactly one returned answer")
+    return cast(dict[str, Any], value)
+
+
 def validate_training_author_output(
     envelope: dict[str, Any], plan: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1163,6 +1232,7 @@ def validate_training_author_output(
                 "answer",
                 "semantic",
                 "gates",
+                "construction",
             }
         ),
         role="training_author",
@@ -1173,6 +1243,7 @@ def validate_training_author_output(
     _validate_option(result["answer"], slot)
     _validate_semantic(result["semantic"], slot)
     _validate_gates(result["gates"])
+    _validate_construction(result["construction"], slot, result["answer"])
     return result
 
 
@@ -1357,7 +1428,12 @@ def case_from_author(
     expected = _author_response_fields(role)
     _require_exact_keys(parsed, expected, name="author response")
     identity = _validate_identity(plan, cast(str, plan["lane"]), identity_id)
-    return validate_case({key: parsed[key] for key in _CASE_FIELDS}, identity)
+    case = validate_case({key: parsed[key] for key in _CASE_FIELDS}, identity)
+    if role == "training_author":
+        _validate_construction(
+            parsed["construction"], identity, parsed["answer"], state=case["state"]
+        )
+    return case
 
 
 def _role_identity(plan: dict[str, Any], identity_id: str, role: str) -> dict[str, Any]:
@@ -1374,6 +1450,7 @@ def _author_response_fields(role: str) -> frozenset[str]:
     fields = set(_CASE_FIELDS) | set(_JUDGMENT_FIELDS) | {label}
     if role == "training_author":
         fields.add("semantic")
+        fields.add("construction")
     return frozenset(fields)
 
 
@@ -1528,6 +1605,30 @@ def _role_response_schema(
                 "criterion_roles": criterion_roles,
             },
         }
+    if role == "training_author":
+        properties["construction"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["rule_quote", "option_checks"],
+            "properties": {
+                "rule_quote": {"type": "string", "minLength": 1, "maxLength": 240},
+                "option_checks": {
+                    "type": "array",
+                    "minItems": len(option_ids),
+                    "maxItems": len(option_ids),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["option_id", "supported", "reason"],
+                        "properties": {
+                            "option_id": {"type": "string", "enum": option_ids},
+                            "supported": {"type": "boolean"},
+                            "reason": {"type": "string", "minLength": 1, "maxLength": 160},
+                        },
+                    },
+                },
+            },
+        }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -1573,6 +1674,20 @@ def native_decoder_schema(
                 "criterion_roles": criterion_roles,
             }
         }
+        construction = cast(dict[str, Any], properties["construction"])
+        checks = cast(dict[str, Any], construction["properties"]["option_checks"])
+        check_item = cast(dict[str, Any], checks.pop("items"))
+        checks["prefixItems"] = [
+            {
+                **check_item,
+                "properties": {
+                    **cast(dict[str, Any], check_item["properties"]),
+                    "option_id": {"const": option_id},
+                },
+            }
+            for option_id in option_ids
+        ]
+        checks["items"] = False
     return schema
 
 
@@ -1615,6 +1730,7 @@ def prompt_contract() -> dict[str, Any]:
         },
         "native_decoder_policy": NATIVE_DECODER_POLICY,
         "author_metadata_const_policy": AUTHOR_METADATA_CONST_POLICY,
+        "author_grounding_policy": AUTHOR_GROUNDING_POLICY,
         "training_acceptance_policy": TRAINING_ACCEPTANCE_POLICY,
         "native_decoder_schema_digests": {
             role: _sha256(
@@ -1747,7 +1863,7 @@ def role_envelope(
     for field in _JUDGMENT_FIELDS:
         gates[field] = gates[field] and cast(bool, parsed[field])
     envelope: dict[str, Any] = {
-        "schema_version": "v02-envelope.v1",
+        "schema_version": "v02-envelope.v2" if role == "training_author" else "v02-envelope.v1",
         "role": role,
         "model": _model_identity(role),
         "lane": _ROLE_LANES[role],
@@ -1757,6 +1873,8 @@ def role_envelope(
     }
     if role in {"training_author", "independent_reviewer"}:
         envelope.update({"answer": parsed["answer"], "semantic": parsed["semantic"]})
+        if role == "training_author":
+            envelope["construction"] = parsed["construction"]
     elif role == "sealed_author":
         envelope["target"] = parsed["target"]
     elif role == "sealed_adjudicator":
@@ -1958,6 +2076,28 @@ class OfflineLedger:
         required_role = transition if transition != "training_reviewer" else "independent_reviewer"
         if envelope.get("role") != required_role:
             raise ValueError("ledger transition role mismatch")
+        if transition == "training_author":
+            self._validate_available_training_author_case(envelope)
+
+    def _validate_available_training_author_case(self, envelope: dict[str, Any]) -> None:
+        """Bind an author construction to its stored case when this is a real ledger."""
+        root = getattr(self, "root", None)
+        if not isinstance(root, Path):
+            return
+        identity_id = cast(str, envelope["identity_id"])
+        case_path = _case_path(root, "training", identity_id)
+        if not case_path.exists() and not case_path.is_symlink():
+            return
+        stored = _read_private_case(root, "training", identity_id)
+        if stored["content_digest"] != envelope["content_digest"]:
+            raise ValueError("private case digest mismatch")
+        identity = _validate_identity(self.plan, "training", identity_id)
+        _validate_construction(
+            envelope["construction"],
+            identity,
+            envelope["answer"],
+            state=cast(dict[str, Any], stored["case"])["state"],
+        )
 
     def commit(self, transition: str, envelope: dict[str, Any]) -> bool:
         """Commit once; equal pre-existing bytes are a verified resume, never a rewrite."""
@@ -1986,20 +2126,7 @@ class OfflineLedger:
             self._validate_event(self._read_existing(path))
             return False
         _validated_events(self.plan, [*before, event])
-        metrics = (
-            reduce_training(self.plan, before)
-            if self.lane == "training"
-            else reduce_sealed(self.plan, before)
-        )
-        if metrics["status"] == "NO_GO" or metrics["pilot"]["status"] == "NO_GO":
-            raise ValueError("ledger is terminal NO_GO")
-        pilot_ids = (
-            set(self.plan["pilot_prefix"]["slot_ids"])
-            if self.lane == "training"
-            else {item["identity_id"] for item in self.plan["pilot_prefix"]["identities"]}
-        )
-        if identity_id not in pilot_ids and metrics["pilot"]["status"] != "PASS":
-            raise ValueError("pilot must settle and pass before full-lane commitments")
+        self._reject_inadmissible(identity_id, before)
         try:
             _atomic_write(path, data)
         except ValueError as exc:
@@ -2018,6 +2145,9 @@ class OfflineLedger:
                     raise ValueError("duplicate ledger transition")
                 result[transition] = event
         return result
+
+    def _reject_inadmissible(self, identity_id: str, before: list[dict[str, Any]]) -> None:
+        _reject_inadmissible(self, identity_id, before)
 
     def _validate_legal_transition(
         self, transition: str, envelope: dict[str, Any], existing: dict[str, dict[str, Any]]
@@ -2109,7 +2239,38 @@ def _validated_events(
     return event_list
 
 
-def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def grounding_micro_pilot(plan_data: dict[str, Any]) -> list[str]:
+    """Return the frozen 28 unpaired training-pilot identities, in plan order."""
+    _validate_frozen_plan(plan_data)
+    if plan_data.get("lane") != "training":
+        raise ValueError("grounding micro pilot requires the training plan")
+    selected: set[str] = set()
+    for locale in ("pt_br", "english"):
+        for option_count in OPTION_COUNTS:
+            eligible = [
+                cast(str, slot["slot_id"])
+                for slot in cast(list[dict[str, Any]], plan_data["slots"])
+                if slot["in_pilot"]
+                and slot["bilingual_pair_id"] is None
+                and slot["locale"] == locale
+                and slot["option_count"] == option_count
+            ]
+            if len(eligible) < GROUNDING_MICRO_PILOT["slots_per_locale_cardinality_cell"]:
+                raise ValueError("insufficient unpaired training pilot slots for grounding micro")
+            selected.update(eligible[: GROUNDING_MICRO_PILOT["slots_per_locale_cardinality_cell"]])
+    ordered = [
+        cast(str, slot["slot_id"])
+        for slot in cast(list[dict[str, Any]], plan_data["slots"])
+        if slot["slot_id"] in selected
+    ]
+    if len(ordered) != GROUNDING_MICRO_PILOT["training_slots"] or len(selected) != len(ordered):
+        raise ValueError("grounding micro pilot selection is not unique")
+    return ordered
+
+
+def _training_accepted_resolved(
+    plan_data: dict[str, Any], events: Iterable[dict[str, Any]]
+) -> tuple[set[str], set[str], dict[str, dict[str, int]], dict[str, int]]:
     slots = cast(list[dict[str, Any]], plan_data["slots"])
     grouped = _group_events(_validated_events(plan_data, events))
     accepted: set[str] = set()
@@ -2158,9 +2319,90 @@ def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]])
                 ("option_count", str(slot["option_count"])),
             ):
                 cohorts[key][value] = cohorts[key].get(value, 0) + 1
+    return accepted, resolved, cohorts, diagnostics
+
+
+def reduce_grounding_micro_pilot(
+    plan_data: dict[str, Any], events: Iterable[dict[str, Any]]
+) -> dict[str, Any]:
+    slots = cast(list[dict[str, Any]], plan_data["slots"])
+    accepted, resolved, _cohorts, _diagnostics = _training_accepted_resolved(plan_data, events)
+    selection = set(grounding_micro_pilot(plan_data))
+    selected = [slot for slot in slots if slot["slot_id"] in selection]
+    accepted_ids = {cast(str, slot["slot_id"]) for slot in selected if slot["slot_id"] in accepted}
+    unresolved_ids = {
+        cast(str, slot["slot_id"]) for slot in selected if slot["slot_id"] not in resolved
+    }
+    locale_counts = {
+        locale: sum(
+            slot["slot_id"] in accepted_ids for slot in selected if slot["locale"] == locale
+        )
+        for locale in ("pt_br", "english")
+    }
+    option_counts = {
+        str(option): sum(
+            slot["slot_id"] in accepted_ids for slot in selected if slot["option_count"] == option
+        )
+        for option in OPTION_COUNTS
+    }
+    possible_locale = {
+        locale: sum(
+            slot["slot_id"] in accepted_ids | unresolved_ids
+            for slot in selected
+            if slot["locale"] == locale
+        )
+        for locale in ("pt_br", "english")
+    }
+    possible_option = {
+        str(option): sum(
+            slot["slot_id"] in accepted_ids | unresolved_ids
+            for slot in selected
+            if slot["option_count"] == option
+        )
+        for option in OPTION_COUNTS
+    }
+    passed = (
+        not unresolved_ids
+        and len(accepted_ids) >= GROUNDING_MICRO_PILOT["acceptance_floor_total"]
+        and all(
+            value >= GROUNDING_MICRO_PILOT["acceptance_floor_per_locale"]
+            for value in locale_counts.values()
+        )
+        and all(
+            value >= GROUNDING_MICRO_PILOT["acceptance_floor_per_option_count"]
+            for value in option_counts.values()
+        )
+    )
+    impossible = (
+        len(accepted_ids | unresolved_ids) < GROUNDING_MICRO_PILOT["acceptance_floor_total"]
+        or any(
+            value < GROUNDING_MICRO_PILOT["acceptance_floor_per_locale"]
+            for value in possible_locale.values()
+        )
+        or any(
+            value < GROUNDING_MICRO_PILOT["acceptance_floor_per_option_count"]
+            for value in possible_option.values()
+        )
+    )
+    return {
+        "accepted": len(accepted_ids),
+        "resolved": len(selection) - len(unresolved_ids),
+        "unresolved": len(unresolved_ids),
+        "denominator": len(selection),
+        "locale_accepted": locale_counts,
+        "option_count_accepted": option_counts,
+        "status": "PASS" if passed else "NO_GO" if impossible else "PENDING",
+    }
+
+
+def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    slots = cast(list[dict[str, Any]], plan_data["slots"])
+    event_list = list(events)
+    accepted, resolved, cohorts, diagnostics = _training_accepted_resolved(plan_data, event_list)
     pilot_ids = {cast(str, slot_id) for slot_id in plan_data["pilot_prefix"]["slot_ids"]}
     pilot_slots = [slot for slot in slots if slot["slot_id"] in pilot_ids]
     pilot = _training_pilot_metrics(pilot_slots, accepted, resolved)
+    micro = reduce_grounding_micro_pilot(plan_data, event_list)
     return {
         "training_acceptance_policy": TRAINING_ACCEPTANCE_POLICY,
         "accepted": len(accepted),
@@ -2170,8 +2412,9 @@ def reduce_training(plan_data: dict[str, Any], events: Iterable[dict[str, Any]])
         "cohorts": cohorts,
         "auxiliary_semantic_diagnostics": diagnostics,
         "pilot": pilot,
+        "grounding_micro_pilot": micro,
         "status": "NO_GO"
-        if pilot["status"] == "NO_GO"
+        if micro["status"] == "NO_GO" or pilot["status"] == "NO_GO"
         else _training_full_status(slots, accepted, resolved),
     }
 
@@ -2495,6 +2738,7 @@ def create_aggregate_receipt(
     if training:
         receipt["training_acceptance_policy"] = TRAINING_ACCEPTANCE_POLICY
         receipt["auxiliary_semantic_diagnostics"] = metrics["auxiliary_semantic_diagnostics"]
+        receipt["grounding_micro_pilot_metrics"] = metrics["grounding_micro_pilot"]
     path = output_parent / f"{artifact_id}.receipt.json"
     _atomic_write(path, canonical_json_bytes(cast(Any, receipt)) + b"\n")
     return path
@@ -2536,7 +2780,13 @@ def verify_receipt(
         "status",
     }
     if training:
-        receipt_keys.update({"training_acceptance_policy", "auxiliary_semantic_diagnostics"})
+        receipt_keys.update(
+            {
+                "training_acceptance_policy",
+                "auxiliary_semantic_diagnostics",
+                "grounding_micro_pilot_metrics",
+            }
+        )
     _require_exact_keys(receipt, frozenset(receipt_keys), name="aggregate receipt")
     if not training and receipt["schema_version"] != RECEIPT_SCHEMA:
         raise ValueError("aggregate receipt schema or status mismatch")
@@ -2576,6 +2826,7 @@ def verify_receipt(
     _validate_aggregate_value(receipt["cohort_metrics"])
     if training:
         _validate_auxiliary_semantic_diagnostics(receipt["auxiliary_semantic_diagnostics"])
+        _validate_grounding_micro_metrics(receipt["grounding_micro_pilot_metrics"])
     metrics = (
         reduce_training(plan_data, event_list)
         if expected_lane == "training"
@@ -2591,6 +2842,10 @@ def verify_receipt(
             training
             and receipt["auxiliary_semantic_diagnostics"]
             != metrics["auxiliary_semantic_diagnostics"]
+        )
+        or (
+            training
+            and receipt["grounding_micro_pilot_metrics"] != metrics["grounding_micro_pilot"]
         )
     ):
         raise ValueError("aggregate receipt metrics or status differ from verified events")
@@ -2683,6 +2938,45 @@ def _validate_aggregate_metrics(metrics: dict[str, Any]) -> None:
     diagnostics = metrics.get("auxiliary_semantic_diagnostics")
     if diagnostics is not None:
         _validate_auxiliary_semantic_diagnostics(diagnostics)
+    micro = metrics.get("grounding_micro_pilot")
+    if micro is not None:
+        _validate_grounding_micro_metrics(micro)
+
+
+def _validate_grounding_micro_metrics(value: Any) -> None:
+    expected = {
+        "accepted",
+        "resolved",
+        "unresolved",
+        "denominator",
+        "locale_accepted",
+        "option_count_accepted",
+        "status",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected
+        or any(
+            type(value[key]) is not int or value[key] < 0
+            for key in expected - {"locale_accepted", "option_count_accepted", "status"}
+        )
+        or value["denominator"] != GROUNDING_MICRO_PILOT["training_slots"]
+        or value["resolved"] + value["unresolved"] != value["denominator"]
+        or value["accepted"] > value["resolved"]
+        or value["status"] not in {"PENDING", "PASS", "NO_GO"}
+    ):
+        raise ValueError("grounding micro pilot metrics are closed")
+    for key, names in (
+        ("locale_accepted", ("pt_br", "english")),
+        ("option_count_accepted", tuple(map(str, OPTION_COUNTS))),
+    ):
+        counts = value[key]
+        if (
+            not isinstance(counts, dict)
+            or set(counts) != set(names)
+            or any(type(count) is not int or count < 0 for count in counts.values())
+        ):
+            raise ValueError("grounding micro pilot metrics are closed")
 
 
 def _validate_auxiliary_semantic_diagnostics(value: Any) -> None:
@@ -3629,12 +3923,21 @@ def _commit_failure(ledger: OfflineLedger, role: str, identity_id: str, error_co
     return transition
 
 
-def _reject_inadmissible(ledger: OfflineLedger, identity_id: str) -> None:
+def _reject_inadmissible(
+    ledger: OfflineLedger, identity_id: str, before: Iterable[dict[str, Any]] | None = None
+) -> None:
     metrics = (
-        reduce_training(ledger.plan, ledger.events())
+        reduce_training(ledger.plan, ledger.events() if before is None else before)
         if ledger.lane == "training"
-        else reduce_sealed(ledger.plan, ledger.events())
+        else reduce_sealed(ledger.plan, ledger.events() if before is None else before)
     )
+    if ledger.lane == "training":
+        micro = metrics["grounding_micro_pilot"]
+        if micro["status"] == "NO_GO":
+            raise ValueError("ledger is terminal NO_GO")
+        micro_ids = set(grounding_micro_pilot(ledger.plan))
+        if micro["status"] == "PENDING" and identity_id not in micro_ids:
+            raise ValueError("grounding micro pilot must pass before non-micro commitments")
     if metrics["status"] == "NO_GO" or metrics["pilot"]["status"] == "NO_GO":
         raise ValueError("ledger is terminal NO_GO")
     pilot_ids = (

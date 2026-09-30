@@ -1455,6 +1455,7 @@ def validate_v02_distillation_safe_corpus(path: Path) -> None:
             "runtime_policy",
             "renderer_contracts",
             "corpus_plan",
+            "grounding_micro_pilot",
             "sealed_plan",
             "pilot",
             "file_schemas",
@@ -1474,6 +1475,7 @@ def validate_v02_distillation_safe_corpus(path: Path) -> None:
     _validate_distillation_runtime(payload, path)
     _validate_distillation_renderer(payload, path)
     _validate_distillation_counts(payload, path)
+    _validate_grounding_micro_pilot(payload, path)
     _validate_distillation_terminal(payload, path)
     _validate_distillation_pilot(payload, path)
     _validate_distillation_digest(payload, path)
@@ -1873,7 +1875,7 @@ def _validate_distillation_counts(payload: dict[str, Any], path: Path) -> None:
         if missing:
             raise ValueError(f"{path}: corpus_plan missing fields: {sorted(missing)}")
         raise ValueError(f"{path}: corpus_plan schema mismatch: extra {sorted(extra)}")
-    if corpus.get("namespace") != "saracura-v02-native-json-v1":
+    if corpus.get("namespace") != "saracura-v02-grounded-author-v1":
         raise ValueError(f"{path}: namespace mismatch")
     if corpus.get("total_slots") != 1600:
         raise ValueError(f"{path}: total_slots mismatch")
@@ -2035,9 +2037,25 @@ def _validate_distillation_pilot(payload: dict[str, Any], path: Path) -> None:
             raise ValueError(f"{path}: pilot {key} mismatch")
 
 
+def _validate_grounding_micro_pilot(payload: dict[str, Any], path: Path) -> None:
+    value = payload.get("grounding_micro_pilot")
+    expected = {
+        "training_slots": 28,
+        "slots_per_locale_cardinality_cell": 2,
+        "acceptance_floor_total": 24,
+        "acceptance_floor_per_locale": 12,
+        "acceptance_floor_per_option_count": 3,
+    }
+    if not isinstance(value, dict) or set(value) != set(expected):
+        raise ValueError(f"{path}: grounding_micro_pilot schema mismatch")
+    for key, expected_value in expected.items():
+        if value.get(key) != expected_value:
+            raise ValueError(f"{path}: grounding_micro_pilot {key} mismatch")
+
+
 def _validate_distillation_digest(payload: dict[str, Any], path: Path) -> None:
     digest = payload.get("protocol_digest")
-    if not isinstance(digest, str) or digest != "c5-native-json-r1":
+    if not isinstance(digest, str) or digest != "c7-grounded-author-r1":
         raise ValueError(f"{path}: protocol_digest mismatch")
 
 
