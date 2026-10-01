@@ -622,3 +622,153 @@ sanitized technical state and spec links, no raw data/provider body, private
 path/host/account identifiers or undisclosed metrics. Exact execution paths,
 role/cohort literals, hashes, provider identity and receipts are mapped in
 private evidence before any command. No secrets in stdout, argv, logs or Git.
+
+
+## P1 explicit sealing inputs — execution handoff completion
+
+This additive input contract closes the P1 handoff gap exposed by execution:
+the seven original CLI arguments cannot supply rights/renderer/tokenizer
+provenance required by the closed capsule. Add required `--sealer-inputs FILE`;
+existing original arguments and all frozen gates remain. No new rights policy,
+authentication framework, corpus lane or inference architecture is introduced.
+
+FILE is an owned regular0600 canonical JSON under the original training root,
+created by the trusted data operator after real P4/P5 evidence, never a
+self-authorizing READY flag. Exact top-level keys of
+`v02-training-sealer-inputs.v1` are `schema_version`, `artifact_id`,
+`corpus_source_revision`, `policy_sha256`, `environment_grant_file`,
+`environment_grant_sha256`, `license_files`, `runtime_lock_file`,
+`runtime_lock_sha256`, `renderer_source_file`, `renderer_source_sha256`,
+`tokenizer_directory`, `tokenizer_inventory_file`,
+`tokenizer_inventory_sha256`, `exclusions_sha256`,
+`historical_phase_a_receipt_file`, `historical_phase_a_receipt_sha256`,
+`historical_source_sha256`, `historical_manifest_sha256`.
+File/directory references are safe relative paths beneath the explicitly named
+training root; license_files has exactly the six MODEL_ROLES keys and one
+relative actual license-file path each. No symlink/escape, unknown keys, null
+digest or booleans as numbers. Source revision is40hex; digests64hex.
+
+Use existing `v02-environment-grant.v1` as the rights receipt, preserving every
+existing validator and mandatory license/distribution/cloud/retention flag.
+Distribution-rights clearance is legal capability, not current disclosure
+permission; checkpoint publication_authorized remains false. Rehash actual
+grant bytes and all six license files, invoke `validate_environment_grant`,
+and bind the resulting canonical grant digest to original ledger's existing
+environment-binding, both training role bindings and every accepted-role
+reservation. Never approve content by trusting the new input file alone.
+Rehash runtime lock bytes, require its canonical digest to equal grant's
+runtime_lock_digest, and its public_source_integrity.source_commit to equal
+corpus_source_revision. Require source inventory/archive digest fields in that
+existing source proof and its nonzero files_verified; actual source closure
+was independently observed/reviewed before generation, not fabricated by sealer.
+
+policy_sha256 is SHA256 over RFC8785 canonical JSON bytes of the literal
+TRAINING_ACCEPTANCE_POLICY identifier string already bound by aggregate v3. The capsule rights_receipt_sha256 is raw SHA of
+the unchanged environment-grant file, and policy_sha256 binds that exact frozen policy identifier, not a new object. Read the pinned renderer bytes from the named file,
+verify exact source hash before `load_pinned_renderer`; load verified tokenizer
+from named directory/inventory via existing factory and check inventory equals
+grant tokenizer inventory canonically. Recompute both required renderer
+preflights for every accepted case; no claimed booleans accepted.
+
+Pin/recheck raw exclusions_sha256, closed historical exclusion schema/source
+bindings and original historical Phase A rights receipt metadata (not raw rows).
+Require raw Phase A receipt hash to equal exclusion source's
+phase_a_receipt_sha256, and its existing packet_manifest_sha256 to match historical_manifest_sha256.
+The Phase A receipt has no source-row hash field: require exclusions metadata
+historical_source_sha256 and historical_manifest_sha256 to equal the exact
+trusted operator pins in this input manifest, derived from the independently
+reviewed exclusion producer/source binding. Do not invent a Phase A field or
+read historical raw rows to reconstruct it. The known historical block remains blocked; these hashes
+are exclusions only, never historical data authorization. Hash-set type/count,
+normalization, literal-string alias sets and three mandatory zero-overlap axes
+remain required. Fourth option axis is descriptive; absent historical fourth
+set is explicitly unavailable, never invented zero overlap.
+
+Private fixtures may construct self-authored valid grant/renderer/tokenizer/
+events to exercise real validators, clearly test-only; they do not confer
+operational authorization. CLI and reusable verify_training_capsule API must
+reject changed rights/source/tokenizer/renderer/reservation bindings and any
+missing actual input before create-only publication. P2 receives this verified
+capsule API once P1 is integrated. No raw historical rows/holdout are read.
+
+
+### P1 immutable historical authority and actual runtime-lock shape
+
+PB-1/PB-2 correction is bounded to the prior input delivery delta. The
+historical exclusion artifact is NOT authorized by arbitrary operator pins.
+Require the code/spec-frozen historical packet manifest hash
+3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239,
+historical accepted-train-dev source hash
+bc444c3a233e8e3397ff35a38360a117caa2bbe9e2bcaa69b8b7b77cb384018e,
+original #53 Phase A receipt hash
+75b4fa2c3758610a1e494360a8bd1236a76a2d7f841e998ad0d9a00f218ef015,
+and exact immutable exclusion file raw hash
+878ad80644570ef107fe7dd5ac8841ece39f7870d3062aac6bda38ce8062ddbc.
+Input fields and metadata must equal these actual independently inspected
+anchors, not replace them. The inspected producer binds the train-dev source
+only, source_records=1304; each primary and literal-alias set has1304 unique
+sorted lowercase64hex hashes. The #45 accepted total1552 includes other
+historical lanes, and is not the count of this exact train-dev file. Do not
+read or include historical holdout/rejected rows. This exclusion scope protects
+train-dev non-overlap; cleanroom process prohibition on all historical reuse
+continues, without claiming hash-level coverage of unopened holdout.
+
+The closed saracura-historical-exclusion-source.v1 keys are schema_version,
+status, historical_manifest_sha256, historical_source_sha256,
+phase_a_receipt_sha256, source_records, normalization, identity_source_field,
+question_source_field, option_source_field, sets,
+literal_serialized_state_alias_sets, historical_holdout_opened,
+raw_rows_uploaded, limitation. Literal status is DERIVED_NOT_SEALING_READY
+(producer history; actual sealer now adds the independent gate), source_records
+is integer1304; flags historical_holdout_opened/raw_rows_uploaded=false.
+sets has exactly identity/state_question/combined_content; alias sets exactly
+state_question/combined_content. Fixed normalization is
+`v02_evaluation._normalise NFC-casefold-whitespace; RFC8785; SHA256`;
+source fields are task_id/instruction/`criteria; IDs excluded by canonical
+combined fingerprint`. Limitation is a nonempty provenance note, not a permit.
+Every raw hash, schema key, set uniqueness/count/order and source/receipt bind
+must pass before any capsule. Rehash raw #53 receipt and require its actual
+packet_manifest_sha256 to equal the frozen #45 digest and historical blocked
+status. No derivative trust based solely on the new input manifest.
+
+The actual private-runtime-lock.v1 top-level keys are schema_version,
+source_commit, public_source_integrity, code_sha256, cohort_bindings,
+cpu_offload_gb, dependency_lock_sha256, driver, dtype, gpu, gpu_memory_mib,
+historical_measurements, historical_model_metadata,
+historical_model_metadata_sha256, host, image_digest, installed_versions,
+max_model_len_by_role, max_num_seqs, max_output_tokens, native_json_grammar,
+port, public_runner_sha256, python, quantization, renderer_source_sha256,
+request_body_logging, teacher_input_ceiling_by_role, timeout_seconds,
+tokenizer_inventory. All are existing production private fields; P3 preserves
+this outer interface. P1 validates exact keys and consumed source proof, while
+the original private runtime validates role/native/schema internals before
+generation. Missing/changed schema returns BLOCKED_DATA_RIGHTS, not discovery.
+public_source_integrity has exactly source_commit (40hex), archive_sha256
+(64hex), source_inventory_digest (64hex), files_verified (positive integer,
+not bool). Both lock and proof source_commit equal corpus_source_revision.
+code_sha256 is a unique basename-to-64hex map over actual reviewed consumers;
+installed_versions a nonempty string-to-string map; role maps have six exact
+MODEL_ROLES keys. Cohort bindings retain the existing original reviewed shape.
+Use source/runtime lock from actual source-reviewed/physically observed bundle,
+not a self-asserted source success.
+
+Every input field ending *_sha256 is raw-file SHA except policy_sha256 (the
+RFC8785 policy identifier string hash) and historical_*_sha256 (fixed raw
+source-file bindings above). runtime_lock_sha256 checks raw lock bytes;
+grant.runtime_lock_digest hashes RFC8785 canonical parsed lock. Grant digest
+used by ledger bindings is canonical parsed grant, not raw grant SHA.
+Input tokenizer_inventory_sha256 checks raw inventory file bytes; capsule,
+private admission and checkpoint tokenizer_inventory_sha256 are the existing
+VerifiedTokenizer.inventory_digest over its canonical normalized inventory.
+Do not confuse these namespaces. Source_inventory_digest follows the existing
+source archive verifier's canonical sorted [{path,sha256}] inventory semantics.
+All digest/commit regexes are literally `[0-9a-f]{64}`/`[0-9a-f]{40}`.
+
+Reusable P1 API is verify_training_capsule(capsule_path, *, root, plan_path,
+receipt_path, exclusions_path, sealer_inputs_path), returning verified descriptor
+and rows with actual hash/reduction/provenance checks. A named private verifier
+result may be used but cannot replace those checks. P2 optimization core is
+independent; P2 private CLI/admission integration explicitly depends on this
+P1 API and cannot clear P2-C3/P2-C4 or admit P6 until that integration passes.
+P2-C3 additionally binds actual capsule/base/tokenizer/renderer/source/license/
+environment bytes; aggregate READY alone is insufficient.

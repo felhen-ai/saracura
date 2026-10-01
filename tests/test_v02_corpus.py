@@ -465,6 +465,29 @@ def test_plan_rejects_git_common_directory(tmp_path: Path, monkeypatch: pytest.M
         v02_corpus._safe_output_parent(output_parent)
 
 
+@pytest.mark.parametrize(
+    "synchronized_ancestor",
+    [
+        "CloudStorage",
+        "Mobile Documents",
+        "CloudDocs",
+        "com~apple~CloudDocs",
+        "Dropbox",
+        "OneDrive",
+        "Google Drive",
+        "Nextcloud",
+        "felhencloud",
+    ],
+)
+def test_private_storage_rejects_known_synchronized_ancestry(
+    tmp_path: Path, synchronized_ancestor: str
+) -> None:
+    output_parent = tmp_path / synchronized_ancestor / "private-output"
+    _mkdir_0700(output_parent)
+    with pytest.raises(ValueError, match="synchronized ancestry"):
+        v02_corpus._safe_output_parent(output_parent)
+
+
 def test_deterministic_training_plan() -> None:
     plan1 = v02_corpus._generate_training_plan()
     plan2 = v02_corpus._generate_training_plan()
@@ -2897,6 +2920,561 @@ def _run_role(
         tokenizer,
         transport=transport,
     )
+
+
+def _write_private_canonical(path: Path, value: Any) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    v02_corpus._atomic_write(path, canonical_json_bytes(cast(JsonValue, value)) + b"\n")
+
+
+def _write_private_pretty_json(path: Path, value: Any) -> None:
+    """Create self-authored noncanonical metadata for legacy-byte regression tests."""
+    v02_corpus._atomic_write(
+        path, json.dumps(value, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    )
+
+
+def _sealer_lock(inventory: list[dict[str, str]], source_revision: str) -> dict[str, Any]:
+    role_map = {role: 1 for role in v02_corpus._MODEL_ROLE_NAMES}
+    cohort_bindings = {
+        "training": {
+            cohort: {
+                "phase_id": f"training-{cohort}",
+                "selection_digest": f"{index + 10:064x}",
+            }
+            for index, cohort in enumerate(("micro", "pilot", "full"))
+        },
+        "sealed": {
+            cohort: {
+                "phase_id": f"sealed-{cohort}",
+                "selection_digest": f"{index + 20:064x}",
+            }
+            for index, cohort in enumerate(("pilot", "full"))
+        },
+    }
+    return {
+        "schema_version": "private-runtime-lock.v1",
+        "source_commit": source_revision,
+        "public_source_integrity": {
+            "source_commit": source_revision,
+            "archive_sha256": "a" * 64,
+            "source_inventory_digest": "b" * 64,
+            "files_verified": 1,
+        },
+        "code_sha256": {"v02_corpus.py": "c" * 64},
+        "cohort_bindings": cohort_bindings,
+        "cpu_offload_gb": 0,
+        "dependency_lock_sha256": "d" * 64,
+        "driver": "test",
+        "dtype": "bf16",
+        "gpu": "test",
+        "gpu_memory_mib": 1,
+        "historical_measurements": {},
+        "historical_model_metadata": {},
+        "historical_model_metadata_sha256": "e" * 64,
+        "host": "test",
+        "image_digest": "f" * 64,
+        "installed_versions": {"python": "3.11"},
+        "max_model_len_by_role": role_map,
+        "max_num_seqs": 1,
+        "max_output_tokens": 1,
+        "native_json_grammar": True,
+        "port": 1,
+        "public_runner_sha256": "1" * 64,
+        "python": "3.11",
+        "quantization": "nf4",
+        "renderer_source_sha256": v02_corpus.PINNED_RENDERER_SOURCE_SHA256,
+        "request_body_logging": False,
+        "teacher_input_ceiling_by_role": role_map,
+        "timeout_seconds": 1,
+        "tokenizer_inventory": inventory,
+    }
+
+
+def _sealer_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
+    root = tmp_path / "training"
+    _mkdir_0700(root)
+    source_raw = _pin_renderer(monkeypatch, _RENDERER_SOURCE)
+    source_revision = "9" * 40
+    plan = v02_corpus._generate_training_plan()
+    plan_path = root / "training-plan.json"
+    _write_private_canonical(plan_path, plan)
+    ledger = v02_corpus.OfflineLedger(plan, root)
+    snapshot, inventory = _write_snapshot(root)
+    monkeypatch.setattr(
+        v02_corpus, "_load_transformers_tokenizer", lambda _snapshot: _FixedTokenizer(4)
+    )
+    inventory_path = root / "tokenizer-inventory.json"
+    _write_private_canonical(inventory_path, inventory)
+    renderer_path = root / "renderer.py"
+    v02_corpus._atomic_write(renderer_path, source_raw)
+    lock = _sealer_lock(inventory, source_revision)
+    lock_path = root / "runtime-lock.json"
+    _write_private_canonical(lock_path, lock)
+    grant = _grant(inventory)
+    grant["runtime_lock_digest"] = v02_corpus._sha256(canonical_json_bytes(lock))
+    licenses = _license_bytes()
+    license_files: dict[str, str] = {}
+    for role, content in licenses.items():
+        relative = f"licenses/{role}.txt"
+        license_files[role] = relative
+        target = root / relative
+        target.parent.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(target.parent, 0o700)
+        v02_corpus._atomic_write(target, content)
+    grant_path = root / "environment-grant.json"
+    _write_private_canonical(grant_path, grant)
+    grant_digest = v02_corpus.validate_environment_grant(grant, licenses)
+    prompt_digest = v02_corpus.prompt_contract()["contract_digest"]
+    renderer_lock_digest = v02_corpus._renderer_lock_digest()
+    control = root / "private-control"
+    control.mkdir(mode=0o700)
+    os.chmod(control, 0o700)
+    _write_private_canonical(
+        control / "environment-binding.json",
+        {
+            "schema_version": "v02-environment-binding.v1",
+            "grant_digest": grant_digest,
+            "prompt_contract_digest": prompt_digest,
+            "renderer_lock_digest": renderer_lock_digest,
+        },
+    )
+    for role in ("training_author", "independent_reviewer"):
+        _write_private_canonical(
+            control / f"{role}-binding.json",
+            {
+                "schema_version": "v02-role-binding.v1",
+                "role": role,
+                "grant_digest": grant_digest,
+                "runtime_evidence_digest": "2" * 64,
+                "prompt_contract_digest": prompt_digest,
+                "renderer_lock_digest": renderer_lock_digest,
+            },
+        )
+    reservations = root / "role-reservations"
+    reservations.mkdir(mode=0o700)
+    os.chmod(reservations, 0o700)
+    events: list[dict[str, Any]] = []
+    for index, slot in enumerate(cast(list[dict[str, Any]], plan["slots"])):
+        identity_id = cast(str, slot["slot_id"])
+        case = {
+            "state": f"Fictional policy scenario {index}",
+            "question": f"Which fictional action applies to scenario {index}?",
+            "options": [
+                {
+                    "id": f"option_{option_index}",
+                    "description": f"Fictional scenario {index} action {option_index}",
+                }
+                for option_index in range(cast(int, slot["option_count"]))
+            ],
+        }
+        digest = v02_corpus.case_digest(case)
+        v02_corpus._store_private_case(root, "training", identity_id, case)
+        author = _training_envelope(plan, "training_author", index=index)
+        reviewer = _training_envelope(plan, "independent_reviewer", index=index)
+        author["content_digest"] = digest
+        reviewer["content_digest"] = digest
+        cast(dict[str, Any], author["construction"])["rule_quote"] = "Fictional"
+        for transition, envelope in (
+            ("training_author", author),
+            ("training_reviewer", reviewer),
+        ):
+            event = _event(transition, envelope)
+            events.append(cast(dict[str, Any], event))
+            v02_corpus._atomic_write(
+                ledger.events_root / v02_corpus._event_filename(identity_id, transition),
+                canonical_json_bytes(cast(JsonValue, event)) + b"\n",
+            )
+        for role in ("training_author", "independent_reviewer"):
+            _write_private_canonical(
+                v02_corpus._reservation_path(root, identity_id, role),
+                {
+                    "schema_version": "v02-role-reservation.v1",
+                    "identity_id": identity_id,
+                    "role": role,
+                    "grant_digest": grant_digest,
+                    "runtime_evidence_digest": "2" * 64,
+                    "prompt_contract_digest": prompt_digest,
+                    "renderer_lock_digest": renderer_lock_digest,
+                    "request_digest": "3" * 64,
+                },
+            )
+    assert len(ledger.events()) == 3200
+    metrics = v02_corpus.reduce_training(plan, events)
+    assert metrics["status"] == "READY"
+    receipt_path = v02_corpus.create_aggregate_receipt(
+        root,
+        artifact_id="training-ready",
+        plan_data=plan,
+        events=events,
+        metrics=metrics,
+        status="READY",
+        ancestry=v02_corpus._root_ancestry(root, "training"),
+    )
+    historical_manifest = "4" * 64
+    historical_source = "5" * 64
+    phase_a = {
+        "packet_manifest_sha256": historical_manifest,
+        "status": "BLOCKED_DATA_RIGHTS",
+    }
+    phase_a_path = root / "phase-a-receipt.json"
+    _write_private_canonical(phase_a_path, phase_a)
+    phase_a_hash = v02_corpus._sha256(phase_a_path.read_bytes())
+    exclusions = {
+        "schema_version": v02_corpus.HISTORICAL_EXCLUSION_SCHEMA,
+        "status": "DERIVED_NOT_SEALING_READY",
+        "historical_manifest_sha256": historical_manifest,
+        "historical_source_sha256": historical_source,
+        "phase_a_receipt_sha256": phase_a_hash,
+        "source_records": 1304,
+        "normalization": v02_corpus.HISTORICAL_EXCLUSION_NORMALIZATION,
+        "identity_source_field": "task_id",
+        "question_source_field": "instruction",
+        "option_source_field": "criteria; IDs excluded by canonical combined fingerprint",
+        "sets": {
+            name: [f"{number:064x}" for number in range(1, 1305)]
+            for name in ("identity", "state_question", "combined_content")
+        },
+        "literal_serialized_state_alias_sets": {
+            name: [f"{number:064x}" for number in range(1, 1305)]
+            for name in ("state_question", "combined_content")
+        },
+        "historical_holdout_opened": False,
+        "raw_rows_uploaded": False,
+        "limitation": "train-dev fingerprints only",
+    }
+    exclusions_path = root / "historical-exclusions.json"
+    _write_private_canonical(exclusions_path, exclusions)
+    exclusions_hash = v02_corpus._sha256(exclusions_path.read_bytes())
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_PACKET_MANIFEST_SHA256", historical_manifest)
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_TRAIN_DEV_SOURCE_SHA256", historical_source)
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_PHASE_A_RECEIPT_SHA256", phase_a_hash)
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_EXCLUSIONS_SHA256", exclusions_hash)
+    inputs = {
+        "schema_version": v02_corpus.TRAINING_SEALER_INPUTS_SCHEMA,
+        "artifact_id": "training-capsule",
+        "corpus_source_revision": source_revision,
+        "policy_sha256": v02_corpus._sha256(
+            canonical_json_bytes(v02_corpus.TRAINING_ACCEPTANCE_POLICY)
+        ),
+        "environment_grant_file": grant_path.name,
+        "environment_grant_sha256": v02_corpus._sha256(grant_path.read_bytes()),
+        "license_files": license_files,
+        "runtime_lock_file": lock_path.name,
+        "runtime_lock_sha256": v02_corpus._sha256(lock_path.read_bytes()),
+        "renderer_source_file": renderer_path.name,
+        "renderer_source_sha256": v02_corpus._sha256(renderer_path.read_bytes()),
+        "tokenizer_directory": snapshot.name,
+        "tokenizer_inventory_file": inventory_path.name,
+        "tokenizer_inventory_sha256": v02_corpus._sha256(inventory_path.read_bytes()),
+        "exclusions_sha256": exclusions_hash,
+        "historical_phase_a_receipt_file": phase_a_path.name,
+        "historical_phase_a_receipt_sha256": phase_a_hash,
+        "historical_source_sha256": historical_source,
+        "historical_manifest_sha256": historical_manifest,
+    }
+    inputs_path = root / "sealer-inputs.json"
+    _write_private_canonical(inputs_path, inputs)
+    output_parent = tmp_path / "capsules"
+    _mkdir_0700(output_parent)
+    return {
+        "root": root,
+        "plan": plan_path,
+        "receipt": receipt_path,
+        "exclusions": exclusions_path,
+        "inputs": inputs_path,
+        "output_parent": output_parent,
+    }
+
+
+def test_training_capsule_sealer_and_verifier_recompute_real_training_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _sealer_fixture(monkeypatch, tmp_path)
+    measured_calls = 0
+    original_measure = v02_corpus.VerifiedRenderer.measure
+
+    def count_measure(
+        renderer: v02_corpus.VerifiedRenderer,
+        case: Mapping[str, Any],
+        tokenizer: v02_corpus.VerifiedTokenizer,
+    ) -> dict[str, int]:
+        nonlocal measured_calls
+        measured_calls += 1
+        return original_measure(renderer, case, tokenizer)
+
+    monkeypatch.setattr(v02_corpus.VerifiedRenderer, "measure", count_measure)
+    capsule = v02_corpus.seal_training_capsule(
+        root=fixture["root"],
+        plan_path=fixture["plan"],
+        receipt_path=fixture["receipt"],
+        exclusions_path=fixture["exclusions"],
+        output_parent=fixture["output_parent"],
+        artifact_id="training-capsule",
+        sealer_inputs_path=fixture["inputs"],
+    )
+    assert measured_calls == 1600
+    descriptor, rows = v02_corpus.verify_training_capsule(
+        capsule,
+        root=fixture["root"],
+        plan_path=fixture["plan"],
+        receipt_path=fixture["receipt"],
+        exclusions_path=fixture["exclusions"],
+        sealer_inputs_path=fixture["inputs"],
+    )
+    assert descriptor["counts"]["accepted"] == 1600
+    assert descriptor["counts"]["complete_bilingual_pairs"] == 300
+    assert len(rows) == 1600
+    assert stat.S_IMODE(capsule.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(capsule.stat().st_mode) == 0o600
+    assert stat.S_IMODE((capsule.parent / "rows.jsonl").stat().st_mode) == 0o600
+    under_floor = dict(descriptor["counts"])
+    under_floor["accepted"] = 1199
+    with pytest.raises(ValueError, match=r"floor|inconsistent"):
+        v02_corpus._validate_capsule_counts(under_floor)
+    leaked = [rows[0], rows[0] | {"split": "internal_dev", "identity_id": "leaked-id"}]
+    with pytest.raises(ValueError, match=r"duplicate|leaked|leakage"):
+        v02_corpus._validate_row_disjointness(
+            leaked,
+            {"identity": set(), "state_question": set(), "combined_content": set()},
+        )
+    tampered = rows[0] | {"gold_index": 1}
+    row_path = capsule.parent / "rows.jsonl"
+    row_path.write_bytes(canonical_json_bytes(tampered) + b"\n")
+    os.chmod(row_path, 0o600)
+    with pytest.raises(ValueError, match=r"digest|evidence|rows"):
+        v02_corpus.verify_training_capsule(
+            capsule,
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=fixture["receipt"],
+            exclusions_path=fixture["exclusions"],
+            sealer_inputs_path=fixture["inputs"],
+        )
+
+
+def test_training_capsule_verifier_rejects_root_mode_and_reservation_tampering(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _sealer_fixture(monkeypatch, tmp_path)
+    capsule = v02_corpus.seal_training_capsule(
+        root=fixture["root"],
+        plan_path=fixture["plan"],
+        receipt_path=fixture["receipt"],
+        exclusions_path=fixture["exclusions"],
+        output_parent=fixture["output_parent"],
+        artifact_id="training-capsule",
+        sealer_inputs_path=fixture["inputs"],
+    )
+    copied_receipt = fixture["root"] / "copied-receipt.json"
+    v02_corpus._atomic_write(copied_receipt, fixture["receipt"].read_bytes())
+    with pytest.raises(ValueError, match="logical artifact ID"):
+        v02_corpus.verify_training_capsule(
+            capsule,
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=copied_receipt,
+            exclusions_path=fixture["exclusions"],
+            sealer_inputs_path=fixture["inputs"],
+        )
+    os.chmod(fixture["root"], 0o755)
+    with pytest.raises(ValueError, match="0700"):
+        v02_corpus.verify_training_capsule(
+            capsule,
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=fixture["receipt"],
+            exclusions_path=fixture["exclusions"],
+            sealer_inputs_path=fixture["inputs"],
+        )
+    os.chmod(fixture["root"], 0o700)
+    current_uid = os.geteuid()
+    monkeypatch.setattr(os, "geteuid", lambda: current_uid + 1)
+    with pytest.raises(ValueError, match="owned"):
+        v02_corpus.verify_training_capsule(
+            capsule,
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=fixture["receipt"],
+            exclusions_path=fixture["exclusions"],
+            sealer_inputs_path=fixture["inputs"],
+        )
+    monkeypatch.setattr(os, "geteuid", lambda: current_uid)
+    reservation = next((fixture["root"] / "role-reservations").glob("*.json"))
+    data = json.loads(reservation.read_bytes())
+    data["grant_digest"] = "0" * 64
+    reservation.write_bytes(canonical_json_bytes(data) + b"\n")
+    os.chmod(reservation, 0o600)
+    with pytest.raises(ValueError, match="reservation"):
+        v02_corpus.verify_training_capsule(
+            capsule,
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=fixture["receipt"],
+            exclusions_path=fixture["exclusions"],
+            sealer_inputs_path=fixture["inputs"],
+        )
+
+
+def test_training_capsule_sealer_rejects_synchronized_source_and_output_storage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _sealer_fixture(monkeypatch, tmp_path)
+    source_root = fixture["root"]
+    synchronized_root = tmp_path / "CloudStorage" / source_root.name
+    _mkdir_0700(synchronized_root.parent)
+    source_root.rename(synchronized_root)
+    relocated = {
+        key: synchronized_root / value.relative_to(source_root)
+        for key, value in fixture.items()
+        if key != "output_parent"
+    }
+    with pytest.raises(ValueError, match="synchronized ancestry"):
+        v02_corpus.seal_training_capsule(
+            root=relocated["root"],
+            plan_path=relocated["plan"],
+            receipt_path=relocated["receipt"],
+            exclusions_path=relocated["exclusions"],
+            output_parent=fixture["output_parent"],
+            artifact_id="training-capsule",
+            sealer_inputs_path=relocated["inputs"],
+        )
+
+    fixture = _sealer_fixture(monkeypatch, tmp_path / "independent-source")
+    synchronized_output = tmp_path / "Dropbox" / "capsules"
+    _mkdir_0700(synchronized_output)
+    with pytest.raises(ValueError, match="synchronized ancestry"):
+        v02_corpus.seal_training_capsule(
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=fixture["receipt"],
+            exclusions_path=fixture["exclusions"],
+            output_parent=synchronized_output,
+            artifact_id="training-capsule",
+            sealer_inputs_path=fixture["inputs"],
+        )
+
+
+def test_training_capsule_verifier_rejects_synchronized_capsule_storage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _sealer_fixture(monkeypatch, tmp_path)
+    capsule = v02_corpus.seal_training_capsule(
+        root=fixture["root"],
+        plan_path=fixture["plan"],
+        receipt_path=fixture["receipt"],
+        exclusions_path=fixture["exclusions"],
+        output_parent=fixture["output_parent"],
+        artifact_id="training-capsule",
+        sealer_inputs_path=fixture["inputs"],
+    )
+    synchronized_output = tmp_path / "Nextcloud" / "capsules"
+    _mkdir_0700(synchronized_output)
+    relocated_root = synchronized_output / capsule.parent.name
+    capsule.parent.rename(relocated_root)
+    with pytest.raises(ValueError, match="synchronized ancestry"):
+        v02_corpus.verify_training_capsule(
+            relocated_root / capsule.name,
+            root=fixture["root"],
+            plan_path=fixture["plan"],
+            receipt_path=fixture["receipt"],
+            exclusions_path=fixture["exclusions"],
+            sealer_inputs_path=fixture["inputs"],
+        )
+
+
+def test_training_capsule_exclusion_aliases_are_independent_and_enforced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _sealer_fixture(monkeypatch, tmp_path)
+    exclusions_path = fixture["exclusions"]
+    exclusions = json.loads(exclusions_path.read_bytes())
+    row = {
+        "identity_id": "alias-only",
+        "state": "Fictional alias overlap state",
+        "instruction": "Which fictional action applies?",
+        "options": [{"id": "option_0", "description": "Fictional action"}],
+        "split": "train",
+    }
+    fingerprint = state_question_fingerprint(row["state"], row["instruction"])
+    alias_values = [f"{number:064x}" for number in range(1, 1304)] + [fingerprint]
+    assert len(set(alias_values)) == 1304
+    exclusions["literal_serialized_state_alias_sets"]["state_question"] = sorted(alias_values)
+
+    def refresh_exclusion_digest() -> dict[str, Any]:
+        exclusions_path.unlink()
+        _write_private_canonical(exclusions_path, exclusions)
+        digest = v02_corpus._sha256(exclusions_path.read_bytes())
+        monkeypatch.setattr(v02_corpus, "HISTORICAL_EXCLUSIONS_SHA256", digest)
+        inputs = json.loads(fixture["inputs"].read_bytes())
+        inputs["exclusions_sha256"] = digest
+        return cast(dict[str, Any], inputs)
+
+    inputs = refresh_exclusion_digest()
+    validated = v02_corpus._validate_historical_exclusions(exclusions_path, inputs)
+    assert fingerprint in validated["state_question"]
+    with pytest.raises(ValueError, match="historical exclusion overlap on state_question"):
+        v02_corpus._validate_row_disjointness([row], validated)
+
+    exclusions["sets"]["state_question"] = exclusions["sets"]["state_question"][:-1]
+    inputs = refresh_exclusion_digest()
+    with pytest.raises(ValueError, match="historical exclusion hashes are closed"):
+        v02_corpus._validate_historical_exclusions(exclusions_path, inputs)
+
+
+def test_historical_raw_pinned_metadata_allows_pretty_json_only_after_hash_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixture = _sealer_fixture(monkeypatch, tmp_path)
+    phase_a_path = fixture["root"] / "phase-a-receipt.json"
+    exclusions_path = fixture["exclusions"]
+    phase_a = json.loads(phase_a_path.read_bytes())
+    phase_a_path.unlink()
+    _write_private_pretty_json(phase_a_path, phase_a)
+    phase_a_hash = v02_corpus._sha256(phase_a_path.read_bytes())
+    exclusions = json.loads(exclusions_path.read_bytes())
+    exclusions["phase_a_receipt_sha256"] = phase_a_hash
+    exclusions_path.unlink()
+    _write_private_pretty_json(exclusions_path, exclusions)
+    exclusions_hash = v02_corpus._sha256(exclusions_path.read_bytes())
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_PHASE_A_RECEIPT_SHA256", phase_a_hash)
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_EXCLUSIONS_SHA256", exclusions_hash)
+    inputs = json.loads(fixture["inputs"].read_bytes())
+    inputs["historical_phase_a_receipt_sha256"] = phase_a_hash
+    inputs["exclusions_sha256"] = exclusions_hash
+
+    v02_corpus._verify_phase_a_receipt(fixture["root"], inputs)
+    validated = v02_corpus._validate_historical_exclusions(exclusions_path, inputs)
+    assert {name: len(values) for name, values in validated.items()} == {
+        "identity": 1304,
+        "state_question": 1304,
+        "combined_content": 1304,
+    }
+
+    changed_inputs = dict(inputs)
+    changed_inputs["exclusions_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="raw digest mismatch"):
+        v02_corpus._validate_historical_exclusions(exclusions_path, changed_inputs)
+
+    duplicate = b'{"status":"BLOCKED_DATA_RIGHTS","status":"BLOCKED_DATA_RIGHTS"}\n'
+    phase_a_path.unlink()
+    v02_corpus._atomic_write(phase_a_path, duplicate)
+    duplicate_hash = v02_corpus._sha256(duplicate)
+    monkeypatch.setattr(v02_corpus, "HISTORICAL_PHASE_A_RECEIPT_SHA256", duplicate_hash)
+    duplicate_inputs = dict(inputs)
+    duplicate_inputs["historical_phase_a_receipt_sha256"] = duplicate_hash
+    with pytest.raises(ValueError, match="not valid closed JSON"):
+        v02_corpus._verify_phase_a_receipt(fixture["root"], duplicate_inputs)
+
+
+def test_training_capsule_runtime_lock_requires_actual_cohort_shape() -> None:
+    lock = _sealer_lock([], "9" * 40)
+    v02_corpus._validate_runtime_lock(lock, "9" * 40)
+    malformed = json.loads(json.dumps(lock))
+    malformed["cohort_bindings"]["training"].pop("micro")
+    with pytest.raises(ValueError, match="cohort bindings"):
+        v02_corpus._validate_runtime_lock(malformed, "9" * 40)
 
 
 def _pilot_training_slot(plan: Mapping[str, Any], *, pilot: bool) -> dict[str, Any]:
