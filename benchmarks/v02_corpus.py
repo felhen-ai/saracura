@@ -37,10 +37,10 @@ MANIFEST_PATH = Path(__file__).parent / "manifests" / "v02-distillation-safe-cor
 
 SEED_TRAINING = 20260929
 SEED_SEALED = 20260930
-TRAINING_NAMESPACE = "saracura-v02-grounded-author-v1"
+TRAINING_NAMESPACE = "saracura-v02-text-contract-author-v1"
 SEALED_NAMESPACE = "saracura-v02-native-json-v1"
-PROTOCOL_DIGEST = "c7-grounded-author-r1"
-NATIVE_DECODER_POLICY = "v02-native-json-schema-projection.v1"
+PROTOCOL_DIGEST = "c8-text-contract-author-r1"
+NATIVE_DECODER_POLICY = "v02-native-json-schema-projection.v2"
 AUTHOR_METADATA_CONST_POLICY = "planned-scenario-and-ordered-criterion-roles.v1"
 AUTHOR_GROUNDING_POLICY = "visible-policy-construction.v1"
 
@@ -120,7 +120,8 @@ ROLE_TEMPLATES = {
         "In construction, quote the governing policy from state and check each option in order; "
         "exactly one supported Boolean must match answer. A bilingual source, if supplied, is "
         "context for translating the same facts and question, never for copying its target or "
-        "construction."
+        "construction. Authoring fields must use nonempty single-paragraph NFC Unicode text "
+        "without category Cc characters, double quotes, or backslashes."
     ),
     "independent_reviewer": (
         "Independently infer the answer and semantic classification from this case. Return "
@@ -1555,6 +1556,11 @@ def _role_response_schema(
     """The explicit response format, usable by a later structured-output runtime."""
     option_ids = [f"option_{index}" for index in range(identity["option_count"])]
     text = {"type": "string", "minLength": 1}
+    author_text = {
+        "type": "string",
+        "minLength": 1,
+        "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]+$',
+    }
     properties: dict[str, Any] = {field: {"type": "boolean"} for field in _JUDGMENT_FIELDS}
     label_field = {
         "training_author": "answer",
@@ -1566,10 +1572,11 @@ def _role_response_schema(
     }[role]
     properties[label_field] = {"type": "string", "enum": labels or option_ids}
     if role in {"training_author", "sealed_author"}:
+        generated_text = author_text if role == "training_author" else text
         properties.update(
             {
-                "state": text,
-                "question": text,
+                "state": generated_text,
+                "question": generated_text,
                 "options": {
                     "type": "array",
                     "minItems": len(option_ids),
@@ -1580,7 +1587,7 @@ def _role_response_schema(
                         "required": ["id", "description"],
                         "properties": {
                             "id": {"type": "string", "enum": option_ids},
-                            "description": text,
+                            "description": generated_text,
                         },
                     },
                 },
@@ -1611,7 +1618,12 @@ def _role_response_schema(
             "additionalProperties": False,
             "required": ["rule_quote", "option_checks"],
             "properties": {
-                "rule_quote": {"type": "string", "minLength": 1, "maxLength": 240},
+                "rule_quote": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240,
+                    "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$',
+                },
                 "option_checks": {
                     "type": "array",
                     "minItems": len(option_ids),
@@ -1623,7 +1635,12 @@ def _role_response_schema(
                         "properties": {
                             "option_id": {"type": "string", "enum": option_ids},
                             "supported": {"type": "boolean"},
-                            "reason": {"type": "string", "minLength": 1, "maxLength": 160},
+                            "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 160,
+                                "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,160}$',
+                            },
                         },
                     },
                 },
@@ -1643,6 +1660,21 @@ def native_decoder_schema(
     """Return the xgrammar-compatible decoder projection of the full prompt schema."""
     schema = copy.deepcopy(_role_response_schema(role, identity, labels))
     properties = cast(dict[str, Any], schema["properties"])
+    if role == "training_author":
+        for field in ("state", "question"):
+            properties[field].pop("minLength", None)
+        option_properties = cast(dict[str, Any], properties["options"]["items"]["properties"])
+        option_properties["description"].pop("minLength", None)
+        construction_properties = cast(dict[str, Any], properties["construction"]["properties"])
+        construction_properties["rule_quote"].pop("minLength", None)
+        construction_properties["rule_quote"].pop("maxLength", None)
+        check_properties = cast(
+            dict[str, Any],
+            construction_properties["option_checks"]["items"]["properties"],
+        )
+        reason = cast(dict[str, Any], check_properties["reason"])
+        reason.pop("minLength", None)
+        reason.pop("maxLength", None)
     if role in {"training_author", "sealed_author"}:
         option_ids = [f"option_{index}" for index in range(identity["option_count"])]
         options = cast(dict[str, Any], properties["options"])

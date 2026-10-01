@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -315,7 +316,7 @@ def test_plan_training_creates_exact_counts(tmp_path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema_version"] == "v02-plan.v1"
     assert data["lane"] == "training"
-    assert data["namespace"] == "saracura-v02-grounded-author-v1"
+    assert data["namespace"] == "saracura-v02-text-contract-author-v1"
     assert data["seed"] == 20260929
     slot_ids = data["slot_ids"]
     assert len(slot_ids) == 1600
@@ -1118,6 +1119,101 @@ def test_c7a_author_construction_is_closed_and_uses_unicode_code_points() -> Non
             )
 
 
+def _training_author_text_schemas(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    properties = cast(dict[str, Any], schema["properties"])
+    options = cast(dict[str, Any], properties["options"])
+    option_item = cast(
+        dict[str, Any],
+        options["items"] if options.get("items") is not False else options["prefixItems"][0],
+    )
+    construction = cast(dict[str, Any], properties["construction"]["properties"])
+    checks = cast(dict[str, Any], construction["option_checks"])
+    check_item = cast(
+        dict[str, Any],
+        checks["items"] if checks.get("items") is not False else checks["prefixItems"][0],
+    )
+    return {
+        "state": cast(dict[str, Any], properties["state"]),
+        "question": cast(dict[str, Any], properties["question"]),
+        "description": cast(dict[str, Any], option_item["properties"]["description"]),
+        "rule_quote": cast(dict[str, Any], construction["rule_quote"]),
+        "reason": cast(dict[str, Any], check_item["properties"]["reason"]),
+    }
+
+
+def test_c8_training_author_patterns_restrict_only_the_generation_subset() -> None:
+    plan = v02_corpus._generate_training_plan()
+    slot = cast(list[dict[str, Any]], plan["slots"])[0]
+    full = _training_author_text_schemas(v02_corpus._role_response_schema("training_author", slot))
+    native = _training_author_text_schemas(
+        v02_corpus.native_decoder_schema("training_author", slot)
+    )
+    unbounded_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]+$'
+    quote_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$'
+    reason_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,160}$'
+    assert {name: schema["pattern"] for name, schema in full.items()} == {
+        "state": unbounded_pattern,
+        "question": unbounded_pattern,
+        "description": unbounded_pattern,
+        "rule_quote": quote_pattern,
+        "reason": reason_pattern,
+    }
+    assert {name: schema["pattern"] for name, schema in native.items()} == {
+        "state": unbounded_pattern,
+        "question": unbounded_pattern,
+        "description": unbounded_pattern,
+        "rule_quote": quote_pattern,
+        "reason": reason_pattern,
+    }
+    for schema in full.values():
+        assert schema["minLength"] == 1
+    assert full["rule_quote"]["maxLength"] == 240
+    assert full["reason"]["maxLength"] == 160
+    for schema in native.values():
+        assert "minLength" not in schema and "maxLength" not in schema
+
+    valid = json.loads(json.dumps("Decisão PT-BR and English l'option café 🧭"))
+    forbidden = [chr(codepoint) for codepoint in (*range(0x00, 0x20), *range(0x7F, 0xA0))]
+    for schema in (*full.values(), *native.values()):
+        pattern = cast(str, schema["pattern"])
+        assert re.fullmatch(pattern, valid)
+        for character in [*forbidden, '"', "\\"]:
+            assert re.fullmatch(pattern, json.loads(json.dumps(character))) is None
+    assert re.fullmatch(quote_pattern, "é" * 240)
+    assert re.fullmatch(quote_pattern, "é" * 241) is None
+    assert re.fullmatch(reason_pattern, "é" * 160)
+    assert re.fullmatch(reason_pattern, "é" * 161) is None
+
+
+def test_c8_final_training_validator_still_accepts_quotes_and_backslashes() -> None:
+    plan = v02_corpus._generate_training_plan()
+    slot = cast(list[dict[str, Any]], plan["slots"])[0]
+    answer = f"option_{slot['gold_position']}"
+    state = 'Policy says "approve" only through \\review.'
+    response: dict[str, Any] = {
+        **_case(cast(int, slot["option_count"]), state=state),
+        "answer": answer,
+        "construction": _construction(slot, state, answer),
+        "semantic": {
+            "scenario_code": slot["scenario_code"],
+            "criterion_roles": slot["criterion_roles"],
+        },
+        **_judgments(),
+    }
+    response["question"] = 'Which "action" follows \\review?'
+    for index, option in enumerate(cast(list[dict[str, str]], response["options"])):
+        option["description"] = f'Use "approved" \\review path {index}.'
+    response["construction"]["rule_quote"] = state
+    for check in cast(list[dict[str, Any]], response["construction"]["option_checks"]):
+        check["reason"] = 'Checked "policy" at \\review.'
+    assert v02_corpus.parse_role_response(
+        _raw(cast(dict[str, object], response)),
+        plan,
+        slot["slot_id"],
+        "training_author",
+    )
+
+
 def test_c7a_author_envelopes_require_v2_but_failure_v1_stays_valid(tmp_path: Path) -> None:
     _mkdir_0700(tmp_path)
     plan = v02_corpus._generate_training_plan()
@@ -1382,7 +1478,7 @@ def test_c7a_micro_no_go_blocks_commit_dispatch_and_receipt(
     assert not (tmp_path / "role-reservations").exists()
 
 
-def test_c7a_sealed_contract_is_identical_to_source86a67f0(tmp_path: Path) -> None:
+def test_c8_frozen_non_author_contracts_and_allocations_match_source643(tmp_path: Path) -> None:
     baseline_root = tmp_path / "baseline" / "benchmarks"
     (baseline_root / "manifests").mkdir(parents=True)
     for relative in (
@@ -1390,7 +1486,7 @@ def test_c7a_sealed_contract_is_identical_to_source86a67f0(tmp_path: Path) -> No
         "benchmarks/manifests/v02-distillation-safe-corpus.v1.json",
     ):
         result = subprocess.run(
-            ["git", "show", f"86a67f0:{relative}"],
+            ["git", "show", f"643e52e:{relative}"],
             cwd=REPO_ROOT,
             check=True,
             capture_output=True,
@@ -1399,7 +1495,7 @@ def test_c7a_sealed_contract_is_identical_to_source86a67f0(tmp_path: Path) -> No
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(result.stdout)
     spec = spec_from_file_location(
-        "v02_corpus_source86", tmp_path / "baseline/benchmarks/v02_corpus.py"
+        "v02_corpus_source643", tmp_path / "baseline/benchmarks/v02_corpus.py"
     )
     assert spec is not None and spec.loader is not None
     baseline = module_from_spec(spec)
@@ -1407,7 +1503,36 @@ def test_c7a_sealed_contract_is_identical_to_source86a67f0(tmp_path: Path) -> No
     current_plan = v02_corpus._generate_sealed_plan()
     current_training = v02_corpus._generate_training_plan()
     baseline_plan = baseline._generate_sealed_plan()
+    baseline_training = baseline._generate_training_plan()
     assert current_plan == baseline_plan
+    assert v02_corpus._ROLE_SYSTEM_TEMPLATE == baseline._ROLE_SYSTEM_TEMPLATE
+    assert v02_corpus.ROLE_TEMPLATES["training_author"] == (
+        baseline.ROLE_TEMPLATES["training_author"]
+        + " Authoring fields must use nonempty single-paragraph NFC Unicode text without "
+        "category Cc characters, double quotes, or backslashes."
+    )
+    frozen_training_fields = (
+        "schema_version",
+        "lane",
+        "seed",
+        "split_totals",
+        "locale_totals",
+        "pair_totals",
+        "domain_allocation",
+        "option_count_allocation",
+        "split_locale_option_count_allocation",
+        "gold_position_allocation",
+    )
+    assert {field: current_training[field] for field in frozen_training_fields} == {
+        field: baseline_training[field] for field in frozen_training_fields
+    }
+    assert {
+        field: current_training["pilot_prefix"][field]
+        for field in ("count", "train_count", "internal_dev_count", "complete_bilingual_pairs")
+    } == {
+        field: baseline_training["pilot_prefix"][field]
+        for field in ("count", "train_count", "internal_dev_count", "complete_bilingual_pairs")
+    }
     for role in sorted(set(v02_corpus.MODEL_ROLES) - {"training_author"}):
         assert v02_corpus.ROLE_TEMPLATES[role] == baseline.ROLE_TEMPLATES[role]
         lane = v02_corpus._ROLE_LANES[role]
@@ -2137,6 +2262,11 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
             "type": "string",
             "minLength": 1,
             "maxLength": 240,
+            "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$',
+        }
+        assert native_construction["properties"]["rule_quote"] == {
+            "type": "string",
+            "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$',
         }
         for construction_schema in (prompt_construction, native_construction):
             checks = construction_schema["properties"]["option_checks"]
@@ -2148,11 +2278,13 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
                 assert len(check_items) == option_count
             for check in check_items:
                 assert check["properties"]["supported"] == {"type": "boolean"}
-                assert check["properties"]["reason"] == {
+                expected_reason = {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 160,
+                    "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,160}$',
                 }
+                if construction_schema is prompt_construction:
+                    expected_reason.update({"minLength": 1, "maxLength": 160})
+                assert check["properties"]["reason"] == expected_reason
     else:
         for judgment in v02_corpus._JUDGMENT_FIELDS:
             assert schema["properties"][judgment] == {"type": "boolean"}
@@ -2167,23 +2299,35 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
     assert identity_id
 
 
-def test_c5a_fresh_lane_ids_reject_legacy_plans_and_grants(
+def test_c8_fresh_training_ids_reject_source643_plans_and_grants(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     current_training = v02_corpus._generate_training_plan()
     current_sealed = v02_corpus._generate_sealed_plan()
-    taxonomy = v02_corpus._validated_corpus_taxonomy()
-    old_namespace = "saracura-v02-native-json-v1"
-    with monkeypatch.context() as legacy:
-        legacy.setattr(v02_corpus, "TRAINING_NAMESPACE", old_namespace)
-        legacy.setattr(v02_corpus, "_validated_corpus_taxonomy", lambda: taxonomy)
-        v02_corpus._frozen_plan_bytes.cache_clear()
-        v02_corpus._frozen_identity_index.cache_clear()
-        old_training = v02_corpus._generate_training_plan()
+    baseline_root = tmp_path / "baseline" / "benchmarks"
+    (baseline_root / "manifests").mkdir(parents=True)
+    for relative in (
+        "benchmarks/v02_corpus.py",
+        "benchmarks/manifests/v02-distillation-safe-corpus.v1.json",
+    ):
+        result = subprocess.run(
+            ["git", "show", f"643e52e:{relative}"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+        target = tmp_path / "baseline" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(result.stdout)
+    spec = spec_from_file_location(
+        "v02_corpus_source643_ids", tmp_path / "baseline/benchmarks/v02_corpus.py"
+    )
+    assert spec is not None and spec.loader is not None
+    baseline = module_from_spec(spec)
+    spec.loader.exec_module(baseline)
+    old_training = baseline._generate_training_plan()
     assert set(current_training["slot_ids"]).isdisjoint(old_training["slot_ids"])
     assert current_sealed["namespace"] == v02_corpus.SEALED_NAMESPACE
-    v02_corpus._frozen_plan_bytes.cache_clear()
-    v02_corpus._frozen_identity_index.cache_clear()
     legacy_root = tmp_path / "legacy"
     _mkdir_0700(legacy_root)
     with pytest.raises(ValueError, match="frozen plan"):
