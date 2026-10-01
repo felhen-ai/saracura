@@ -8,8 +8,11 @@ loading is deferred to the separately authorised live phases.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
+import importlib
 import json
+import math
 import os
 import re
 import stat
@@ -17,7 +20,9 @@ import tempfile
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from pydantic import JsonValue
 
 from benchmarks.v02_corpus import RENDERER_CONTRACT
 from benchmarks.v02_evaluation import (
@@ -417,6 +422,444 @@ def validate_readiness(training: Path, sealed: Path, readiness: Path, receipt: P
     return 0
 
 
+def _training_runtime() -> tuple[Any, Any, Any, Any]:
+    """Load the opt-in ML stack only for an explicitly invoked local run."""
+    try:
+        torch = importlib.import_module("torch")
+        transformers = importlib.import_module("transformers")
+        peft = importlib.import_module("peft")
+        safetensors = importlib.import_module("safetensors.torch")
+    except ImportError as exc:
+        raise RuntimeError("install the v02-training extra before a local training run") from exc
+    return torch, transformers, peft, safetensors
+
+
+def candidate_config(candidate_id: str) -> dict[str, Any]:
+    """Return the immutable QLoRA and pointer-head contract for one candidate."""
+    manifest = load_manifest()
+    candidate = next((item for item in CANDIDATE_GRID if item["id"] == candidate_id), None)
+    if candidate is None:
+        raise ValueError("candidate is outside the frozen grid")
+    return {
+        "base_model": manifest["architecture"]["base_model"],
+        "base_revision": manifest["architecture"]["base_revision"],
+        "quantization": "nf4",
+        "compute_dtype": "bfloat16",
+        "lora_targets": "all-linear",
+        "head_dim": 256,
+        "trainable": "lora_and_pointer_readout_head",
+        **candidate,
+        **manifest["training"],
+        **manifest["early_stopping"],
+    }
+
+
+def qwen35_text_config(model_config: Any) -> Any:
+    """Reject a generic/vision fallback and return only the pinned text subconfig."""
+    if getattr(model_config, "model_type", None) != "qwen3_5" or getattr(
+        model_config, "architectures", None
+    ) != ["Qwen3_5ForConditionalGeneration"]:
+        raise ValueError("base config is not the pinned Qwen3.5 conditional-generation class")
+    text_config = getattr(model_config, "text_config", None)
+    hidden_size = getattr(text_config, "hidden_size", None)
+    if (
+        getattr(text_config, "model_type", None) != "qwen3_5_text"
+        or not isinstance(hidden_size, int)
+        or hidden_size <= 0
+    ):
+        raise ValueError("base config has no valid Qwen3.5 text subconfiguration")
+    return text_config
+
+
+def build_qlora_components(
+    base_directory: Path, candidate_id: str
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Build frozen-base QLoRA and a trainable 256-wide pointer head from local bytes.
+
+    `local_files_only=True` is intentional: this source never downloads a base
+    checkpoint.  Callers must supply a pre-acquired immutable local snapshot.
+    """
+    if (
+        not base_directory.is_absolute()
+        or not base_directory.is_dir()
+        or base_directory.is_symlink()
+    ):
+        raise ValueError("base directory must be an absolute non-symlink local directory")
+    torch, transformers, peft, _safetensors = _training_runtime()
+    config = candidate_config(candidate_id)
+    quantization = transformers.BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+    config_loader = getattr(transformers, "AutoConfig", None)
+    conditional_model = getattr(transformers, "Qwen3_5ForConditionalGeneration", None)
+    if config_loader is None or conditional_model is None:
+        raise RuntimeError("v0.2 requires Transformers 5.16.0 with Qwen3.5 support")
+    model_config = config_loader.from_pretrained(
+        str(base_directory), local_files_only=True, revision=config["base_revision"]
+    )
+    qwen35_text_config(model_config)
+    base = conditional_model.from_pretrained(
+        str(base_directory),
+        local_files_only=True,
+        revision=config["base_revision"],
+        config=model_config,
+        quantization_config=quantization,
+        torch_dtype=torch.bfloat16,
+    )
+    base.requires_grad_(False)
+    text_model = getattr(getattr(base, "model", None), "language_model", None)
+    if text_model is None or getattr(text_model, "config", None) is not qwen35_text_config(
+        model_config
+    ):
+        raise ValueError("Qwen3.5 conditional model did not expose its pinned text path")
+    lora = peft.get_peft_model(
+        text_model,
+        peft.LoraConfig(
+            r=config["lora_rank"],
+            lora_alpha=config["lora_alpha"],
+            lora_dropout=config["dropout"],
+            bias="none",
+            target_modules="all-linear",
+            task_type=peft.TaskType.FEATURE_EXTRACTION,
+        ),
+    )
+
+    class PointerReadoutHead(torch.nn.Module):  # type: ignore[name-defined, misc]
+        def __init__(self, hidden_size: int) -> None:
+            super().__init__()
+            self.query = torch.nn.Linear(hidden_size, config["head_dim"], bias=False)
+            self.key = torch.nn.Linear(hidden_size, config["head_dim"], bias=False)
+            self.temperature = torch.nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+
+        def forward(self, state: Any, options: Any) -> Any:
+            scale = self.temperature.clamp_min(1e-6) * (config["head_dim"] ** -0.5)
+            return (self.query(state).unsqueeze(1) * self.key(options)).sum(dim=-1) * scale
+
+    hidden_size = qwen35_text_config(model_config).hidden_size
+    return lora, PointerReadoutHead(hidden_size), config
+
+
+def _last_token(hidden: Any, mask: Any) -> Any:
+    """Select a representation without treating padded tokens as content."""
+    positions = mask.to(dtype=hidden.dtype).sum(dim=1).to(dtype=hidden.dtype).long() - 1
+    if bool((positions < 0).any()):
+        raise ValueError("prepared token batch has an empty sequence")
+    return hidden[range(hidden.shape[0]), positions]
+
+
+def _score_token_batch(adapter: Any, pointer_head: Any, batch: dict[str, Any]) -> Any:
+    """Run the actual frozen-base/LoRA/pointer forward pass for one token batch."""
+    state = adapter(
+        input_ids=batch["state_input_ids"], attention_mask=batch["state_attention_mask"]
+    )
+    state_vector = _last_token(state.last_hidden_state, batch["state_attention_mask"])
+    option_ids = batch["option_input_ids"]
+    option_mask = batch["option_attention_mask"]
+    batch_size, option_count, sequence_length = option_ids.shape
+    options = adapter(
+        input_ids=option_ids.reshape(batch_size * option_count, sequence_length),
+        attention_mask=option_mask.reshape(batch_size * option_count, sequence_length),
+    )
+    option_vectors = _last_token(
+        options.last_hidden_state,
+        option_mask.reshape(batch_size * option_count, sequence_length),
+    ).reshape(batch_size, option_count, -1)
+    scores = pointer_head(state_vector, option_vectors)
+    return scores.masked_fill(~batch["option_present"], float("-inf"))
+
+
+def _prepared_examples(path: Path) -> list[dict[str, Any]]:
+    """Read a private, local-only token representation; never tokenize/download here."""
+    if not path.is_absolute() or not path.is_file() or path.is_symlink():
+        raise ValueError("prepared examples must be an absolute non-symlink local file")
+    value = _load_closed(path).get("records")
+    if not isinstance(value, list) or not value:
+        raise ValueError("prepared examples require a non-empty records list")
+    expected = {"split", "state_input_ids", "options_input_ids", "target", "stratum"}
+    parsed: list[dict[str, Any]] = []
+    for row in value:
+        if (
+            not isinstance(row, dict)
+            or set(row) != expected
+            or row["split"] not in {"train", "internal_dev"}
+        ):
+            raise ValueError("prepared example is not closed")
+        if not isinstance(row["stratum"], str) or not row["stratum"]:
+            raise ValueError("prepared example stratum invalid")
+        if not isinstance(row["state_input_ids"], list) or not row["state_input_ids"]:
+            raise ValueError("prepared state tokens invalid")
+        if (
+            not isinstance(row["options_input_ids"], list)
+            or not 2 <= len(row["options_input_ids"]) <= 8
+        ):
+            raise ValueError("prepared option tokens invalid")
+        sequences = [row["state_input_ids"], *row["options_input_ids"]]
+        if any(
+            not isinstance(sequence, list)
+            or not sequence
+            or any(not isinstance(token, int) or token < 0 for token in sequence)
+            for sequence in sequences
+        ):
+            raise ValueError("prepared token IDs invalid")
+        if not isinstance(row["target"], int) or not 0 <= row["target"] < len(
+            row["options_input_ids"]
+        ):
+            raise ValueError("prepared target invalid")
+        parsed.append(row)
+    if {row["split"] for row in parsed} != {"train", "internal_dev"}:
+        raise ValueError("prepared examples require train and internal_dev lanes")
+    return parsed
+
+
+def _token_batches(
+    torch: Any, records: list[dict[str, Any]], batch_size: int
+) -> Iterable[dict[str, Any]]:
+    for start in range(0, len(records), batch_size):
+        rows = records[start : start + batch_size]
+        max_state = max(len(row["state_input_ids"]) for row in rows)
+        max_options = max(len(row["options_input_ids"]) for row in rows)
+        max_option_tokens = max(len(option) for row in rows for option in row["options_input_ids"])
+        state_ids = torch.zeros((len(rows), max_state), dtype=torch.long)
+        state_mask = torch.zeros_like(state_ids)
+        option_ids = torch.zeros((len(rows), max_options, max_option_tokens), dtype=torch.long)
+        option_mask = torch.zeros_like(option_ids)
+        option_present = torch.zeros((len(rows), max_options), dtype=torch.bool)
+        targets = torch.tensor([row["target"] for row in rows], dtype=torch.long)
+        for index, row in enumerate(rows):
+            state = torch.tensor(row["state_input_ids"], dtype=torch.long)
+            state_ids[index, : len(state)] = state
+            state_mask[index, : len(state)] = 1
+            for option_index, option in enumerate(row["options_input_ids"]):
+                tokens = torch.tensor(option, dtype=torch.long)
+                option_ids[index, option_index, : len(tokens)] = tokens
+                option_mask[index, option_index, : len(tokens)] = 1
+                option_present[index, option_index] = True
+        yield {
+            "state_input_ids": state_ids,
+            "state_attention_mask": state_mask,
+            "option_input_ids": option_ids,
+            "option_attention_mask": option_mask,
+            "option_present": option_present,
+            "targets": targets,
+            "strata": [str(row["stratum"]) for row in rows],
+        }
+
+
+def _to_device(batch: dict[str, Any], device: Any) -> dict[str, Any]:
+    return {
+        key: value.to(device) if hasattr(value, "to") else value for key, value in batch.items()
+    }
+
+
+def train_pointer_candidate(
+    adapter: Any,
+    pointer_head: Any,
+    prepared_examples: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Optimize only LoRA and pointer tensors, selecting the earliest best dev epoch.
+
+    Prepared examples contain already-rendered token IDs.  This keeps corpus
+    text, tokenizer acquisition, and model download outside this offline source
+    module while still providing the real QLoRA/pointer optimization loop.
+    """
+    torch, _transformers, _peft, _safetensors = _training_runtime()
+    if not bool(torch.cuda.is_available()):
+        raise RuntimeError("candidate training requires an authorised CUDA worker")
+    torch.manual_seed(config["seed"])
+    torch.cuda.manual_seed_all(config["seed"])
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    device = torch.device("cuda")
+    adapter.to(device)
+    pointer_head.to(device)
+    train_rows = [row for row in prepared_examples if row["split"] == "train"]
+    dev_rows = [row for row in prepared_examples if row["split"] == "internal_dev"]
+    trainable = [parameter for parameter in adapter.parameters() if parameter.requires_grad]
+    trainable.extend(
+        parameter for parameter in pointer_head.parameters() if parameter.requires_grad
+    )
+    if not trainable:
+        raise ValueError("QLoRA/pointer construction yielded no trainable tensors")
+    optimizer = torch.optim.AdamW(
+        trainable,
+        lr=float(config["peak_learning_rate"]),
+        weight_decay=config["weight_decay"],
+    )
+    microbatch = min(4, len(train_rows))
+    accumulation = max(1, config["effective_batch_size"] // microbatch)
+    total_steps = max(
+        1, ((len(train_rows) + microbatch - 1) // microbatch) * config["max_epochs"] // accumulation
+    )
+    warmup_steps = int(total_steps * config["warmup_fraction"])
+
+    def schedule(step: int) -> float:
+        if step < warmup_steps:
+            return float(step + 1) / max(1, warmup_steps)
+        remaining = max(1, total_steps - warmup_steps)
+        progress = min(1.0, (step - warmup_steps) / remaining)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
+    best_score = -1.0
+    best_epoch = 0
+    stale_epochs = 0
+    best_adapter: dict[str, Any] | None = None
+    best_head: dict[str, Any] | None = None
+    for epoch in range(1, config["max_epochs"] + 1):
+        adapter.train()
+        pointer_head.train()
+        optimizer.zero_grad(set_to_none=True)
+        for batch_number, batch in enumerate(
+            _token_batches(torch, train_rows, microbatch), start=1
+        ):
+            score = _score_token_batch(adapter, pointer_head, _to_device(batch, device))
+            loss = (
+                torch.nn.functional.cross_entropy(score, batch["targets"].to(device)) / accumulation
+            )
+            loss.backward()
+            if (
+                batch_number % accumulation == 0
+                or batch_number == (len(train_rows) + microbatch - 1) // microbatch
+            ):
+                torch.nn.utils.clip_grad_norm_(trainable, config["gradient_clipping"])
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+        adapter.eval()
+        pointer_head.eval()
+        correct: dict[str, list[int]] = {}
+        with torch.no_grad():
+            for batch in _token_batches(torch, dev_rows, microbatch):
+                score = _score_token_batch(adapter, pointer_head, _to_device(batch, device))
+                predicted = score.argmax(dim=1).cpu().tolist()
+                for prediction, target, stratum in zip(
+                    predicted, batch["targets"].tolist(), batch["strata"], strict=True
+                ):
+                    bucket = correct.setdefault(stratum, [0, 0])
+                    bucket[0] += int(prediction == target)
+                    bucket[1] += 1
+        metric = sum(hit / count for hit, count in correct.values()) / len(correct)
+        if metric > best_score:
+            best_score, best_epoch, stale_epochs = metric, epoch, 0
+            best_adapter = copy.deepcopy(adapter.state_dict())
+            best_head = copy.deepcopy(pointer_head.state_dict())
+        else:
+            stale_epochs += 1
+            if stale_epochs >= load_manifest()["early_stopping"]["patience"]:
+                break
+    if best_adapter is None or best_head is None:
+        raise RuntimeError("training produced no development checkpoint")
+    adapter.load_state_dict(best_adapter)
+    pointer_head.load_state_dict(best_head)
+    return {"best_epoch": best_epoch, "internal_dev_stratified_macro_accuracy": best_score}
+
+
+def _private_output_directory(path: Path) -> None:
+    if not path.is_absolute() or path.is_symlink():
+        raise ValueError("artifact output must be a new absolute non-symlink directory")
+    if path.exists():
+        raise FileExistsError("create-only artifact output already exists")
+    if (
+        not path.parent.is_dir()
+        or path.parent.is_symlink()
+        or stat.S_IMODE(path.parent.stat().st_mode) != 0o700
+    ):
+        raise ValueError("artifact output parent must be a private existing directory")
+
+
+def _file_digests(root: Path) -> dict[str, str]:
+    files = sorted(item for item in root.rglob("*") if item.is_file())
+    if any(item.is_symlink() for item in files):
+        raise ValueError("artifact contains symlink")
+    return {
+        str(item.relative_to(root)): hashlib.sha256(item.read_bytes()).hexdigest() for item in files
+    }
+
+
+def export_candidate_artifact(
+    adapter: Any, pointer_head: Any, output: Path, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Atomically create a LoRA-plus-pointer artifact and never export base tensors."""
+    _private_output_directory(output)
+    _torch, _transformers, _peft, safetensors = _training_runtime()
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=output.parent))
+    try:
+        adapter_path = temporary / "adapter"
+        if not callable(getattr(adapter, "save_pretrained", None)):
+            raise ValueError("QLoRA adapter cannot be safely exported")
+        adapter.save_pretrained(str(adapter_path), safe_serialization=True)
+        tensors = {
+            f"pointer_head.{name}": value.detach().cpu().contiguous()
+            for name, value in pointer_head.state_dict().items()
+        }
+        if not tensors or any(not name.startswith("pointer_head.") for name in tensors):
+            raise ValueError("pointer head export is invalid")
+        safetensors.save_file(tensors, str(temporary / "pointer_head.safetensors"))
+        files = _file_digests(temporary)
+        if not any(name.endswith(".safetensors") for name in files) or any(
+            name.startswith(("model.", "pytorch_model", "base_model.")) for name in files
+        ):
+            raise ValueError("artifact has missing adapter tensors or base tensors")
+        descriptor = {
+            "schema_version": "v02-candidate-artifact.v2",
+            "candidate_id": config["id"],
+            "base_model": config["base_model"],
+            "base_revision": config["base_revision"],
+            "adapter_files_sha256": files,
+            "base_tensors_exported": False,
+        }
+        create_json(temporary / "artifact.json", descriptor)
+        os.rename(temporary, output)
+    except BaseException:
+        with suppress(FileNotFoundError):
+            for item in sorted(temporary.rglob("*"), reverse=True):
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                elif item.is_dir():
+                    item.rmdir()
+            temporary.rmdir()
+        raise
+    return descriptor
+
+
+def verify_candidate_artifact(descriptor: dict[str, Any], output: Path) -> None:
+    expected = {
+        "schema_version",
+        "candidate_id",
+        "base_model",
+        "base_revision",
+        "adapter_files_sha256",
+        "base_tensors_exported",
+    }
+    manifest = load_manifest()["architecture"]
+    if (
+        set(descriptor) != expected
+        or descriptor["schema_version"] != "v02-candidate-artifact.v2"
+        or descriptor["candidate_id"] not in {item["id"] for item in CANDIDATE_GRID}
+        or descriptor["base_model"] != manifest["base_model"]
+        or descriptor["base_revision"] != manifest["base_revision"]
+        or descriptor["base_tensors_exported"] is not False
+        or not isinstance(descriptor["adapter_files_sha256"], dict)
+    ):
+        raise ValueError("candidate artifact descriptor drifted")
+    expected_files = descriptor["adapter_files_sha256"]
+    if not expected_files or any(
+        not isinstance(name, str) or not HEX64.fullmatch(digest)
+        for name, digest in expected_files.items()
+    ):
+        raise ValueError("candidate artifact file digest invalid")
+    if not output.is_absolute() or not output.is_dir() or output.is_symlink():
+        raise ValueError("candidate artifact directory invalid")
+    actual = _file_digests(output)
+    actual.pop("artifact.json", None)
+    if actual != expected_files or "pointer_head.safetensors" not in actual:
+        raise ValueError("candidate artifact digest mismatch")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -424,14 +867,18 @@ def main() -> int:
     check = sub.add_parser("validate-readiness")
     for name in ("training", "sealed", "readiness", "receipt"):
         check.add_argument(f"--{name}", type=Path, required=True)
-    for name in (
-        "seal-readiness",
-        "smoke",
-        "train-candidate",
-        "select",
-        "evaluate",
-        "verify-artifact",
-    ):
+    train = sub.add_parser("train-candidate")
+    train.add_argument("--base-directory", type=Path, required=True)
+    train.add_argument("--prepared-examples", type=Path, required=True)
+    train.add_argument(
+        "--candidate", choices=[item["id"] for item in CANDIDATE_GRID], required=True
+    )
+    train.add_argument("--output", type=Path, required=True)
+    select = sub.add_parser("select")
+    select.add_argument("--reports", type=Path, required=True)
+    verify = sub.add_parser("verify-artifact")
+    verify.add_argument("--artifact-directory", type=Path, required=True)
+    for name in ("seal-readiness", "smoke", "evaluate"):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.command == "preflight":
@@ -440,6 +887,25 @@ def main() -> int:
         return 0
     if args.command == "validate-readiness":
         return validate_readiness(args.training, args.sealed, args.readiness, args.receipt)
+    if args.command == "select":
+        reports = _load_closed(args.reports).get("candidates")
+        if not isinstance(reports, list):
+            raise ValueError("candidate reports must be a closed candidates list")
+        print(canonical_json_bytes(cast(JsonValue, select_candidate(reports))).decode("utf-8"))
+        return 0
+    if args.command == "verify-artifact":
+        descriptor = _load_closed(args.artifact_directory / "artifact.json")
+        verify_candidate_artifact(descriptor, args.artifact_directory)
+        print("candidate artifact valid")
+        return 0
+    if args.command == "train-candidate":
+        adapter, pointer_head, config = build_qlora_components(args.base_directory, args.candidate)
+        outcome = train_pointer_candidate(
+            adapter, pointer_head, _prepared_examples(args.prepared_examples), config
+        )
+        descriptor = export_candidate_artifact(adapter, pointer_head, args.output, config)
+        print(canonical_json_bytes({"artifact": descriptor, "training": outcome}).decode("utf-8"))
+        return 0
     raise ValueError(
         f"{args.command} requires the separately authorised live-phase command contract"
     )

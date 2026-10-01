@@ -4,10 +4,12 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from benchmarks import v02_training
+from benchmarks.v02_corpus import RENDERER_CONTRACT
 from benchmarks.v02_evaluation import validate_selection
 from benchmarks.validate_manifests import validate_routed_manifest
 
@@ -56,10 +58,7 @@ def test_sealer_includes_train_and_internal_dev_with_exact_normalized_fingerprin
     )
     v02_training.validate_training_descriptor(value)
     assert value["split_counts"] == {"train": 1, "internal_dev": 1}
-    assert (
-        value["candidate_rendering_digest"]
-        == v02_training.RENDERER_CONTRACT["candidate_rendering_digest"]
-    )
+    assert value["candidate_rendering_digest"] == RENDERER_CONTRACT["candidate_rendering_digest"]
     with pytest.raises(ValueError, match="both"):
         v02_training.seal_training(
             [_record("one", "train")],
@@ -122,6 +121,187 @@ def test_loopback_plan_and_global_code_revision_replacement_fail_closed() -> Non
         v02_training.validate_code_revisions({"descriptor": revision, "smoke": "b" * 40}, revision)
     with pytest.raises(ValueError, match="successor"):
         v02_training.validate_code_revisions({"selection_commit": revision}, revision)
+
+
+def test_candidate_configuration_is_frozen_to_the_three_declared_runs() -> None:
+    config = v02_training.candidate_config("c2-r16")
+    assert config["base_model"] == "Qwen/Qwen3.5-4B-Base"
+    assert config["base_revision"] == "1001bb4d826a52d1f399e183466143f4da7b741b"
+    assert config["lora_rank"] == 16
+    assert config["head_dim"] == 256
+    assert config["max_epochs"] == 5
+    assert config["patience"] == 2
+    with pytest.raises(ValueError, match="frozen grid"):
+        v02_training.candidate_config("c4-r64")
+
+
+def test_qwen35_loader_contract_uses_only_the_pinned_text_subconfiguration() -> None:
+    text = SimpleNamespace(model_type="qwen3_5_text", hidden_size=4096)
+    config = SimpleNamespace(
+        model_type="qwen3_5",
+        architectures=["Qwen3_5ForConditionalGeneration"],
+        text_config=text,
+    )
+    assert v02_training.qwen35_text_config(config) is text
+    config.architectures = ["Qwen3_5ForCausalLM"]
+    with pytest.raises(ValueError, match="conditional-generation"):
+        v02_training.qwen35_text_config(config)
+    config.architectures = ["Qwen3_5ForConditionalGeneration"]
+    config.text_config = SimpleNamespace(model_type="qwen3_5_text", hidden_size=0)
+    with pytest.raises(ValueError, match="text subconfiguration"):
+        v02_training.qwen35_text_config(config)
+
+
+def test_component_builder_loads_composite_qwen_then_adapts_only_language_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: dict[str, object] = {}
+    text_config = SimpleNamespace(model_type="qwen3_5_text", hidden_size=4096)
+    config = SimpleNamespace(
+        model_type="qwen3_5",
+        architectures=["Qwen3_5ForConditionalGeneration"],
+        text_config=text_config,
+    )
+    language_model = SimpleNamespace(config=text_config)
+    composite = SimpleNamespace(
+        model=SimpleNamespace(language_model=language_model),
+        requires_grad_=lambda frozen: calls.setdefault("frozen", frozen),
+    )
+
+    class FakeModule:
+        def __init__(self) -> None:
+            pass
+
+    class Conditional:
+        @staticmethod
+        def from_pretrained(*args: object, **kwargs: object) -> object:
+            calls["conditional_args"] = args
+            calls["conditional_kwargs"] = kwargs
+            return composite
+
+    class AutoConfig:
+        @staticmethod
+        def from_pretrained(*args: object, **kwargs: object) -> object:
+            calls["config_args"] = args
+            calls["config_kwargs"] = kwargs
+            return config
+
+    class Peft:
+        TaskType = SimpleNamespace(FEATURE_EXTRACTION="feature")
+
+        @staticmethod
+        def LoraConfig(**kwargs: object) -> dict[str, object]:
+            return kwargs
+
+        @staticmethod
+        def get_peft_model(model: object, lora: object) -> object:
+            calls["adapted_model"] = model
+            calls["lora"] = lora
+            return SimpleNamespace(config=text_config)
+
+    torch = SimpleNamespace(
+        bfloat16="bf16",
+        tensor=lambda *args, **kwargs: "tensor",
+        float32="float32",
+        nn=SimpleNamespace(
+            Module=FakeModule,
+            Linear=lambda *args, **kwargs: "linear",
+            Parameter=lambda value: value,
+        ),
+    )
+    transformers = SimpleNamespace(
+        BitsAndBytesConfig=lambda **kwargs: kwargs,
+        AutoConfig=AutoConfig,
+        Qwen3_5ForConditionalGeneration=Conditional,
+    )
+    monkeypatch.setattr(
+        v02_training, "_training_runtime", lambda: (torch, transformers, Peft, None)
+    )
+    local = tmp_path / "base"
+    local.mkdir()
+    adapter, _head, settings = v02_training.build_qlora_components(local, "c3-r32")
+    assert adapter.config is text_config
+    assert calls["adapted_model"] is language_model
+    assert calls["frozen"] is False
+    assert calls["conditional_kwargs"] == {
+        "local_files_only": True,
+        "revision": settings["base_revision"],
+        "config": config,
+        "quantization_config": {
+            "load_in_4bit": True,
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_compute_dtype": "bf16",
+            "bnb_4bit_use_double_quant": True,
+        },
+        "torch_dtype": "bf16",
+    }
+
+
+def test_adapter_and_pointer_export_is_create_only_and_verifiable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Tensor:
+        def detach(self) -> "Tensor":
+            return self
+
+        def cpu(self) -> "Tensor":
+            return self
+
+        def contiguous(self) -> "Tensor":
+            return self
+
+    class Pointer:
+        def state_dict(self) -> dict[str, Tensor]:
+            return {"query.weight": Tensor(), "key.weight": Tensor()}
+
+    class Adapter:
+        def save_pretrained(self, destination: str, *, safe_serialization: bool) -> None:
+            assert safe_serialization is True
+            folder = Path(destination)
+            folder.mkdir()
+            (folder / "adapter_model.safetensors").write_bytes(b"adapter")
+            (folder / "adapter_config.json").write_text("{}", encoding="utf-8")
+
+    class SafeTensors:
+        @staticmethod
+        def save_file(tensors: dict[str, Tensor], destination: str) -> None:
+            assert set(tensors) == {"pointer_head.query.weight", "pointer_head.key.weight"}
+            Path(destination).write_bytes(b"pointer")
+
+    monkeypatch.setattr(v02_training, "_training_runtime", lambda: (None, None, None, SafeTensors))
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    os.chmod(private, 0o700)
+    artifact = private / "candidate"
+    descriptor = v02_training.export_candidate_artifact(
+        Adapter(), Pointer(), artifact, v02_training.candidate_config("c1-r8")
+    )
+    assert (artifact / "adapter" / "adapter_model.safetensors").is_file()
+    assert (artifact / "pointer_head.safetensors").is_file()
+    assert descriptor["base_tensors_exported"] is False
+    v02_training.verify_candidate_artifact(descriptor, artifact)
+    with pytest.raises(FileExistsError):
+        v02_training.export_candidate_artifact(
+            Adapter(), Pointer(), artifact, v02_training.candidate_config("c1-r8")
+        )
+    (artifact / "pointer_head.safetensors").write_bytes(b"modified")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        v02_training.verify_candidate_artifact(descriptor, artifact)
+
+
+def test_select_cli_uses_the_frozen_selection_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reports = tmp_path / "reports.json"
+    reports.write_text(
+        json.dumps(
+            {"candidates": [_candidate("c1-r8"), _candidate("c2-r16", 0.6), _candidate("c3-r32")]}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.argv", ["v02_training", "select", "--reports", str(reports)])
+    assert v02_training.main() == 0
+    assert json.loads(capsys.readouterr().out) == {"candidate_id": "c2-r16", "status": "SELECTED"}
 
 
 def _sealed_descriptor() -> dict[str, object]:

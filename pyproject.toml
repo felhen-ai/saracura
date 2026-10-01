@@ -30,7 +30,7 @@ local-minilm = [
   "psutil>=6.1,<7",
   "safetensors>=0.5,<1",
   "torch>=2.5,<3",
-  "transformers>=4.47,<5",
+  "transformers==5.16.0",
 ]
 # Compatibility alias retained for the existing encoder research gate.
 encoder-eval = [
@@ -38,7 +38,7 @@ encoder-eval = [
   "psutil>=6.1,<7",
   "safetensors>=0.5,<1",
   "torch>=2.5,<3",
-  "transformers>=4.47,<5",
+  "transformers==5.16.0",
 ]
 # Checkout-only Phase 4C.2 acquisition and later local adapter lane.  These
 # dependencies are intentionally absent from the default environment.
@@ -47,7 +47,7 @@ universal-local = [
   "psutil>=6.1,<7",
   "safetensors>=0.5,<1",
   "torch>=2.5,<3",
-  "transformers>=4.48,<5",
+  "transformers==5.16.0",
   "tokenizers>=0.21,<1",
 ]
 # Opt-in Phase 5B orchestration only: describe/prepare/serve/evaluate of a
@@ -57,7 +57,17 @@ universal-local = [
 phase5-candidate = [
   "platformdirs>=4.3,<5",
   "psutil>=6.1,<7",
-  "huggingface_hub>=0.25,<1",
+  "huggingface_hub>=1.5,<2",
+]
+# Opt-in v0.2 QLoRA/pointer-head training.  The implementation imports these
+# only from an explicitly invoked local CUDA command; default install remains
+# model- and dataset-free.
+v02-training = [
+  "bitsandbytes>=0.45,<1",
+  "peft>=0.14,<1",
+  "safetensors>=0.5,<1",
+  "torch>=2.5,<3",
+  "transformers==5.16.0",
 ]
 ptbr-benchmark = [
   "pyarrow>=22,<26",
