@@ -9,7 +9,7 @@ status: active
 canonical: docs/action/specs/v02-first-owned-checkpoint.md
 globalRef: qmd://saracura/docs/action/specs/v02-first-owned-checkpoint.md
 reviewCadenceDays: 14
-lastReviewedAt: 2026-09-29
+lastReviewedAt: 2026-10-01
 sourceRefs:
   - github:#45
   - github:#53
@@ -25,6 +25,15 @@ sensitivity: public
 ---
 # v0.2 first Saracura-owned checkpoint
 
+The detailed execution successor is
+[`v02-model-delivery-execution.md`](v02-model-delivery-execution.md).
+Its P0–P7 private milestone explicitly overrides sealed-before-training
+ordering here and in the grounded-generation and choice-quality successor
+specs. It preserves full training-corpus floors and all final #44 gates.
+The private identity is `private-c1-r8-v1`; final Phase B admission and all
+three final candidate attempts remain separate. Current execution is paused
+for deep-spec critique; these clauses do not claim runtime or data readiness.
+
 ## Outcome
 
 Produce exactly one immutable, Saracura-owned adapter-and-head checkpoint for
@@ -37,6 +46,44 @@ superiority claim.
 The execution is intentionally narrow. It is an adaptation run, not an
 architecture search, dataset program, new benchmark, provider integration, or
 calibration project.
+
+## Approved private checkpoint increment
+
+The approved private increment takes precedence over this document's
+sealed-before-training and sealed-before-development-selection clauses only for
+the creation of one closed private checkpoint. It is not a selection, held-out
+evaluation, release, or publication route. The final #45 route, including its
+sealed descriptor, disjointness receipt, frozen selection rule, #44 validation,
+one-time held-out execution, and #46–#48 publication boundary, remains intact
+and is not entered by this increment.
+
+This increment may start only from a fully accepted successor training capsule
+with a positive `seal-training` acceptance result: all corpus floors, renderer
+gates, clean-room/provenance proof, self-hosted license verification,
+named-cloud authorization and retention/deletion terms, and isolation
+requirements in `v02-distillation-safe-corpus.md` remain required. Historical
+Phase 4E rights blocks remain historical blocks; this is not a reinterpretation
+of them. The private trainer receives no sealed payload path, bytes, mount,
+credentials, descriptor path, or selection input.
+
+The future implementation defines two closed, private-only schemas:
+
+- `v02-private-training-admission.v1` binds the fully accepted training-capsule
+  digest, exact accepted counts/cohort floors, clean-room and provenance
+  evidence, both renderer preflight results, frozen source/plan/configuration
+  identities, self-hosted license evidence, and named-cloud authorization;
+- `v02-private-checkpoint.v1` binds that admission, the frozen base, renderer,
+  `c1-r8` configuration, seed, optimizer and isolation identities, plus proof
+  of one true full training run, create-only export, and BF16 reload of the
+  exported adapter/head artifact.
+
+A pilot, smoke, partial epoch, or serialization-only exercise cannot satisfy
+either schema's full-training proof. Neither private schema can produce a #44
+selection receipt, a development/held-out result, an automatic promotion, or a
+publication authorization. Their artifact and evidence remain private and
+outside Git. Admission of a private artifact to the final route is a separately
+reviewed trusted-operator procedural boundary; the frozen #44 validators remain
+unchanged and do not read or reject either private schema.
 
 ## Frozen decisions
 

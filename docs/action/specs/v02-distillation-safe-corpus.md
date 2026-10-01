@@ -9,7 +9,7 @@ status: active
 canonical: docs/action/specs/v02-distillation-safe-corpus.md
 globalRef: qmd://saracura/docs/action/specs/v02-distillation-safe-corpus.md
 reviewCadenceDays: 14
-lastReviewedAt: 2026-09-29
+lastReviewedAt: 2026-10-01
 sourceRefs:
   - github:#53
   - github:#55
@@ -23,6 +23,16 @@ sensitivity: public
 ---
 # v0.2 distillation-safe corpus and sealed PT-BR capsule
 
+The detailed execution successor is
+[`v02-model-delivery-execution.md`](v02-model-delivery-execution.md).
+For P0–P7 only, verified full training-lane READY and the implemented
+training capsule sealer permit private training before sealed-lane execution;
+the grounded-generation and choice-quality sealed-first clauses yield to
+that private increment. Global #55 READY still requires both lanes. All
+rights, AC4 exclusions, corpus floors and final evaluation gates remain.
+Current execution is paused for deep-spec critique, with zero accepted C8
+rows and no trained v0.2 model.
+
 ## Outcome
 
 Replace the rights-blocked Phase 4E training packet with an independently
@@ -33,6 +43,34 @@ are ready, revise the #45 data boundary to their immutable digests.
 This document must freeze the smallest executable 1–2 day recovery path. It
 does not authorize implementation, model download, corpus generation, GPU
 rental, training, or held-out access until independent review returns GO.
+
+## Approved private checkpoint increment
+
+The approved private increment takes precedence over the requirement to have a
+sealed PT-BR capsule before training only for a closed private checkpoint
+created from this corpus. It does not amend the final #45 route: its sealed
+capsule, independent annotation/adjudication, #44 descriptor and disjointness
+proof, selection receipt, held-out execution, and publication route remain
+required and separately sequenced.
+
+The increment cannot use a pilot or a partially accepted corpus. It requires a
+positive `seal-training` result for the complete accepted training capsule and
+every existing floor, clean-room proof, historical Phase 4E exclusion,
+self-hosted Apache-2.0 license and provenance gate, named-cloud
+authorization/retention/deletion gate, frozen model/grid/renderer/optimizer/
+plan requirements, and training-versus-sealed isolation rule below without
+relaxation. It creates no sealed payload or descriptor path for the trainer and
+does not change any frozen #44 threshold.
+
+Its future closed private interfaces are
+`v02-private-training-admission.v1`, which binds the accepted capsule and its
+actual rights, source, renderer, plan, cloud and isolation evidence, and
+`v02-private-checkpoint.v1`, which binds that admission to one real full
+training run, create-only adapter/head export, and BF16 reload under the frozen
+`c1-r8` plan. Neither interface is a final selection receipt and neither may
+automatically promote or publish an artifact. Any future admission to final
+selection is a separately reviewed trusted-operator procedural boundary; the
+unchanged #44 validators do not consume these private schemas.
 
 ## Mandatory boundaries
 

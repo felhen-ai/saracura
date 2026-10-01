@@ -9,7 +9,7 @@ status: current
 canonical: docs/action/specs/v02-grounded-generation.md
 globalRef: qmd://saracura/docs/action/specs/v02-grounded-generation.md
 reviewCadenceDays: 14
-lastReviewedAt: 2026-09-30
+lastReviewedAt: 2026-10-01
 sourceRefs:
   - github:#55
   - github:#63
@@ -23,6 +23,11 @@ sensitivity: public
 ---
 
 # Grounded author generation
+
+For the approved private checkpoint only, the executable ordering and gates in
+[`v02-model-delivery-execution.md`](v02-model-delivery-execution.md) take precedence
+over this document's sealed-before-training ordering. Final #44 gates remain.
+
 
 ## Decision and measured problem
 
