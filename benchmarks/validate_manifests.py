@@ -196,6 +196,13 @@ def validate_routed_manifest(path: Path) -> None:
     if schema_version == "v02-distillation-safe-corpus.v1":
         validate_v02_distillation_safe_corpus(path)
         return
+    if schema_version == "v02-first-checkpoint.v1":
+        from benchmarks.v02_training import load_manifest
+
+        if path != Path(__file__).parent / "manifests/v02-first-checkpoint.v1.json":
+            raise ValueError(f"{path}: first checkpoint manifest must be canonical")
+        load_manifest()
+        return
     if schema_version == "phase5-open-model-candidates.v1":
         validate_phase5_candidate_manifest(path)
         return

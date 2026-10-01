@@ -1074,6 +1074,44 @@ def validate_report(
     return 0
 
 
+def validate_selection(
+    sealed_descriptor_path: Path,
+    disjointness_receipt_path: Path,
+    selection_receipt_path: Path,
+    repository: Path | None = None,
+) -> int:
+    """Validate the pre-held-out selection boundary without opening a report or payload."""
+    root = repository or Path(__file__).parents[1]
+    descriptor = _load(sealed_descriptor_path)
+    receipt = _load(disjointness_receipt_path)
+    selection = _load(selection_receipt_path)
+    _validate_descriptor(descriptor)
+    descriptor_digest = _sha(sealed_descriptor_path)
+    _validate_receipt(receipt, descriptor, descriptor_digest)
+    _validate_selection(selection, descriptor_digest, root)
+    try:
+        main_ref = _git(root, "rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
+    except ValueError as exc:
+        raise ValueError("origin/main ref is required for selection validation") from exc
+    if (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "merge-base",
+                "--is-ancestor",
+                selection["selection_commit"],
+                main_ref,
+            ]
+        ).returncode
+        != 0
+    ):
+        raise ValueError("selection commit is not reachable from refs/remotes/origin/main")
+    print("selection valid")
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     if args == ["validate-protocol"]:
@@ -1085,6 +1123,12 @@ def main() -> int:
         == ["--report", "--sealed-descriptor", "--disjointness-receipt", "--selection-receipt"]
     ):
         return validate_report(Path(args[2]), Path(args[4]), Path(args[6]), Path(args[8]))
+    if (
+        len(args) == 7
+        and args[0] == "validate-selection"
+        and args[1::2] == ["--sealed-descriptor", "--disjointness-receipt", "--selection-receipt"]
+    ):
+        return validate_selection(Path(args[2]), Path(args[4]), Path(args[6]))
     print("ARGUMENTS_INVALID", file=sys.stderr)
     return 2
 
