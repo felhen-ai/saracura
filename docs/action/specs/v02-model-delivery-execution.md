@@ -28,7 +28,7 @@ sensitivity: public
 ---
 # v0.2 executable path to private training and Model Preview
 
-Critique revision: deep-r3. This revision retains B5/B6 and M1–M7 corrections,
+Critique baseline: deep-r3; implementation handoff closure under bounded successive critique. This revision retains B5/B6 and M1–M7 corrections,
 and closes r2 B7: loaded LoRA must also be active with frozen scaling and
 produce a measured functional effect. N8–N10 clarify continuity, receipt creator
 and typed reload measurement. No approved design decision is reopened.
@@ -38,8 +38,8 @@ and typed reload measurement. No approved design decision is reopened.
 This is an executable closure plan, not a statement of readiness. Its immediate
 outcome is one genuinely trained, privately exported and BF16-reloaded Saracura
 checkpoint. Its complete dependency map also covers selection, comparison and
-packaging. Current authorization is to finish this specification and Claude
-critique; implementation and GPU operations remain paused. Model weights,
+packaging. The operator authorized execution of this plan on 2026-10-01. Source
+implementation precedes admitted physical GPU operations. Model weights,
 corpus, metrics, comparison results and release announcements must not be
 published until the human explicitly agrees what to disclose.
 
@@ -268,8 +268,9 @@ immutable source closure, stale host rejection and no sealed mount to trainer.
 Owner: operator/orchestrator. Inputs: all accepted P1/P2/P3 receipts, actual
 cloud rights/provider/region/retention/deletion authorization, sufficient
 funds and disk. On fresh authenticated API read record pod id, actual region,
-image digest, startedAt and direct SSH endpoint. Never derive these from
-name or nonexistent lastStartedAt. SSH verifies actual source/archive/runtime
+image digest, native start timestamp and direct SSH endpoint. Preserve the
+endpoint's actual timestamp field (`startedAt` or `lastStartedAt`) and normalize
+its value to `started_at`; never derive it from a pod name. SSH verifies actual source/archive/runtime
 hashes, OS/dependency versions, kernel boot id, GPU UUID/VRAM and filesystem.
 Record combined identity before and after bootstrap; restart/change invalidates
 physical admission. No role dispatch before both observations pass.
@@ -622,3 +623,309 @@ sanitized technical state and spec links, no raw data/provider body, private
 path/host/account identifiers or undisclosed metrics. Exact execution paths,
 role/cohort literals, hashes, provider identity and receipts are mapped in
 private evidence before any command. No secrets in stdout, argv, logs or Git.
+
+
+## P2 private workflow delivery contract
+
+This is the remaining integration increment of P2, preserving the implemented
+joint causal optimizer core. The previous source attempts did not deliver the
+private workflow, so their helper tests do not admit P6. Integration depends on
+`benchmarks.v02_corpus.verify_training_capsule`, never the Phase4E homonym.
+Root integrates the reviewed P1 patch before this executor runs.
+
+All five private commands require `--root ROOT --run-inputs FILE` and explicit
+`--output OUTPUT` for newly created artifacts. `validate-private-admission`
+creates the closed admission after actual verification; `smoke-private`
+requires `--admission FILE` and writes smoke evidence without consuming private
+full-run identity; `train-private` requires same admission and writes a new
+private work directory/operational resume state/export, never final c1;
+`verify-private-checkpoint` and `reload-private` additionally require
+`--checkpoint DIRECTORY`. Outputs create-only 0700/0600 as owning training UID.
+Existing final commands may remain explicitly unavailable; no new final
+admission/readiness claim. No sealed payload is opened or passed into trainer.
+
+FILE is owned0600 under ROOT. Exact schema `v02-private-run-inputs.v1` keys:
+schema_version, artifact_id, plan_file, receipt_file, capsule_file,
+exclusions_file, sealer_inputs_file, environment_observation_file,
+base_directory, base_inventory_file, trainer_source_inventory_file,
+renderer_preflight_file. Private file references are safe ROOT-relative paths;
+receipt names the original live receipt, not archival copy. base_directory and
+base_inventory_file are explicit absolute paths in read-only acquired public
+model snapshot; reject symlinks, unsafe paths, changed actual bytes. No
+self-authorizing flags. Reverify every referenced actual file before any full
+model load. `events_file` is deliberately not a parallel input: read the exact
+events consumed by original receipt/plan at ROOT through existing verifier.
+
+Base source inventory reuses existing acquisition shape exactly:
+{role, model, revision, status, inventory}; role='student', pinned model/revision,
+status='SOURCE_BYTES_VERIFIED_NOT_LOADED', sorted inventory entries
+{name,bytes,sha256}. Verify every named actual regular file with streaming
+SHA256/length, safe relative path, complete safetensor index shard closure,
+config/tokenizer/license inclusion. Trusted acquisition verified upstream
+LFS/Git blobs at pinned revision; root P4 supplies that real proof, not arbitrary
+invented inventory. base_inventory_sha256 is raw inventory file SHA. Reuse
+actual four tokenizer files/digests and pinned renderer factory from P1; base
+tokenizer files must equal corpus tokenizer inventory, without tensor downloads
+in source validation. Actual pinned config -> 248 named Linear modules and 496
+LoRA tensor shapes is verified through meta construction before CUDA model
+load. Module inventory canonical sorted {name,shape,dtype} describes exact
+trainable exported 498 entries for r8 (head2 + adapter496), no all-linear alias.
+
+Trainer source inventory schema `v02-trainer-source-inventory.v1` exact keys:
+schema_version, source_revision, files. Revision is40hex from reviewed Git
+archive; files sorted unique {path,sha256,bytes}, includes trainer, corpus
+verifier, typed src runtime schemas, renderer contract source and manifest
+actually imported by workflow. Verify actual source files relative to supplied
+code root (module repository root, not data root), no symlink/traversal. P4
+transfers reviewed archive and root-authored inventory; module never infers a
+commit from arbitrary data flags. trainer_code_inventory_sha256 is canonical
+inventory array hash; trainer_source_revision exact inventory source revision.
+
+Environment observation is existing c7-preflight-observation.v1, closed using
+actual runtime shape. Validate its source/plan/prompt/lock/grant bindings against
+the already verified sealer grant/lock and source proof. Fresh physical source
+and host/activation observations are trusted operator P4 evidence, not
+authenticated=true. environment_receipt_sha256 raw observation SHA. Rights and
+license digests bind actual original grant and six original license bytes.
+Sealed metadata hashes bind existing frozen _frozen_plan_bytes('sealed'),
+prompt_contract()['contract_digest'], and MODEL_ROLES canonical identities
+inventory. They are frozen protocol metadata, not sealed cases or results.
+
+Renderer preflight is exactly v02-renderer-preflight.v1 from the parent spec,
+created after recomputing both pinned candidate/Kev preflights over every
+verified capsule row and binding actual capsule SHA. Validate and recompute on
+admission; never accept booleans alone. `validate-private-admission` may create
+this report at the explicit create-only renderer_preflight_file when absent,
+then create the admission. Private flags derive from successful actual gates.
+Capsule counts/gold/original UID/ancestry come exclusively from P1 verifier.
+Build prepared joint token rows directly from these verified rows and pinned
+renderer/tokenizer, preserve serialized state string/options order and decide/
+end indices, reject >512 without truncation. Validate public Identifier values
+before paid run; locale pt_br/english maps to pt-BR/en only at typed request.
+
+Reuse the real optimizer but record finite loss/grad/update checks, positive
+optimizer steps, all trainable groups updated, frozen base unchanged, actual
+best independent CPU state, epochs/row counts/duration/peak. Correct partial
+effective batches/scheduler step math without changing frozen effective batch
+32; prefer microbatch1+accumulation32 as explicit safe smoke fallback. Private
+operational resume state holds exact binding+optimizer/scheduler/RNG/step,
+atomic0600 at boundaries; mismatch/interruption without valid state is explicit
+IMPLEMENTATION_BLOCKED. No silent retry or change of learned weights.
+
+Export/reload/run/checkpoint closed keys and noncyclic digest order are the
+parent spec's schemas, not old v02-candidate-artifact.v2. Export only complete
+LoRA496+head2 tensors/config/licenses; never base, optimizer, raw data or
+sealed payload. Fresh BF16 construct pinned base/text path, attach unmerged
+adapter with active name and alpha/r scaling, load immutable exported tensors.
+Verify every key/shape/dtype/value after BF16 cast, missing/unexpected empty,
+all248 module scales2 and activation. Same up-to32 internal-dev sorted rows,
+active repeat stability then disabled-LoRA same head produce real score effect
+at fixed tolerance, no regenerated trainable weights. Typed research response
+keeps calibrated confidence null, abstention true, automation false. Full
+internal-dev metric is descriptive only. Checkpoint closure references reload
+->run->checkpoint without cycles; do not claim a model trained in CPU QA.
+
+Meaningful CPU QA: a self-authored tiny actual causal Transformers Qwen3.5
+config plus actual PEFT LoRA and pointer head; optimize both, export real
+safetensors, discard model, freshly reconstruct same base bytes/state, reload
+adapter/head, compare loaded values and typed inference/effect. Distinguish
+tiny test from pinned full meta-model inventory proof. Include inactive/wrong
+scale/no forward effect/missing key tests and private provenance/UID/ancestry
+negative cases. No model download and no mock proving only head update. Source
+default remains lightweight; use existing isolated optional tensor QA env.
+
+
+### P2 producer/dataflow/resume closure after bounded Claude critique
+
+This section supersedes conflicting shorthand in the first private-workflow
+delta, only for the five concrete P2 findings. Existing pinned architecture,
+data policy and public evaluation gates remain. Implementation is resumed.
+
+ENV: environment_observation_file now names the actual P4 physical receipt
+`v02-private-physical-environment.v1`, not the source-only P3 helper report.
+Exact keys: schema_version, artifact_id, status, host_identity_before,
+host_identity_after, preflight_file, preflight_sha256,
+environment_grant_sha256, runtime_lock_sha256, source_inventory_sha256,
+reviewed_code_manifest_sha256, weight_roles, sealed_weights_loaded.
+status is PHYSICALLY_ADMITTED_TRAINING_ONLY; weight_roles exactly
+[training_author,independent_reviewer]; sealed_weights_loaded=false.
+Identities before/after must be equal, exact keys pod_id, region,
+image_sha256, started_at, ssh_endpoint, kernel_boot_id, gpu_uuid,
+gpu_memory_mib; endpoint exact host,port,username from actual native RunPod
+direct endpoint. Image/region/VRAM match verified grant/lock. Native API
+authenticated observation and direct SSH create this receipt as trusted
+operator after all P4 probes. Copy it byte-identically under training root
+owned0600; no self-authenticating boolean or automatic copied approval.
+P2 validates closed shape/actual file hashes and local live boot id/GPU UUID
+and VRAM before every full model load on that host. Root P4 owns real API/SSH
+provenance; P2 does not receive provider secrets. Offline QA explicitly
+injects self-authored host probes only through library seams; production CLI
+always reads /proc/sys/kernel/random/boot_id and actual nvidia-smi. Source and
+installed dependency/runtime binding are reverified from original grant/lock.
+P4 has explicit future physical work, not a missing source preflight producer.
+
+preflight_file is safe ROOT-relative, the exact existing
+c7-preflight-observation.v1 from the actual P3 collector, hash pinned by P4.
+Its 18 closed keys are schema_version,status,source_commit,
+source_inventory_digest,code_manifest_digest,training_plan_digest,
+sealed_plan_digest,micro_selection_digest,grammar_receipt_digest,
+feasibility_receipt_digest,grant_digest,runtime_lock_digest,
+runtime_evidence_digests,fresh_asset_probe_digests,
+historical_model_metadata_sha256,historical_measurements,model_calls,
+reservations. Literal status OBSERVED_REVIEW_PENDING is source observation
+only, not standalone physical permission; P4 combined physical receipt gives
+admission after independent source acceptance and actual probes. Legacy six
+runtime evidence entries retain historical model metadata, without loading
+four sealed weights. Actual training-role loads are checked per dispatch by
+existing wrapper. Sealed tokenizers/schemas/licenses are metadata-only.
+Prompt binding comes via actual verified grant.prompt_contract_digest; there
+is no invented preflight prompt field. Validate preflight canonical grant,
+lock/source/plan/code hashes and raw physical receipt references. P3 deployment
+closure integrates original compiler/collector; its disconnected source-only
+helper report cannot authorize P2/P6. No global #55 readiness claim.
+
+BASE: explicit producer is P3 deployment closure
+`download-training-model.py --root /opt/saracura-runtime-c8-r2 student` under
+the pinned installed venv. P3-deployment requires upstream Git/LFS, license,
+complete shard/index verification and exact status/inventory shape, and no
+download in source QA. Acquisition of actual weights is P4. P4 cannot pass
+without this accepted source producer and actual acquired snapshot proof.
+No manual inventory is accepted as a source acquisition result. Trainer
+source root is the actual repository root resolved from imported module
+__file__; compare imported module paths/bytes with source inventory entries,
+not arbitrary supplied code roots. Actual weights directory is explicit
+base_directory in inputs and matches that producer's student source inventory.
+
+DATAFLOW: train-private creates work directory plus immutable `export/`
+containing actual learned adapter/head/config/licenses and export.json,
+and training-result.json. Export schema `v02-private-export.v1` exact keys
+schema_version,artifact_id,admission_sha256,private_identity,base_id,
+base_revision,base_inventory_sha256,tokenizer_inventory_sha256,
+renderer_sha256,candidate_config_sha256,tensor_inventory_sha256,files,
+training_result_sha256. Files sorted {path,sha256,bytes}, export-only immutable
+assets. Training result schema `v02-private-training-result.v1` has exactly
+the parent private-run receipt fields except reload_receipt_sha256; its own
+schema_version is v02-private-training-result.v1. It binds weights and all
+actual optimizer metrics; do not lose these across processes. Result resides
+at work/training-result.json and its raw hash is export.training_result_sha256.
+
+reload-private requires --root ROOT --run-inputs FILE --admission FILE
+--export DIRECTORY --output NEW_FINAL_DIRECTORY (not --checkpoint). A fresh
+CLI process reads and verifies original export plus sibling training result,
+constructs actual pinned BF16 base and applies immutable learned LoRA/head.
+Only after successful tensor/activation/effect/typed/full-dev proof, bytecopy
+the same immutable export assets to create-only final directory, then emit
+reload-receipt.json, run-receipt.json, checkpoint.json, in that order. Run
+receipt is training-result fields with run schema_version and actual raw
+reload_receipt_sha256. Parent checkpoint uses raw run_receipt_sha256 and same
+export files; files inventory contains assets only, not receipts/descriptor.
+Any failed reload preserves original export and failure evidence, no change
+to trained tensors. verify-private-checkpoint consumes --checkpoint final
+directory only after this process and recomputes all receipts/asset hashes.
+train-private never pretends to emit a final completed checkpoint before
+reload. Smoke uses same train/export/reload helpers but explicit smoke identity
+and <=32 train rows/one step, never claims private-c1-r8-v1.
+
+RESUME: first train-private --output WORK_DIRECTORY atomically claims
+ROOT/private-run-claims/private-c1-r8-v1.json create-only before optimization.
+Claim exact keys schema_version (=v02-private-run-claim.v1),private_identity,
+admission_sha256,run_inputs_sha256,work_directory,seed,bindings_sha256.
+work_directory absolute verified owned path; bindings_sha256 canonical object
+of admission/capsule/data/source/base/config/seed hashes. A second output
+directory cannot evade this persistent claim. --resume WORK_DIRECTORY is
+mutually exclusive with --output and allowed only when original claim,
+inputs/bindings and original operational state match, no new identity claim.
+No valid state -> IMPLEMENTATION_BLOCKED. Immutable exports are never resumed
+or overwritten. Active run locks ensure only one optimizer owns this claim.
+
+Operational resume artifact is trusted own0600 PyTorch state, separate from
+published assets and untrusted arbitrary inputs. Closed top state keys:
+schema_version (=v02-private-resume-state.v1),bindings_sha256,private_identity,
+epoch,next_batch_index,optimizer_steps,adapter_state,head_state,
+optimizer_state,scheduler_state,python_rng_state,numpy_rng_state,
+torch_rng_state,cuda_rng_states,best_adapter_state,best_head_state,
+best_epoch,best_score,stale_epochs,initial_trainable_sha256,
+base_parameter_sha256,duration_seconds,peak_gpu_bytes.
+Write atomic only immediately after optimizer step+zero_grad boundary (no
+pending accumulated gradient), including epoch transition/early stopping.
+Persist next batch cursor, best-state CPU independent clones and exact RNG.
+Training fixed sorted identity order remains as existing accepted core;
+shuffle is not introduced here. Resume restores all state before next batch,
+tests compare uninterrupted versus interrupted/restored learned bytes/selection.
+
+QA: production optimization loop accepts explicit device library parameter;
+production admitted CLI alone mandates CUDA. Tiny actual Qwen3.5+PEFT CPU QA
+uses same loop/schedule/best-state/early stopping/resume/export/reload helpers
+with self-authored small architecture injected only in tests, no production
+CLI override. At least2 epochs, partial batch, both LoRA/head updated,
+frozen base, best-state clone, early stop, deliberate optimizer-boundary
+interruption/resume bitwise equality, genuine fresh model reconstruct/reload,
+all activation/tensor negative tests. One-step GPU smoke does not substitute.
+
+Remaining digest constructions: license_inventory_sha256 = RFC8785 canonical
+actual verified grant.license_sha256 (six-role -> raw license hash); sealed
+model inventory = canonical dictionary only four MODEL_ROLES with sealed
+lane, exact pinned model/revision/license dictionaries. sealed prompt inventory
+is actual existing prompt_contract contract_digest (all-role frozen policy,
+meaning stated explicitly). P2 calls qualified P1 verifier then rereads exact
+sealer_inputs actual paths/bytes through existing shared corpus helpers, checks
+same descriptor raw/canonical bindings; no independent acceptance reducer.
+
+Smoke schema v02-private-smoke.v1 exact keys schema_version,artifact_id,
+admission_sha256,precision,train_rows,internal_dev_rows,optimizer_steps,
+load_seconds,optimizer_step_seconds,reload_seconds,duration_seconds,
+peak_gpu_bytes,finite_updates,base_unchanged,lora_updated,head_updated,
+reload_receipt_sha256,private_identity_consumed. precision=nf4-bf16;
+private_identity_consumed=false, steps1, train_rows<=32; timings finite
+nonnegative, peak positive real CUDA. All flags actual proof, not fixtures.
+No future-null hash. Smoke full replay uses temporary dedicated smoke result
+and reload receipt; parent source acceptance may only assert tiny CPU QA,
+P6 still requires actual pinned CUDA smoke. Stop before disclosure.
+
+### P2 step-zero claim closure (R2-CLAIM)
+
+The following replaces the r2 JSON-only claim timing. Acquire fcntl.flock on
+ROOT/private-run-claims/private-c1-r8-v1.lock before loading or initializing;
+existing completed/active claim prevents another run. After admitted model
+load and fixed-seed initialization, prepare a private staging claim directory
+containing claim.json (same closed r2 claim keys) and initial-state.pt with the
+complete step0 resume state, initial hashes, RNG, epoch1/cursor0/steps0, no
+pending gradient. Fsync both and directory, atomically rename create-only to
+ROOT/private-run-claims/private-c1-r8-v1/ under the held lock. No optimization
+begins before this paired publication. This replaces earlier .json path.
+If interruption precedes first optimizer boundary, restore exactly this step0
+state and same claimed WORK_DIRECTORY, never claim another output. Later
+state is atomically stored at work/resume-state.pt after zero_grad boundaries.
+Interrupted unclaimed initialization has no learned weights or consumed
+identity; preserve its staging evidence and reject arbitrary work-directory
+replacement. Existing valid step0 publication is resumable with --resume.
+No valid claim/state -> IMPLEMENTATION_BLOCKED. Same boot only: reboot or
+changed original ancestry falls into the declared recovery increment.
+
+Use torch.load(weights_only=True), state values only tensors/primitives.
+Python RNG uses primitive tuple/list, NumPy RNG array serialized as primitive
+list with exact dtype/name/position flags; reconstruct explicitly without
+unsafe pickle globals. No untrusted arbitrary checkpoint path.
+
+Sealed model inventory selector is the four role keys starting sealed_, each
+value contains exactly model,revision,license from MODEL_ROLES; no family/lane
+field. All imported benchmarks and saracura module source paths resolve to the
+same recorded repository root; reject unrelated site-packages shadows.
+Smoke deterministic subset includes longest rendered train row and a row with
+cardinality8, then sorted identities to bound32. Private state flags remain.
+Earlier ENV/reload shorthand is superseded by r2 exact physical receipt and
+--export dataflow; do not implement deprecated --checkpoint for reload.
+
+P2 input byte-delivery clarification: v02-private-run-inputs.v1 additionally
+requires reviewed_runtime_manifest_file, a safe ROOT-relative owned0600 copy
+of the exact independently reviewed P3 code manifest bytes. Its raw hash must
+equal the P4 physical receipt reviewed_code_manifest_sha256; closed keys are
+schema_version=private-reviewed-runtime-code.v1,source_commit,code_sha256.
+Canonical code_sha256 map hash equals preflight.code_manifest_digest, and
+actual map equals original runtime lock.code_sha256. No digest-only substitute
+or reconstruction with different formatting. P4 copies exact bytes after real
+source verification. Physical source_inventory_sha256 means canonical actual
+source_inventory_digest from existing archive verifier, identical to
+preflight.source_inventory_digest and lock.public_source_integrity, not an
+invented raw inventory file hash. These namespace definitions complete the
+already accepted physical evidence interface, without new authority/schema.

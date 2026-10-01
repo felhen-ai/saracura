@@ -65,6 +65,22 @@ LEDGER_SCHEMA = "v02-offline-ledger.v1"
 RECEIPT_SCHEMA = "v02-aggregate-receipt.v1"
 TRAINING_RECEIPT_SCHEMA = "v02-aggregate-receipt.v3"
 TRAINING_ACCEPTANCE_POLICY = "choice-agreement-and-all-gates.v2"
+TRAINING_CAPSULE_SCHEMA = "v02-cleanroom-training-capsule.v1"
+TRAINING_SEALER_INPUTS_SCHEMA = "v02-training-sealer-inputs.v1"
+HISTORICAL_EXCLUSION_SCHEMA = "saracura-historical-exclusion-source.v1"
+HISTORICAL_PACKET_MANIFEST_SHA256 = (
+    "3e5dccc8bb551cf4840046b20712a52c9409c9424f20333185f3072e8dd6c239"
+)
+HISTORICAL_TRAIN_DEV_SOURCE_SHA256 = (
+    "bc444c3a233e8e3397ff35a38360a117caa2bbe9e2bcaa69b8b7b77cb384018e"
+)
+HISTORICAL_PHASE_A_RECEIPT_SHA256 = (
+    "75b4fa2c3758610a1e494360a8bd1236a76a2d7f841e998ad0d9a00f218ef015"
+)
+HISTORICAL_EXCLUSIONS_SHA256 = "878ad80644570ef107fe7dd5ac8841ece39f7870d3062aac6bda38ce8062ddbc"
+HISTORICAL_EXCLUSION_NORMALIZATION = (
+    "v02_evaluation._normalise NFC-casefold-whitespace; RFC8785; SHA256"
+)
 GROUNDING_MICRO_PILOT = {
     "training_slots": 28,
     "slots_per_locale_cardinality_cell": 2,
@@ -92,6 +108,23 @@ _MODEL_ROLE_NAMES = frozenset(
         "sealed_annotator_a",
         "sealed_annotator_b",
         "sealed_adjudicator",
+    }
+)
+
+# Private source and capsule artifacts must stay on local storage. These are the
+# synchronized-directory components explicitly excluded by the Phase P1 storage
+# boundary; they are not a general-purpose path classification mechanism.
+_SYNCHRONIZED_ANCESTOR_COMPONENTS = frozenset(
+    {
+        "cloudstorage",
+        "mobile documents",
+        "clouddocs",
+        "com~apple~clouddocs",
+        "dropbox",
+        "onedrive",
+        "google drive",
+        "nextcloud",
+        "felhencloud",
     }
 )
 
@@ -608,6 +641,8 @@ def _safe_output_parent(output_parent: Path) -> None:
     while current != current.parent:
         if current.is_symlink():
             raise ValueError("output-parent must not contain a symlink")
+        if current.name.casefold() in _SYNCHRONIZED_ANCESTOR_COMPONENTS:
+            raise ValueError("private storage must not have synchronized ancestry")
         current = current.parent
     if os.geteuid() != output_parent.stat().st_uid:
         raise ValueError("output-parent must be owned by the current user")
@@ -2884,6 +2919,891 @@ def verify_receipt(
     return receipt
 
 
+_SEALER_INPUT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_id",
+        "corpus_source_revision",
+        "policy_sha256",
+        "environment_grant_file",
+        "environment_grant_sha256",
+        "license_files",
+        "runtime_lock_file",
+        "runtime_lock_sha256",
+        "renderer_source_file",
+        "renderer_source_sha256",
+        "tokenizer_directory",
+        "tokenizer_inventory_file",
+        "tokenizer_inventory_sha256",
+        "exclusions_sha256",
+        "historical_phase_a_receipt_file",
+        "historical_phase_a_receipt_sha256",
+        "historical_source_sha256",
+        "historical_manifest_sha256",
+    }
+)
+_CAPSULE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_id",
+        "plan_sha256",
+        "events_sha256",
+        "aggregate_receipt_sha256",
+        "corpus_source_revision",
+        "policy_sha256",
+        "renderer_sha256",
+        "tokenizer_inventory_sha256",
+        "exclusions_sha256",
+        "rights_receipt_sha256",
+        "rows_file",
+        "rows_sha256",
+        "counts",
+        "ancestry_sha256",
+    }
+)
+_CAPSULE_ROW_FIELDS = frozenset(
+    {
+        "identity_id",
+        "split",
+        "locale",
+        "domain",
+        "state",
+        "instruction",
+        "options",
+        "gold_index",
+        "case_sha256",
+        "author_event_sha256",
+        "reviewer_event_sha256",
+        "bilingual_pair_id",
+    }
+)
+_HISTORICAL_EXCLUSION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "historical_manifest_sha256",
+        "historical_source_sha256",
+        "phase_a_receipt_sha256",
+        "source_records",
+        "normalization",
+        "identity_source_field",
+        "question_source_field",
+        "option_source_field",
+        "sets",
+        "literal_serialized_state_alias_sets",
+        "historical_holdout_opened",
+        "raw_rows_uploaded",
+        "limitation",
+    }
+)
+_RUNTIME_LOCK_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_commit",
+        "public_source_integrity",
+        "code_sha256",
+        "cohort_bindings",
+        "cpu_offload_gb",
+        "dependency_lock_sha256",
+        "driver",
+        "dtype",
+        "gpu",
+        "gpu_memory_mib",
+        "historical_measurements",
+        "historical_model_metadata",
+        "historical_model_metadata_sha256",
+        "host",
+        "image_digest",
+        "installed_versions",
+        "max_model_len_by_role",
+        "max_num_seqs",
+        "max_output_tokens",
+        "native_json_grammar",
+        "port",
+        "public_runner_sha256",
+        "python",
+        "quantization",
+        "renderer_source_sha256",
+        "request_body_logging",
+        "teacher_input_ceiling_by_role",
+        "timeout_seconds",
+        "tokenizer_inventory",
+    }
+)
+
+
+def _read_private_bytes(path: Path, *, name: str) -> bytes:
+    if not path.is_absolute():
+        raise ValueError(f"{name} must be an absolute path")
+    _safe_output_parent(path.parent)
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_uid != os.geteuid()
+        or stat.S_IMODE(path.stat().st_mode) != 0o600
+    ):
+        raise ValueError(f"{name} must be an owned regular mode-0600 file")
+    return path.read_bytes()
+
+
+def _safe_relative_private_path(root: Path, value: Any, *, name: str) -> Path:
+    if type(value) is not str or not value or "\\" in value:
+        raise ValueError(f"{name} must be a relative path")
+    relative = Path(value)
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError(f"{name} must be a relative path")
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"{name} must not traverse a symlink")
+    try:
+        current.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{name} escapes the training root") from exc
+    return current
+
+
+def _read_canonical_json_value(raw: bytes, *, name: str) -> Any:
+    try:
+        value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"{name} is not valid closed JSON") from exc
+    if raw != canonical_json_bytes(cast(Any, value)) + b"\n":
+        raise ValueError(f"{name} bytes are not canonical")
+    return value
+
+
+def _read_root_private_json(
+    root: Path, value: Any, *, name: str
+) -> tuple[Path, dict[str, Any], bytes]:
+    path = _safe_relative_private_path(root, value, name=name)
+    raw = _read_private_bytes(path, name=name)
+    return path, _closed_json_object(raw, name=name), raw
+
+
+def _read_root_private_bytes(root: Path, value: Any, *, name: str) -> tuple[Path, bytes]:
+    path = _safe_relative_private_path(root, value, name=name)
+    return path, _read_private_bytes(path, name=name)
+
+
+def _validate_sha256(value: Any, *, name: str) -> str:
+    if not _is_digest(value):
+        raise ValueError(f"{name} must be a lowercase SHA-256")
+    return cast(str, value)
+
+
+def _validate_sha1(value: Any, *, name: str) -> str:
+    if type(value) is not str or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ValueError(f"{name} must be a lowercase source revision")
+    return value
+
+
+def _validate_sealer_inputs(
+    root: Path, sealer_inputs_path: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not sealer_inputs_path.is_absolute() or sealer_inputs_path.parent != root:
+        raise ValueError("sealer inputs must be an owned file at the training root")
+    inputs = _read_private_json(sealer_inputs_path, "sealer inputs")
+    _require_exact_keys(inputs, _SEALER_INPUT_FIELDS, name="sealer inputs")
+    if inputs.get("schema_version") != TRAINING_SEALER_INPUTS_SCHEMA:
+        raise ValueError("sealer inputs schema mismatch")
+    if not _logical_id(inputs.get("artifact_id")):
+        raise ValueError("sealer inputs artifact ID mismatch")
+    _validate_sha1(inputs.get("corpus_source_revision"), name="corpus source revision")
+    for field in _SEALER_INPUT_FIELDS:
+        if field.endswith("_sha256"):
+            _validate_sha256(inputs.get(field), name=field)
+    if inputs["historical_manifest_sha256"] != HISTORICAL_PACKET_MANIFEST_SHA256:
+        raise ValueError("historical manifest authority mismatch")
+    if inputs["historical_source_sha256"] != HISTORICAL_TRAIN_DEV_SOURCE_SHA256:
+        raise ValueError("historical source authority mismatch")
+    if inputs["historical_phase_a_receipt_sha256"] != HISTORICAL_PHASE_A_RECEIPT_SHA256:
+        raise ValueError("historical receipt authority mismatch")
+    if inputs["exclusions_sha256"] != HISTORICAL_EXCLUSIONS_SHA256:
+        raise ValueError("historical exclusion authority mismatch")
+    licenses = inputs.get("license_files")
+    if not isinstance(licenses, dict) or set(licenses) != set(_MODEL_ROLE_NAMES):
+        raise ValueError("sealer license files are closed")
+    for role, filename in licenses.items():
+        if role not in _MODEL_ROLE_NAMES:
+            raise ValueError("sealer license files are closed")
+        _read_root_private_bytes(root, filename, name=f"license file for {role}")
+    for field in (
+        "environment_grant_file",
+        "runtime_lock_file",
+        "renderer_source_file",
+        "tokenizer_inventory_file",
+        "historical_phase_a_receipt_file",
+    ):
+        _safe_relative_private_path(root, inputs[field], name=field)
+    tokenizer_directory = _safe_relative_private_path(
+        root, inputs["tokenizer_directory"], name="tokenizer directory"
+    )
+    if (
+        tokenizer_directory.is_symlink()
+        or not tokenizer_directory.is_dir()
+        or tokenizer_directory.stat().st_uid != os.geteuid()
+        or stat.S_IMODE(tokenizer_directory.stat().st_mode) != 0o700
+    ):
+        raise ValueError("tokenizer directory is closed")
+    return inputs, {"tokenizer_directory": tokenizer_directory}
+
+
+def _validate_runtime_lock(lock: dict[str, Any], corpus_source_revision: str) -> None:
+    _require_exact_keys(lock, _RUNTIME_LOCK_FIELDS, name="private runtime lock")
+    if lock.get("schema_version") != "private-runtime-lock.v1":
+        raise ValueError("private runtime lock schema mismatch")
+    if lock.get("source_commit") != corpus_source_revision:
+        raise ValueError("private runtime lock source mismatch")
+    integrity = lock.get("public_source_integrity")
+    if not isinstance(integrity, dict) or set(integrity) != {
+        "source_commit",
+        "archive_sha256",
+        "source_inventory_digest",
+        "files_verified",
+    }:
+        raise ValueError("private runtime lock source proof is closed")
+    if integrity.get("source_commit") != corpus_source_revision:
+        raise ValueError("private runtime lock source mismatch")
+    for field in ("archive_sha256", "source_inventory_digest"):
+        _validate_sha256(integrity.get(field), name=f"source proof {field}")
+    if type(integrity.get("files_verified")) is not int or integrity["files_verified"] <= 0:
+        raise ValueError("private runtime lock source proof is closed")
+    for field in (
+        "dependency_lock_sha256",
+        "historical_model_metadata_sha256",
+        "public_runner_sha256",
+        "renderer_source_sha256",
+    ):
+        _validate_sha256(lock.get(field), name=f"runtime lock {field}")
+    if lock["renderer_source_sha256"] != PINNED_RENDERER_SOURCE_SHA256:
+        raise ValueError("private runtime lock renderer mismatch")
+    code = lock.get("code_sha256")
+    if not isinstance(code, dict) or not code:
+        raise ValueError("private runtime lock code inventory is closed")
+    for filename, digest in code.items():
+        if type(filename) is not str or Path(filename).name != filename:
+            raise ValueError("private runtime lock code inventory is closed")
+        _validate_sha256(digest, name="runtime lock code digest")
+    installed = lock.get("installed_versions")
+    if (
+        not isinstance(installed, dict)
+        or not installed
+        or any(
+            type(key) is not str or type(value) is not str or not value
+            for key, value in installed.items()
+        )
+    ):
+        raise ValueError("private runtime lock installed versions are closed")
+    for field in ("max_model_len_by_role", "teacher_input_ceiling_by_role"):
+        value = lock.get(field)
+        if not isinstance(value, dict) or set(value) != set(_MODEL_ROLE_NAMES):
+            raise ValueError("private runtime lock role bindings are closed")
+    cohorts = lock.get("cohort_bindings")
+    expected_cohorts = {
+        "training": {"micro", "pilot", "full"},
+        "sealed": {"pilot", "full"},
+    }
+    if not isinstance(cohorts, dict) or set(cohorts) != set(expected_cohorts):
+        raise ValueError("private runtime lock cohort bindings are closed")
+    for lane, expected_names in expected_cohorts.items():
+        lane_bindings = cohorts.get(lane)
+        if not isinstance(lane_bindings, dict) or set(lane_bindings) != expected_names:
+            raise ValueError("private runtime lock cohort bindings are closed")
+        for binding in lane_bindings.values():
+            if (
+                not isinstance(binding, dict)
+                or set(binding) != {"phase_id", "selection_digest"}
+                or not _logical_id(binding.get("phase_id"))
+                or not _is_digest(binding.get("selection_digest"))
+            ):
+                raise ValueError("private runtime lock cohort bindings are closed")
+
+
+def _validate_historical_exclusions(
+    exclusions_path: Path, inputs: dict[str, Any]
+) -> dict[str, set[str]]:
+    raw = _read_private_bytes(exclusions_path, name="historical exclusions")
+    if _sha256(raw) != HISTORICAL_EXCLUSIONS_SHA256 or _sha256(raw) != inputs["exclusions_sha256"]:
+        raise ValueError("historical exclusions raw digest mismatch")
+    try:
+        exclusions_value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("historical exclusions is not valid closed JSON") from exc
+    if not isinstance(exclusions_value, dict):
+        raise ValueError("historical exclusions must be an object")
+    exclusions = cast(dict[str, Any], exclusions_value)
+    _require_exact_keys(exclusions, _HISTORICAL_EXCLUSION_FIELDS, name="historical exclusions")
+    if (
+        exclusions.get("schema_version") != HISTORICAL_EXCLUSION_SCHEMA
+        or exclusions.get("status") != "DERIVED_NOT_SEALING_READY"
+        or exclusions.get("historical_manifest_sha256") != HISTORICAL_PACKET_MANIFEST_SHA256
+        or exclusions.get("historical_source_sha256") != HISTORICAL_TRAIN_DEV_SOURCE_SHA256
+        or exclusions.get("phase_a_receipt_sha256") != HISTORICAL_PHASE_A_RECEIPT_SHA256
+        or exclusions.get("source_records") != 1304
+        or exclusions.get("normalization") != HISTORICAL_EXCLUSION_NORMALIZATION
+        or exclusions.get("identity_source_field") != "task_id"
+        or exclusions.get("question_source_field") != "instruction"
+        or exclusions.get("option_source_field")
+        != "criteria; IDs excluded by canonical combined fingerprint"
+        or exclusions.get("historical_holdout_opened") is not False
+        or exclusions.get("raw_rows_uploaded") is not False
+        or type(exclusions.get("limitation")) is not str
+        or not exclusions["limitation"].strip()
+    ):
+        raise ValueError("historical exclusions provenance mismatch")
+    if (
+        exclusions["historical_manifest_sha256"] != inputs["historical_manifest_sha256"]
+        or exclusions["historical_source_sha256"] != inputs["historical_source_sha256"]
+        or exclusions["phase_a_receipt_sha256"] != inputs["historical_phase_a_receipt_sha256"]
+    ):
+        raise ValueError("historical exclusions input binding mismatch")
+    sets = exclusions.get("sets")
+    aliases = exclusions.get("literal_serialized_state_alias_sets")
+    if not isinstance(sets, dict) or set(sets) != {
+        "identity",
+        "state_question",
+        "combined_content",
+    }:
+        raise ValueError("historical exclusions axes are closed")
+    if not isinstance(aliases, dict) or set(aliases) != {"state_question", "combined_content"}:
+        raise ValueError("historical aliases are closed")
+    primary: dict[str, set[str]] = {}
+    for name, values in sets.items():
+        if (
+            not isinstance(values, list)
+            or len(values) != 1304
+            or values != sorted(values)
+            or len(set(values)) != len(values)
+            or any(not _is_digest(value) for value in values)
+        ):
+            raise ValueError("historical exclusion hashes are closed")
+        primary[name] = set(cast(list[str], values))
+    literal_aliases: dict[str, set[str]] = {}
+    for name, values in aliases.items():
+        if (
+            not isinstance(values, list)
+            or len(values) != 1304
+            or values != sorted(values)
+            or len(set(values)) != len(values)
+            or any(not _is_digest(value) for value in values)
+        ):
+            raise ValueError("historical exclusion hashes are closed")
+        literal_aliases[name] = set(cast(list[str], values))
+    return {
+        "identity": primary["identity"],
+        "state_question": primary["state_question"] | literal_aliases["state_question"],
+        "combined_content": primary["combined_content"] | literal_aliases["combined_content"],
+    }
+
+
+def _verify_phase_a_receipt(root: Path, inputs: dict[str, Any]) -> None:
+    _path, raw = _read_root_private_bytes(
+        root, inputs["historical_phase_a_receipt_file"], name="historical Phase A receipt"
+    )
+    if _sha256(raw) != HISTORICAL_PHASE_A_RECEIPT_SHA256:
+        raise ValueError("historical Phase A receipt raw digest mismatch")
+    try:
+        receipt_value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("historical Phase A receipt is not valid closed JSON") from exc
+    if not isinstance(receipt_value, dict):
+        raise ValueError("historical Phase A receipt must be an object")
+    receipt = cast(dict[str, Any], receipt_value)
+    if (
+        receipt.get("packet_manifest_sha256") != HISTORICAL_PACKET_MANIFEST_SHA256
+        or receipt.get("status") != "BLOCKED_DATA_RIGHTS"
+    ):
+        raise ValueError("historical Phase A receipt provenance mismatch")
+
+
+def _validate_rights_and_runtime(
+    root: Path, inputs: dict[str, Any]
+) -> tuple[VerifiedRenderer, VerifiedTokenizer, str]:
+    _grant_path, grant, grant_raw = _read_root_private_json(
+        root, inputs["environment_grant_file"], name="environment grant"
+    )
+    if _sha256(grant_raw) != inputs["environment_grant_sha256"]:
+        raise ValueError("environment grant raw digest mismatch")
+    licenses = {
+        role: _read_root_private_bytes(root, relative, name=f"license file for {role}")[1]
+        for role, relative in cast(dict[str, str], inputs["license_files"]).items()
+    }
+    grant_digest = validate_environment_grant(grant, licenses)
+    _lock_path, lock, lock_raw = _read_root_private_json(
+        root, inputs["runtime_lock_file"], name="private runtime lock"
+    )
+    if _sha256(lock_raw) != inputs["runtime_lock_sha256"]:
+        raise ValueError("private runtime lock raw digest mismatch")
+    _validate_runtime_lock(lock, cast(str, inputs["corpus_source_revision"]))
+    if grant["runtime_lock_digest"] != _sha256(canonical_json_bytes(cast(Any, lock))):
+        raise ValueError("environment grant runtime lock binding mismatch")
+    _renderer_path, renderer_raw = _read_root_private_bytes(
+        root, inputs["renderer_source_file"], name="renderer source"
+    )
+    if (
+        _sha256(renderer_raw) != inputs["renderer_source_sha256"]
+        or inputs["renderer_source_sha256"] != PINNED_RENDERER_SOURCE_SHA256
+    ):
+        raise ValueError("renderer source raw digest mismatch")
+    renderer = load_pinned_renderer(renderer_raw)
+    _inventory_path, inventory_raw = _read_root_private_bytes(
+        root, inputs["tokenizer_inventory_file"], name="tokenizer inventory"
+    )
+    if _sha256(inventory_raw) != inputs["tokenizer_inventory_sha256"]:
+        raise ValueError("tokenizer inventory raw digest mismatch")
+    inventory_value = _read_canonical_json_value(inventory_raw, name="tokenizer inventory")
+    inventory = _validate_tokenizer_inventory(inventory_value)
+    if inventory != grant["tokenizer_inventory"]:
+        raise ValueError("tokenizer inventory grant mismatch")
+    tokenizer_directory = _safe_relative_private_path(
+        root, inputs["tokenizer_directory"], name="tokenizer directory"
+    )
+    tokenizer = load_verified_tokenizer(tokenizer_directory, inventory)
+    if tokenizer.inventory_digest != _inventory_digest(inventory):
+        raise ValueError("tokenizer inventory binding mismatch")
+    return renderer, tokenizer, grant_digest
+
+
+def _validate_ledger_rights_bindings(root: Path, accepted_ids: set[str], grant_digest: str) -> None:
+    expected_environment = {
+        "schema_version": "v02-environment-binding.v1",
+        "grant_digest": grant_digest,
+        "prompt_contract_digest": prompt_contract()["contract_digest"],
+        "renderer_lock_digest": _renderer_lock_digest(),
+    }
+    environment = _read_private_json(
+        root / "private-control" / "environment-binding.json", "environment binding"
+    )
+    if environment != expected_environment:
+        raise ValueError("ledger environment binding mismatch")
+    roles = {"training_author": "training_author", "independent_reviewer": "training_reviewer"}
+    for role, transition in roles.items():
+        binding = _read_private_json(
+            root / "private-control" / f"{role}-binding.json", "role binding"
+        )
+        _require_exact_keys(binding, _ROLE_BINDING_FIELDS, name="role binding")
+        if (
+            binding.get("schema_version") != "v02-role-binding.v1"
+            or binding.get("role") != role
+            or binding.get("grant_digest") != grant_digest
+            or binding.get("prompt_contract_digest")
+            != expected_environment["prompt_contract_digest"]
+            or binding.get("renderer_lock_digest") != expected_environment["renderer_lock_digest"]
+            or not _is_digest(binding.get("runtime_evidence_digest"))
+        ):
+            raise ValueError("ledger role binding mismatch")
+        for identity_id in accepted_ids:
+            reservation = _read_private_json(
+                root / "role-reservations" / _event_filename(identity_id, role), "role reservation"
+            )
+            _require_exact_keys(reservation, _RESERVATION_FIELDS, name="role reservation")
+            if (
+                reservation.get("schema_version") != "v02-role-reservation.v1"
+                or reservation.get("identity_id") != identity_id
+                or reservation.get("role") != role
+                or reservation.get("grant_digest") != grant_digest
+                or reservation.get("prompt_contract_digest")
+                != expected_environment["prompt_contract_digest"]
+                or reservation.get("renderer_lock_digest")
+                != expected_environment["renderer_lock_digest"]
+                or not _is_digest(reservation.get("runtime_evidence_digest"))
+                or not _is_digest(reservation.get("request_digest"))
+            ):
+                raise ValueError(f"ledger reservation binding mismatch for {transition}")
+
+
+def _identity_fingerprint(identity_id: str) -> str:
+    return _sha256(canonical_json_bytes(cast(Any, identity_id)))
+
+
+def _option_multiset_fingerprint(options: list[dict[str, Any]]) -> str:
+    return combined_content_fingerprint("", "", options)
+
+
+def _capsule_counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_split = {
+        split: [row for row in rows if row["split"] == split] for split in ("train", "internal_dev")
+    }
+    locale = {name: sum(row["locale"] == name for row in rows) for name in ("pt_br", "english")}
+    cardinality = {
+        split: {
+            locale_name: {
+                str(option_count): sum(
+                    row["split"] == split
+                    and row["locale"] == locale_name
+                    and len(cast(list[dict[str, Any]], row["options"])) == option_count
+                    for row in rows
+                )
+                for option_count in OPTION_COUNTS
+            }
+            for locale_name in ("pt_br", "english")
+        }
+        for split in ("train", "internal_dev")
+    }
+    domains = {
+        split: {
+            domain: sum(row["split"] == split and row["domain"] == domain for row in rows)
+            for domain in DOMAINS
+        }
+        for split in ("train", "internal_dev")
+    }
+    pair_members: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        pair_id = row["bilingual_pair_id"]
+        if pair_id is not None:
+            pair_members.setdefault(cast(str, pair_id), []).append(row)
+    complete_pairs = sum(
+        len(members) == 2
+        and {member["locale"] for member in members} == {"pt_br", "english"}
+        and len({member["split"] for member in members}) == 1
+        for members in pair_members.values()
+    )
+    return {
+        "accepted": len(rows),
+        "train": len(by_split["train"]),
+        "internal_dev": len(by_split["internal_dev"]),
+        "locale": locale,
+        "train_locale_cardinality": cardinality["train"],
+        "dev_locale_cardinality": cardinality["internal_dev"],
+        "train_domain": domains["train"],
+        "dev_domain": domains["internal_dev"],
+        "complete_bilingual_pairs": complete_pairs,
+    }
+
+
+def _validate_capsule_counts(counts: Any) -> dict[str, Any]:
+    expected = {
+        "accepted",
+        "train",
+        "internal_dev",
+        "locale",
+        "train_locale_cardinality",
+        "dev_locale_cardinality",
+        "train_domain",
+        "dev_domain",
+        "complete_bilingual_pairs",
+    }
+    if not isinstance(counts, dict) or set(counts) != expected:
+        raise ValueError("training capsule counts are closed")
+    for field in ("accepted", "train", "internal_dev", "complete_bilingual_pairs"):
+        if type(counts[field]) is not int or counts[field] < 0:
+            raise ValueError("training capsule counts are closed")
+    if counts["accepted"] != counts["train"] + counts["internal_dev"]:
+        raise ValueError("training capsule counts are inconsistent")
+    if not isinstance(counts["locale"], dict) or set(counts["locale"]) != {"pt_br", "english"}:
+        raise ValueError("training capsule locale counts are closed")
+    for count in counts["locale"].values():
+        if type(count) is not int or count < 0:
+            raise ValueError("training capsule locale counts are closed")
+    for field, floor in (("train_locale_cardinality", 20), ("dev_locale_cardinality", 10)):
+        value = counts[field]
+        if not isinstance(value, dict) or set(value) != {"pt_br", "english"}:
+            raise ValueError("training capsule cardinality counts are closed")
+        for cells in value.values():
+            if not isinstance(cells, dict) or set(cells) != {
+                str(number) for number in OPTION_COUNTS
+            }:
+                raise ValueError("training capsule cardinality counts are closed")
+            if any(type(count) is not int or count < floor for count in cells.values()):
+                raise ValueError("training capsule cardinality floor failed")
+    for field, floor in (("train_domain", 60), ("dev_domain", 10)):
+        value = counts[field]
+        if not isinstance(value, dict) or set(value) != set(DOMAINS):
+            raise ValueError("training capsule domain counts are closed")
+        if any(type(count) is not int or count < floor for count in value.values()):
+            raise ValueError("training capsule domain floor failed")
+    if (
+        counts["accepted"] < 1200
+        or counts["train"] < 1020
+        or counts["internal_dev"] < 180
+        or counts["complete_bilingual_pairs"] < 120
+        or 100 * counts["locale"]["pt_br"] < 60 * counts["accepted"]
+        or 100 * counts["locale"]["english"] < 20 * counts["accepted"]
+    ):
+        raise ValueError("training capsule acceptance floor failed")
+    return counts
+
+
+def _validate_capsule_row(row: Any) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError("training capsule row is closed")
+    _require_exact_keys(row, _CAPSULE_ROW_FIELDS, name="training capsule row")
+    if (
+        not isinstance(row.get("identity_id"), str)
+        or row.get("split") not in {"train", "internal_dev"}
+        or row.get("locale") not in {"pt_br", "english"}
+        or row.get("domain") not in DOMAINS
+        or type(row.get("state")) is not str
+        or type(row.get("instruction")) is not str
+        or type(row.get("gold_index")) is not int
+        or row["gold_index"] < 0
+        or (row.get("bilingual_pair_id") is not None and type(row["bilingual_pair_id"]) is not str)
+    ):
+        raise ValueError("training capsule row is closed")
+    for field in ("case_sha256", "author_event_sha256", "reviewer_event_sha256"):
+        _validate_sha256(row.get(field), name=f"training capsule {field}")
+    case = {"state": row["state"], "question": row["instruction"], "options": row["options"]}
+    validate_case(case, {"option_count": len(cast(list[Any], row["options"]))})
+    if row["gold_index"] >= len(cast(list[Any], row["options"])):
+        raise ValueError("training capsule gold index is invalid")
+    return cast(dict[str, Any], row)
+
+
+def _validate_row_disjointness(rows: list[dict[str, Any]], exclusions: dict[str, set[str]]) -> None:
+    fingerprints = {
+        "identity": {_identity_fingerprint(cast(str, row["identity_id"])) for row in rows},
+        "state_question": {
+            state_question_fingerprint(row["state"], row["instruction"]) for row in rows
+        },
+        "combined_content": {
+            combined_content_fingerprint(row["state"], row["instruction"], row["options"])
+            for row in rows
+        },
+    }
+    if any(len(fingerprints[name]) != len(rows) for name in fingerprints):
+        raise ValueError("training capsule contains duplicate or leaked content")
+    for name, values in fingerprints.items():
+        if values & exclusions[name]:
+            raise ValueError(f"historical exclusion overlap on {name}")
+    for name in ("identity", "state_question", "combined_content"):
+        train = {
+            value
+            for row, value in zip(
+                rows,
+                (
+                    _identity_fingerprint(cast(str, item["identity_id"]))
+                    if name == "identity"
+                    else state_question_fingerprint(item["state"], item["instruction"])
+                    if name == "state_question"
+                    else combined_content_fingerprint(
+                        item["state"], item["instruction"], item["options"]
+                    )
+                    for item in rows
+                ),
+                strict=True,
+            )
+            if row["split"] == "train"
+        }
+        dev = fingerprints[name] - train
+        if train & dev:
+            raise ValueError("training capsule split leakage")
+    # This fourth AC4 axis is deliberately descriptive: historical source has no such set.
+    _ = {_option_multiset_fingerprint(cast(list[dict[str, Any]], row["options"])) for row in rows}
+
+
+def _prepare_training_capsule(
+    *,
+    root: Path,
+    plan_path: Path,
+    receipt_path: Path,
+    exclusions_path: Path,
+    sealer_inputs_path: Path,
+    artifact_id: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    _safe_output_parent(root)
+    if plan_path.parent != root or receipt_path.parent != root:
+        raise ValueError("plan and receipt must remain at the original training root")
+    plan_raw = _read_private_bytes(plan_path, name="training plan")
+    plan_data = _closed_json_object(plan_raw, name="training plan")
+    _validate_frozen_plan(plan_data)
+    if plan_data.get("lane") != "training":
+        raise ValueError("training capsule requires the training plan")
+    inputs, _paths = _validate_sealer_inputs(root, sealer_inputs_path)
+    if artifact_id is not None and artifact_id != inputs["artifact_id"]:
+        raise ValueError("sealer artifact ID does not match its inputs")
+    renderer, tokenizer, grant_digest = _validate_rights_and_runtime(root, inputs)
+    _verify_phase_a_receipt(root, inputs)
+    exclusions = _validate_historical_exclusions(exclusions_path, inputs)
+    ledger_binding = _read_private_json(root / "ledger-binding.json", "ledger binding")
+    expected_binding = {
+        "schema_version": "v02-ledger-binding.v1",
+        "ancestry": _root_ancestry(root, "training"),
+        "plan_digest": _sha256(canonical_json_bytes(cast(Any, plan_data))),
+    }
+    if ledger_binding != expected_binding:
+        raise ValueError("original training ledger root binding mismatch")
+    ledger = object.__new__(OfflineLedger)
+    ledger.plan = plan_data
+    ledger.lane = "training"
+    ledger.root = root
+    ledger.events_root = root / "ledger-events"
+    events = ledger.events()
+    receipt = verify_receipt(
+        receipt_path, plan_data=plan_data, events=events, expected_lane="training"
+    )
+    if receipt["status"] != "READY":
+        raise ValueError("training aggregate receipt is not READY")
+    if receipt["training_acceptance_policy"] != TRAINING_ACCEPTANCE_POLICY:
+        raise ValueError("training aggregate policy mismatch")
+    accepted, _resolved, _cohorts, _diagnostics = _training_accepted_resolved(plan_data, events)
+    grouped = _group_events(events)
+    _validate_ledger_rights_bindings(root, accepted, grant_digest)
+    rows: list[dict[str, Any]] = []
+    for identity_id in sorted(accepted):
+        slot = _validate_identity(plan_data, "training", identity_id)
+        transition = grouped[identity_id]
+        author_event = transition.get("training_author")
+        reviewer_event = transition.get("training_reviewer")
+        if author_event is None or reviewer_event is None:
+            raise ValueError("accepted identity has an incomplete first settlement")
+        author = cast(dict[str, Any], author_event["envelope"])
+        reviewer = cast(dict[str, Any], reviewer_event["envelope"])
+        case_record = _read_private_case(root, "training", identity_id)
+        case = cast(dict[str, Any], case_record["case"])
+        if (
+            author["content_digest"] != case_record["content_digest"]
+            or reviewer["content_digest"] != case_record["content_digest"]
+        ):
+            raise ValueError("accepted identity case source hash mismatch")
+        measurement = renderer.measure(case, tokenizer)
+        gates = local_case_gates(case, slot, renderer, tokenizer, measurement=measurement)
+        if not all(gates.values()) or not _all_gates(author) or not _all_gates(reviewer):
+            raise ValueError("accepted identity fails a quality gate")
+        # One pinned measurement enforces Kev's intrinsic bound and the stricter candidate bound.
+        if measurement["token_count"] > 2048:
+            raise ValueError("Kev renderer preflight failed")
+        if measurement["token_count"] > 512:
+            raise ValueError("candidate renderer preflight failed")
+        rows.append(
+            {
+                "identity_id": identity_id,
+                "split": slot["split"],
+                "locale": slot["locale"],
+                "domain": slot["domain"],
+                "state": case["state"],
+                "instruction": case["question"],
+                "options": case["options"],
+                "gold_index": slot["gold_position"],
+                "case_sha256": case_record["content_digest"],
+                "author_event_sha256": _sha256(canonical_json_bytes(cast(Any, author_event))),
+                "reviewer_event_sha256": _sha256(canonical_json_bytes(cast(Any, reviewer_event))),
+                "bilingual_pair_id": slot["bilingual_pair_id"],
+            }
+        )
+    rows.sort(key=lambda row: cast(str, row["identity_id"]))
+    for row in rows:
+        _validate_capsule_row(row)
+    _validate_row_disjointness(rows, exclusions)
+    counts = _validate_capsule_counts(_capsule_counts(rows))
+    descriptor = {
+        "schema_version": TRAINING_CAPSULE_SCHEMA,
+        "artifact_id": inputs["artifact_id"],
+        "plan_sha256": _sha256(canonical_json_bytes(cast(Any, plan_data))),
+        "events_sha256": event_digest(events),
+        "aggregate_receipt_sha256": _sha256(
+            _read_private_bytes(receipt_path, name="aggregate receipt")
+        ),
+        "corpus_source_revision": inputs["corpus_source_revision"],
+        "policy_sha256": inputs["policy_sha256"],
+        "renderer_sha256": inputs["renderer_source_sha256"],
+        "tokenizer_inventory_sha256": tokenizer.inventory_digest,
+        "exclusions_sha256": inputs["exclusions_sha256"],
+        "rights_receipt_sha256": inputs["environment_grant_sha256"],
+        "rows_file": "rows.jsonl",
+        "rows_sha256": _sha256(
+            b"".join(canonical_json_bytes(cast(Any, row)) + b"\n" for row in rows)
+        ),
+        "counts": counts,
+        "ancestry_sha256": _sha256(canonical_json_bytes(cast(Any, receipt["ancestry"]))),
+    }
+    _require_exact_keys(descriptor, _CAPSULE_FIELDS, name="training capsule")
+    if descriptor["policy_sha256"] != _sha256(canonical_json_bytes(TRAINING_ACCEPTANCE_POLICY)):
+        raise ValueError("training capsule policy binding mismatch")
+    return descriptor, rows
+
+
+def seal_training_capsule(
+    *,
+    root: Path,
+    plan_path: Path,
+    receipt_path: Path,
+    exclusions_path: Path,
+    output_parent: Path,
+    artifact_id: str,
+    sealer_inputs_path: Path,
+) -> Path:
+    """Create one immutable training capsule after fully recomputing its evidence."""
+    _safe_output_parent(output_parent)
+    if not _logical_id(artifact_id):
+        raise ValueError("training capsule artifact ID must be logical")
+    descriptor, rows = _prepare_training_capsule(
+        root=root,
+        plan_path=plan_path,
+        receipt_path=receipt_path,
+        exclusions_path=exclusions_path,
+        sealer_inputs_path=sealer_inputs_path,
+        artifact_id=artifact_id,
+    )
+    capsule_root = output_parent / artifact_id
+    if capsule_root.exists() or capsule_root.is_symlink():
+        raise ValueError("training capsule output already exists")
+    try:
+        capsule_root.mkdir(mode=0o700)
+        os.chmod(capsule_root, 0o700)
+        directory_fd = os.open(output_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise ValueError("training capsule output creation failed") from exc
+    rows_bytes = b"".join(canonical_json_bytes(cast(Any, row)) + b"\n" for row in rows)
+    _atomic_write(capsule_root / "rows.jsonl", rows_bytes)
+    descriptor_path = capsule_root / "capsule.json"
+    _atomic_write(descriptor_path, canonical_json_bytes(cast(Any, descriptor)) + b"\n")
+    return descriptor_path
+
+
+def verify_training_capsule(
+    capsule_path: Path,
+    *,
+    root: Path,
+    plan_path: Path,
+    receipt_path: Path,
+    exclusions_path: Path,
+    sealer_inputs_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Recompute and verify a sealed capsule against original training evidence."""
+    _safe_output_parent(capsule_path.parent)
+    descriptor_raw = _read_private_bytes(capsule_path, name="training capsule")
+    descriptor = _closed_json_object(descriptor_raw, name="training capsule")
+    _require_exact_keys(descriptor, _CAPSULE_FIELDS, name="training capsule")
+    if descriptor.get("schema_version") != TRAINING_CAPSULE_SCHEMA:
+        raise ValueError("training capsule schema mismatch")
+    if descriptor.get("rows_file") != "rows.jsonl" or not _logical_id(
+        descriptor.get("artifact_id")
+    ):
+        raise ValueError("training capsule descriptor is closed")
+    rows_path = capsule_path.parent / "rows.jsonl"
+    rows_raw = _read_private_bytes(rows_path, name="training capsule rows")
+    if _sha256(rows_raw) != descriptor.get("rows_sha256"):
+        raise ValueError("training capsule rows digest mismatch")
+    try:
+        rows = [
+            _validate_capsule_row(
+                _read_canonical_json_value(line + b"\n", name="training capsule row")
+            )
+            for line in rows_raw.splitlines()
+        ]
+    except ValueError as exc:
+        raise ValueError("training capsule rows are closed") from exc
+    if not rows or rows != sorted(rows, key=lambda row: cast(str, row["identity_id"])):
+        raise ValueError("training capsule rows are not sorted")
+    expected, expected_rows = _prepare_training_capsule(
+        root=root,
+        plan_path=plan_path,
+        receipt_path=receipt_path,
+        exclusions_path=exclusions_path,
+        sealer_inputs_path=sealer_inputs_path,
+        artifact_id=cast(str, descriptor["artifact_id"]),
+    )
+    if descriptor != expected or rows != expected_rows:
+        raise ValueError("training capsule evidence mismatch")
+    return descriptor, rows
+
+
 def _logical_id(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -3635,6 +4555,7 @@ def local_case_gates(
     tokenizer: VerifiedTokenizer,
     *,
     duplicate_history: Iterable[Mapping[str, Any]] = (),
+    measurement: Mapping[str, Any] | None = None,
 ) -> dict[str, bool]:
     """Local prerequisites only. Model judgments stay true here and are conjoined later."""
     gates = {name: True for name in LOCAL_GATES}
@@ -3651,7 +4572,9 @@ def local_case_gates(
         gates["privacy_valid"] = False
         gates["duplicate_valid"] = False
     try:
-        measured = renderer.measure(case, tokenizer)
+        measured = renderer.measure(case, tokenizer) if measurement is None else measurement
+        if type(measured.get("token_count")) is not int or measured["token_count"] < 0:
+            raise ValueError("renderer measurement is closed")
         gates["renderer_valid"] = True
         gates["length_valid"] = measured["token_count"] <= 512
     except (ValueError, OSError):
@@ -4510,6 +5433,32 @@ def main() -> int:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         print("plan written")
+        return 0
+
+    if command == "seal-training":
+        parser = argparse.ArgumentParser(prog="v02_corpus seal-training")
+        parser.add_argument("--root", type=Path, required=True)
+        parser.add_argument("--plan", type=Path, required=True)
+        parser.add_argument("--receipt", type=Path, required=True)
+        parser.add_argument("--exclusions", type=Path, required=True)
+        parser.add_argument("--output-parent", type=Path, required=True)
+        parser.add_argument("--artifact-id", required=True)
+        parser.add_argument("--sealer-inputs", type=Path, required=True)
+        parsed = parser.parse_args(args[1:])
+        try:
+            seal_training_capsule(
+                root=parsed.root,
+                plan_path=parsed.plan,
+                receipt_path=parsed.receipt,
+                exclusions_path=parsed.exclusions,
+                output_parent=parsed.output_parent,
+                artifact_id=parsed.artifact_id,
+                sealer_inputs_path=parsed.sealer_inputs,
+            )
+        except (ValueError, OSError):
+            print("ERROR: training capsule sealing failed", file=sys.stderr)
+            return 1
+        print("training capsule sealed")
         return 0
 
     print(f"unknown command: {command}", file=sys.stderr)

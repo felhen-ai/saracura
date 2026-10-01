@@ -59,6 +59,15 @@ phase5-candidate = [
   "psutil>=6.1,<7",
   "huggingface_hub>=0.25,<1",
 ]
+# Opt-in only: P2 imports this stack from explicit private-training commands.
+# Default and lightweight test installations remain model- and dataset-free.
+v02-training = [
+  "bitsandbytes>=0.45,<1",
+  "peft>=0.14,<1",
+  "safetensors>=0.5,<1",
+  "torch>=2.5,<3",
+  "transformers==5.16.0",
+]
 ptbr-benchmark = [
   "pyarrow>=22,<26",
 ]
@@ -71,6 +80,26 @@ dev = [
   "mypy>=1.14,<2",
   "pytest>=8.3,<9",
   "ruff>=0.9,<1",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "encoder-eval" },
+    { extra = "v02-training" },
+  ],
+  [
+    { extra = "local-minilm" },
+    { extra = "v02-training" },
+  ],
+  [
+    { extra = "phase5-candidate" },
+    { extra = "v02-training" },
+  ],
+  [
+    { extra = "universal-local" },
+    { extra = "v02-training" },
+  ],
 ]
 
 [tool.hatch.build.targets.wheel]
