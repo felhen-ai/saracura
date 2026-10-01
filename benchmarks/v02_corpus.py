@@ -3096,7 +3096,7 @@ def _validate_sha256(value: Any, *, name: str) -> str:
 def _validate_sha1(value: Any, *, name: str) -> str:
     if type(value) is not str or re.fullmatch(r"[0-9a-f]{40}", value) is None:
         raise ValueError(f"{name} must be a lowercase source revision")
-    return cast(str, value)
+    return value
 
 
 def _validate_sealer_inputs(

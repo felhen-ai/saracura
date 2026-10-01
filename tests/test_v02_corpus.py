@@ -3290,7 +3290,7 @@ def test_training_capsule_verifier_rejects_root_mode_and_reservation_tampering(
         )
     os.chmod(fixture["root"], 0o700)
     current_uid = os.geteuid()
-    monkeypatch.setattr(v02_corpus.os, "geteuid", lambda: current_uid + 1)
+    monkeypatch.setattr(os, "geteuid", lambda: current_uid + 1)
     with pytest.raises(ValueError, match="owned"):
         v02_corpus.verify_training_capsule(
             capsule,
@@ -3300,7 +3300,7 @@ def test_training_capsule_verifier_rejects_root_mode_and_reservation_tampering(
             exclusions_path=fixture["exclusions"],
             sealer_inputs_path=fixture["inputs"],
         )
-    monkeypatch.setattr(v02_corpus.os, "geteuid", lambda: current_uid)
+    monkeypatch.setattr(os, "geteuid", lambda: current_uid)
     reservation = next((fixture["root"] / "role-reservations").glob("*.json"))
     data = json.loads(reservation.read_bytes())
     data["grant_digest"] = "0" * 64
@@ -3397,7 +3397,7 @@ def test_training_capsule_exclusion_aliases_are_independent_and_enforced(
         "options": [{"id": "option_0", "description": "Fictional action"}],
         "split": "train",
     }
-    fingerprint = v02_corpus.state_question_fingerprint(row["state"], row["instruction"])
+    fingerprint = state_question_fingerprint(row["state"], row["instruction"])
     alias_values = [f"{number:064x}" for number in range(1, 1304)] + [fingerprint]
     assert len(set(alias_values)) == 1304
     exclusions["literal_serialized_state_alias_sets"]["state_question"] = sorted(alias_values)
@@ -3409,7 +3409,7 @@ def test_training_capsule_exclusion_aliases_are_independent_and_enforced(
         monkeypatch.setattr(v02_corpus, "HISTORICAL_EXCLUSIONS_SHA256", digest)
         inputs = json.loads(fixture["inputs"].read_bytes())
         inputs["exclusions_sha256"] = digest
-        return inputs
+        return cast(dict[str, Any], inputs)
 
     inputs = refresh_exclusion_digest()
     validated = v02_corpus._validate_historical_exclusions(exclusions_path, inputs)
