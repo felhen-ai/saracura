@@ -196,6 +196,9 @@ def validate_routed_manifest(path: Path) -> None:
     if schema_version == "v02-distillation-safe-corpus.v1":
         validate_v02_distillation_safe_corpus(path)
         return
+    if schema_version == "v02-first-checkpoint.v1":
+        validate_v02_first_checkpoint_manifest(path)
+        return
     if schema_version == "phase5-open-model-candidates.v1":
         validate_phase5_candidate_manifest(path)
         return
@@ -1422,6 +1425,15 @@ def validate_v02_protocol_manifest(path: Path) -> None:
     from benchmarks.v02_evaluation import validate_protocol_manifest
 
     validate_protocol_manifest(path)
+
+
+def validate_v02_first_checkpoint_manifest(path: Path) -> None:
+    """Route the immutable first-checkpoint contract through its owning validator."""
+    from benchmarks.v02_training import MANIFEST_PATH, load_manifest
+
+    if path.resolve() != MANIFEST_PATH.resolve():
+        raise ValueError(f"{path}: first-checkpoint manifest must be the canonical file")
+    load_manifest()
 
 
 _HERE = Path(__file__).resolve()
