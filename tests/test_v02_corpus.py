@@ -2278,7 +2278,7 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
                 assert len(check_items) == option_count
             for check in check_items:
                 assert check["properties"]["supported"] == {"type": "boolean"}
-                expected_reason = {
+                expected_reason: dict[str, object] = {
                     "type": "string",
                     "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,160}$',
                 }
