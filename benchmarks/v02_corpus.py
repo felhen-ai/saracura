@@ -37,12 +37,12 @@ MANIFEST_PATH = Path(__file__).parent / "manifests" / "v02-distillation-safe-cor
 
 SEED_TRAINING = 20260929
 SEED_SEALED = 20260930
-TRAINING_NAMESPACE = "saracura-v02-text-contract-author-v1"
+TRAINING_NAMESPACE = "saracura-v02-facts-policy-author-c9-v1"
 SEALED_NAMESPACE = "saracura-v02-native-json-v1"
-PROTOCOL_DIGEST = "c8-text-contract-author-r1"
+PROTOCOL_DIGEST = "c9-facts-policy-author-r1"
 NATIVE_DECODER_POLICY = "v02-native-json-schema-projection.v2"
 AUTHOR_METADATA_CONST_POLICY = "planned-scenario-and-ordered-criterion-roles.v1"
-AUTHOR_GROUNDING_POLICY = "visible-policy-construction.v1"
+AUTHOR_GROUNDING_POLICY = "public-policy-facts-private-checks.v1"
 
 DOMAINS = [
     "email_triage",
@@ -138,6 +138,7 @@ _ROLE_LANES = {
 }
 _JUDGMENT_FIELDS = frozenset({"fictionality_valid", "exclusive_options_valid", "ambiguity_free"})
 _CASE_FIELDS = frozenset({"state", "question", "options"})
+_TRAINING_AUTHOR_PUBLIC_FIELDS = frozenset({"policy", "facts", "question", "options"})
 _OPTION_FIELDS = frozenset({"id", "description"})
 
 # These are intentionally abstract templates.  C1 stores no instantiated prompt or
@@ -145,16 +146,19 @@ _OPTION_FIELDS = frozenset({"id", "description"})
 ROLE_TEMPLATES = {
     "training_author": (
         "Create one fictional {locale} decision case for domain {domain}. State an explicit "
-        "governing policy in state, including equality behavior for a numeric threshold, then "
+        "complete governing policy in policy, including equality behavior for a numeric threshold, "
+        "then write only observed fictional facts in facts and "
         "ask which action satisfies that policy. Use the assigned scenario and criterion roles, "
         "put the planned target at the requested option, and return only the closed JSON "
         "response. Do not invent missing contracts, authority, approvals, stock, locations or "
         "consent. Every distractor must be a distinct action conflicting with a stated condition. "
-        "In construction, quote the governing policy from state and check each option in order; "
+        "In construction, check each option in order; "
         "exactly one supported Boolean must match answer. A bilingual source, if supplied, is "
         "context for translating the same facts and question, never for copying its target or "
-        "construction. Authoring fields must use nonempty single-paragraph NFC Unicode text "
-        "without category Cc characters, double quotes, or backslashes."
+        "construction. Prefer a policy length of 180 Unicode code points to leave translation "
+        "room; it must be at most 240 Unicode code points and end with ., !, or ?. "
+        "Authoring fields must use nonempty single-paragraph NFC Unicode text without category Cc "
+        "characters, double quotes, or backslashes."
     ),
     "independent_reviewer": (
         "Independently infer the answer and semantic classification from this case. Return "
@@ -1252,6 +1256,52 @@ def _validate_construction(
     return cast(dict[str, Any], value)
 
 
+def _validate_training_option_checks(
+    value: Any, identity: dict[str, Any], answer: Any
+) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise ValueError("construction must be an object")
+    _require_exact_keys(value, frozenset({"option_checks"}), name="construction")
+    checks = value.get("option_checks")
+    if not isinstance(checks, list):
+        raise ValueError("option_checks must be a list")
+    return cast(
+        list[dict[str, Any]],
+        _validate_construction(
+            {"rule_quote": "policy.", "option_checks": checks}, identity, answer
+        )["option_checks"],
+    )
+
+
+def materialize_training_state(policy: Any, facts: Any) -> str:
+    policy_text = _validate_nfc_text(policy, name="policy")
+    facts_text = _validate_nfc_text(facts, name="facts")
+    for name, text in (("policy", policy_text), ("facts", facts_text)):
+        if '"' in text or "\\" in text or "\n" in text or "\r" in text:
+            raise ValueError(f"{name} must be single-paragraph author text")
+    if len(policy_text) > 240:
+        raise ValueError("policy exceeds 240 Unicode code points")
+    if policy_text[-1] not in ".!?":
+        raise ValueError("policy must end with punctuation")
+    return policy_text + " " + facts_text
+
+
+def _validate_training_public_text(case: dict[str, Any]) -> None:
+    _domains, _counts, roles, scenarios = _validated_corpus_taxonomy()
+    scenario_codes = {item for values in scenarios.values() for item in values}
+    reserved = set(roles) | scenario_codes
+    pattern = re.compile(
+        r"(?<!\w)(?:option_\d+|"
+        + "|".join(re.escape(value) for value in sorted(reserved, key=len, reverse=True))
+        + r")(?!\w)",
+        re.IGNORECASE,
+    )
+    texts = [case["state"], case["question"]]
+    texts.extend(option["description"] for option in case["options"])
+    if any(pattern.search(text.casefold()) for text in texts):
+        raise ValueError("public text contains reserved identifier")
+
+
 def validate_training_author_output(
     envelope: dict[str, Any], plan: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1464,11 +1514,20 @@ def case_from_author(
     expected = _author_response_fields(role)
     _require_exact_keys(parsed, expected, name="author response")
     identity = _validate_identity(plan, cast(str, plan["lane"]), identity_id)
-    case = validate_case({key: parsed[key] for key in _CASE_FIELDS}, identity)
     if role == "training_author":
-        _validate_construction(
-            parsed["construction"], identity, parsed["answer"], state=case["state"]
+        policy = parsed["policy"]
+        case = validate_case(
+            {
+                "state": materialize_training_state(policy, parsed["facts"]),
+                "question": parsed["question"],
+                "options": parsed["options"],
+            },
+            identity,
         )
+        _validate_training_public_text(case)
+        _validate_training_option_checks(parsed["construction"], identity, parsed["answer"])
+        return case
+    case = validate_case({key: parsed[key] for key in _CASE_FIELDS}, identity)
     return case
 
 
@@ -1483,7 +1542,8 @@ def _author_response_fields(role: str) -> frozenset[str]:
     label = {"training_author": "answer", "sealed_author": "target"}.get(role)
     if label is None:
         raise ValueError("role is not an author")
-    fields = set(_CASE_FIELDS) | set(_JUDGMENT_FIELDS) | {label}
+    fields = set(_CASE_FIELDS if role == "sealed_author" else _TRAINING_AUTHOR_PUBLIC_FIELDS)
+    fields |= set(_JUDGMENT_FIELDS) | {label}
     if role == "training_author":
         fields.add("semantic")
         fields.add("construction")
@@ -1556,7 +1616,9 @@ def parse_role_response(
 def _bilingual_context(plan: dict[str, Any], identity_id: str, source: Any) -> dict[str, Any]:
     if not isinstance(source, dict):
         raise ValueError("bilingual source must be an object")
-    _require_exact_keys(source, frozenset({"source_identity_id", "case"}), name="bilingual source")
+    _require_exact_keys(
+        source, frozenset({"source_identity_id", "case", "components"}), name="bilingual source"
+    )
     destination = _role_identity(plan, identity_id, "training_author")
     source_id = source.get("source_identity_id")
     source_identity = _validate_identity(plan, "training", source_id)
@@ -1568,7 +1630,12 @@ def _bilingual_context(plan: dict[str, Any], identity_id: str, source: Any) -> d
     if source_identity["locale"] == destination["locale"]:
         raise ValueError("bilingual source must use the opposite locale")
     source_case = validate_case(source.get("case"), source_identity)
-    return {"source_identity_id": source_id, "case": source_case}
+    components = _validate_author_components(source.get("components"), source_identity, source_case)
+    return {
+        "source_identity_id": source_id,
+        "case": source_case,
+        "components": {"policy": components["policy"], "facts": components["facts"]},
+    }
 
 
 def _adjudication_labels(labels: Any, identity: dict[str, Any], identity_id: str) -> list[str]:
@@ -1596,6 +1663,11 @@ def _role_response_schema(
         "minLength": 1,
         "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]+$',
     }
+    policy_text = {
+        **author_text,
+        "maxLength": 240,
+        "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{0,239}[.!?]$',
+    }
     properties: dict[str, Any] = {field: {"type": "boolean"} for field in _JUDGMENT_FIELDS}
     label_field = {
         "training_author": "answer",
@@ -1608,9 +1680,14 @@ def _role_response_schema(
     properties[label_field] = {"type": "string", "enum": labels or option_ids}
     if role in {"training_author", "sealed_author"}:
         generated_text = author_text if role == "training_author" else text
+        public_case_properties: dict[str, Any] = (
+            {"policy": policy_text, "facts": author_text}
+            if role == "training_author"
+            else {"state": generated_text}
+        )
         properties.update(
             {
-                "state": generated_text,
+                **public_case_properties,
                 "question": generated_text,
                 "options": {
                     "type": "array",
@@ -1651,14 +1728,8 @@ def _role_response_schema(
         properties["construction"] = {
             "type": "object",
             "additionalProperties": False,
-            "required": ["rule_quote", "option_checks"],
+            "required": ["option_checks"],
             "properties": {
-                "rule_quote": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 240,
-                    "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$',
-                },
                 "option_checks": {
                     "type": "array",
                     "minItems": len(option_ids),
@@ -1696,13 +1767,12 @@ def native_decoder_schema(
     schema = copy.deepcopy(_role_response_schema(role, identity, labels))
     properties = cast(dict[str, Any], schema["properties"])
     if role == "training_author":
-        for field in ("state", "question"):
+        for field in ("policy", "facts", "question"):
             properties[field].pop("minLength", None)
+        properties["policy"].pop("maxLength", None)
         option_properties = cast(dict[str, Any], properties["options"]["items"]["properties"])
         option_properties["description"].pop("minLength", None)
         construction_properties = cast(dict[str, Any], properties["construction"]["properties"])
-        construction_properties["rule_quote"].pop("minLength", None)
-        construction_properties["rule_quote"].pop("maxLength", None)
         check_properties = cast(
             dict[str, Any],
             construction_properties["option_checks"]["items"]["properties"],
@@ -1941,7 +2011,10 @@ def role_envelope(
     if role in {"training_author", "independent_reviewer"}:
         envelope.update({"answer": parsed["answer"], "semantic": parsed["semantic"]})
         if role == "training_author":
-            envelope["construction"] = parsed["construction"]
+            envelope["construction"] = {
+                "rule_quote": parsed["policy"],
+                "option_checks": parsed["construction"]["option_checks"],
+            }
     elif role == "sealed_author":
         envelope["target"] = parsed["target"]
     elif role == "sealed_adjudicator":
@@ -2159,6 +2232,9 @@ class OfflineLedger:
         if stored["content_digest"] != envelope["content_digest"]:
             raise ValueError("private case digest mismatch")
         identity = _validate_identity(self.plan, "training", identity_id)
+        components = cast(dict[str, Any], stored["components"])
+        if envelope["construction"]["rule_quote"] != components["policy"]:
+            raise ValueError("author rule quote differs from components policy")
         _validate_construction(
             envelope["construction"],
             identity,
@@ -3652,6 +3728,9 @@ def _prepare_training_capsule(
         reviewer = cast(dict[str, Any], reviewer_event["envelope"])
         case_record = _read_private_case(root, "training", identity_id)
         case = cast(dict[str, Any], case_record["case"])
+        components = cast(dict[str, Any], case_record["components"])
+        if author["construction"]["rule_quote"] != components["policy"]:
+            raise ValueError("accepted identity rule quote mismatch")
         if (
             author["content_digest"] != case_record["content_digest"]
             or reviewer["content_digest"] != case_record["content_digest"]
@@ -4090,6 +4169,9 @@ _RESERVATION_FIELDS = frozenset(
 _PRIVATE_CASE_FIELDS = frozenset(
     {"case", "content_digest", "identity_id", "lane", "schema_version"}
 )
+_AUTHOR_COMPONENT_FIELDS = frozenset(
+    {"schema_version", "lane", "identity_id", "policy", "facts", "case_digest", "response_sha256"}
+)
 _LOCAL_PREREQUISITES = (
     "schema_valid",
     "privacy_valid",
@@ -4105,7 +4187,9 @@ _ROLE_TRANSITIONS = {
     "sealed_annotator_b": "sealed_annotator_b",
     "sealed_adjudicator": "sealed_adjudicator",
 }
-_PRIVATE_DIR_NAMES = frozenset({"private-cases", "private-control", "role-reservations"})
+_PRIVATE_DIR_NAMES = frozenset(
+    {"private-cases", "private-control", "role-reservations", "author-components"}
+)
 _RETENTION = re.compile(r"^(?:0|[1-9][0-9]{0,4})[smhd]$")
 _TOKENIZER_FILENAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _ATTESTED_REJECTED = frozenset({"unknown", "none", "null"})
@@ -4786,6 +4870,66 @@ def _case_path(root: Path, lane: str, identity_id: str) -> Path:
     return root / "private-cases" / f"{_sha256(f'{lane}:{identity_id}'.encode())}.json"
 
 
+def _components_path(root: Path, identity_id: str) -> Path:
+    return root / "author-components" / f"{_sha256(f'training:{identity_id}'.encode())}.json"
+
+
+def _validate_author_components(
+    value: Any, identity: dict[str, Any], case: dict[str, Any]
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("author components are closed")
+    _require_exact_keys(value, _AUTHOR_COMPONENT_FIELDS, name="author components")
+    if (
+        value.get("schema_version") != "v02-author-components.v1"
+        or value.get("lane") != "training"
+        or value.get("identity_id") != identity.get("slot_id")
+        or not _is_digest(value.get("case_digest"))
+        or not _is_digest(value.get("response_sha256"))
+    ):
+        raise ValueError("author components are closed")
+    if materialize_training_state(value.get("policy"), value.get("facts")) != case["state"]:
+        raise ValueError("author components state mismatch")
+    if value["case_digest"] != case_digest(case):
+        raise ValueError("author components case digest mismatch")
+    _validate_training_public_text(case)
+    return cast(dict[str, Any], value)
+
+
+def _read_author_components(root: Path, identity_id: str, case: dict[str, Any]) -> dict[str, Any]:
+    identity = _frozen_identity_index("training")[identity_id]
+    value = _read_private_json(_components_path(root, identity_id), "author components")
+    components = _validate_author_components(value, identity, case)
+    if components["identity_id"] != identity_id:
+        raise ValueError("author components identity mismatch")
+    return components
+
+
+def _store_author_components(
+    root: Path,
+    identity_id: str,
+    parsed: dict[str, Any],
+    case: dict[str, Any],
+    response_content: bytes,
+) -> None:
+    if type(response_content) is not bytes:
+        raise ValueError("author response content is closed")
+    _private_dir(root, "author-components")
+    payload = {
+        "schema_version": "v02-author-components.v1",
+        "lane": "training",
+        "identity_id": identity_id,
+        "policy": parsed["policy"],
+        "facts": parsed["facts"],
+        "case_digest": case_digest(case),
+        "response_sha256": _sha256(response_content),
+    }
+    _validate_author_components(payload, _frozen_identity_index("training")[identity_id], case)
+    _write_match_or_create(
+        _components_path(root, identity_id), payload, "author components mismatch"
+    )
+
+
 def _read_private_case(root: Path, lane: str, identity_id: str) -> dict[str, Any]:
     payload = _read_private_json(_case_path(root, lane, identity_id), "private case")
     if (
@@ -4800,7 +4944,10 @@ def _read_private_case(root: Path, lane: str, identity_id: str) -> dict[str, Any
     digest = case_digest(case)
     if payload.get("content_digest") != digest:
         raise ValueError("private case digest mismatch")
-    return {"content_digest": digest, "case": case}
+    result = {"content_digest": digest, "case": case}
+    if lane == "training":
+        result["components"] = _read_author_components(root, identity_id, case)
+    return result
 
 
 def _store_private_case(root: Path, lane: str, identity_id: str, case: dict[str, Any]) -> None:
@@ -4858,7 +5005,11 @@ def _partner_bilingual(ledger: OfflineLedger, identity_id: str) -> dict[str, Any
     stored = _read_private_case(ledger.root, "training", partner_id)
     if stored["content_digest"] != author["envelope"]["content_digest"]:
         raise ValueError("private case digest mismatch")
-    return {"source_identity_id": partner_id, "case": stored["case"]}
+    return {
+        "source_identity_id": partner_id,
+        "case": stored["case"],
+        "components": stored["components"],
+    }
 
 
 def _failure_envelope(role: str, identity_id: str, error_code: str) -> dict[str, Any]:
@@ -5352,6 +5503,8 @@ def _execute_role_locked(
         }
     if role in {"training_author", "sealed_author"}:
         case = case_from_author(parsed, ledger.plan, identity_id)
+        if role == "training_author":
+            _store_author_components(ledger.root, identity_id, parsed, case, content)
         _store_private_case(ledger.root, ledger.lane, identity_id, case)
     if case is None:
         raise ValueError("author case is unavailable")
