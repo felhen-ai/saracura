@@ -255,7 +255,9 @@ def _verify_base_inventory(base: Path, inventory_path: Path) -> tuple[str, dict[
         raise ValueError("base inventory lacks license")
     for name in names:
         if name.endswith(".safetensors.index.json"):
-            index = _json_file(base / name, label="safetensor index")
+            # Upstream bytes are pinned above, not rewritten into our receipt
+            # serialization. HF snapshots use ordinary JSON formatting.
+            index = _closed(base / name)
             weight_map = index.get("weight_map")
             if not isinstance(weight_map, dict) or not weight_map:
                 raise ValueError("safetensor index is invalid")
@@ -266,7 +268,7 @@ def _verify_base_inventory(base: Path, inventory_path: Path) -> tuple[str, dict[
 
 
 def _module_inventory(config_path: Path) -> str:
-    config = _json_file(config_path, label="base config")
+    config = _closed(config_path)
     text = config.get("text_config")
     if not isinstance(text, dict):
         raise ValueError("base config has no pinned text configuration")

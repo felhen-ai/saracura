@@ -607,3 +607,49 @@ def test_step_zero_claim_preserves_concurrent_empty_reservation(
     staging = next(target.parent.glob(".private-c1-r8-v1-*"))
     assert (staging / "claim.json").is_file()
     assert (staging / "initial-state.pt").is_file()
+
+
+def test_pinned_upstream_json_keeps_original_formatting(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    base, inventory_path = _pinned_base(tmp_path, root)
+    inventory = json.loads(inventory_path.read_bytes())
+    for name in ("config.json", "model.safetensors.index.json"):
+        path = base / name
+        value = json.loads(path.read_bytes())
+        raw = json.dumps(value, indent=2).encode() + b"\n"
+        path.chmod(0o600)
+        path.write_bytes(raw)
+        path.chmod(0o400)
+        for entry in inventory["inventory"]:
+            if entry["name"] == name:
+                entry.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    _write(inventory_path, inventory)
+    original = {
+        name: (base / name).read_bytes() for name in ("config.json", "model.safetensors.index.json")
+    }
+    private._verify_base_inventory(base, inventory_path)
+    assert len(private._module_inventory(base / "config.json")) == 64
+    assert all((base / name).read_bytes() == raw for name, raw in original.items())
+    path = base / "config.json"
+    path.chmod(0o600)
+    path.write_bytes(original["config.json"] + b" ")
+    path.chmod(0o400)
+    with pytest.raises(ValueError, match="base source bytes changed"):
+        private._verify_base_inventory(base, inventory_path)
+
+
+def test_upstream_json_rejects_duplicate_keys(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    config.write_text('{"text_config": {}, "text_config": {}}')
+    with pytest.raises(ValueError, match="invalid JSON"):
+        private._module_inventory(config)
+
+
+def test_private_inventory_still_requires_canonical_json(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    base, inventory = _pinned_base(tmp_path, root)
+    inventory.write_text(json.dumps(json.loads(inventory.read_bytes()), indent=2))
+    with pytest.raises(ValueError, match="base inventory must contain canonical JSON"):
+        private._verify_base_inventory(base, inventory)
