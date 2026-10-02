@@ -316,7 +316,7 @@ def test_plan_training_creates_exact_counts(tmp_path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema_version"] == "v02-plan.v1"
     assert data["lane"] == "training"
-    assert data["namespace"] == "saracura-v02-text-contract-author-v1"
+    assert data["namespace"] == "saracura-v02-facts-policy-author-c9-v1"
     assert data["seed"] == 20260929
     slot_ids = data["slot_ids"]
     assert len(slot_ids) == 1600
@@ -985,20 +985,20 @@ def _commit_micro_pass(ledger: v02_corpus.OfflineLedger) -> list[int]:
     indices = [index for index, slot in enumerate(slots) if slot["slot_id"] in selected]
     for index in indices:
         slot = slots[index]
-        case = _case(cast(int, slot["option_count"]))
+        case, author = _store_author_fixture(
+            ledger.root, plan, slot, state="Fictional target label semantic state"
+        )
         digest = v02_corpus.case_digest(case)
-        author = _training_envelope(plan, "training_author", index=index)
         reviewer = _training_envelope(plan, "independent_reviewer", index=index)
         author["content_digest"] = digest
-        cast(dict[str, Any], author["construction"])["rule_quote"] = "Fictional"
         reviewer["content_digest"] = digest
         v02_corpus._store_private_case(ledger.root, "training", cast(str, slot["slot_id"]), case)
         assert ledger.commit("training_author", author)
     for index in indices:
         slot = slots[index]
-        case = _case(cast(int, slot["option_count"]))
         reviewer = _training_envelope(plan, "independent_reviewer", index=index)
-        reviewer["content_digest"] = v02_corpus.case_digest(case)
+        stored = v02_corpus._read_private_case(ledger.root, "training", cast(str, slot["slot_id"]))
+        reviewer["content_digest"] = stored["content_digest"]
         assert ledger.commit("training_reviewer", reviewer)
     assert v02_corpus.reduce_grounding_micro_pilot(plan, ledger.events())["status"] == "PASS"
     return indices
@@ -1012,11 +1012,9 @@ def test_c7a_ledger_rebinds_author_construction_when_private_case_is_available(
     slot = cast(list[dict[str, Any]], plan["slots"])[0]
     identity_id = cast(str, slot["slot_id"])
     ledger = v02_corpus.OfflineLedger(plan, tmp_path)
-    case = _case(cast(int, slot["option_count"]), state="Stored policy permits fictional action")
-    author = _training_envelope(plan, "training_author")
-    author["content_digest"] = v02_corpus.case_digest(case)
-    construction = cast(dict[str, Any], author["construction"])
-    construction["rule_quote"] = "Stored policy"
+    case, author = _store_author_fixture(
+        ledger.root, plan, slot, state="Stored policy permits fictional action"
+    )
     v02_corpus._store_private_case(ledger.root, "training", identity_id, case)
     assert ledger.commit("training_author", author)
     assert ledger.events()
@@ -1029,10 +1027,10 @@ def test_c7a_ledger_rebinds_author_construction_when_private_case_is_available(
     event_path.write_bytes(canonical_json_bytes(event) + b"\n")
     os.chmod(event_path, 0o600)
     assert v02_corpus.reduce_training(plan, [event])["resolved"] == 0
-    with pytest.raises(ValueError, match="rule_quote must occur in case state"):
+    with pytest.raises(ValueError, match="rule quote differs from components policy"):
         ledger.events()
 
-    envelope["construction"]["rule_quote"] = "Stored policy"
+    envelope["construction"]["rule_quote"] = "Fictional policy."
     envelope["content_digest"] = "d" * 64
     event["envelope_digest"] = v02_corpus._sha256(canonical_json_bytes(event["envelope"]))
     event_path.write_bytes(canonical_json_bytes(event) + b"\n")
@@ -1052,18 +1050,8 @@ def test_c7a_ledger_rebinds_author_construction_when_private_case_is_available(
 def test_c7a_author_construction_is_closed_and_uses_unicode_code_points() -> None:
     plan = v02_corpus._generate_training_plan()
     slot = cast(list[dict[str, Any]], plan["slots"])[0]
-    state = "é" * 240
-    response: dict[str, Any] = {
-        **_case(cast(int, slot["option_count"]), state=state),
-        "answer": f"option_{slot['gold_position']}",
-        "construction": _construction(slot, state, f"option_{slot['gold_position']}"),
-        "semantic": {
-            "scenario_code": slot["scenario_code"],
-            "criterion_roles": slot["criterion_roles"],
-        },
-        **_judgments(),
-    }
-    response["construction"]["rule_quote"] = state
+    response = _author_response(slot, state="Fictional facts.")
+    response["policy"] = "é" * 239 + "."
     response["construction"]["option_checks"][0]["reason"] = "é" * 160
     escaped = json.dumps(response, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
     assert v02_corpus.parse_role_response(escaped, plan, slot["slot_id"], "training_author")
@@ -1071,9 +1059,9 @@ def test_c7a_author_construction_is_closed_and_uses_unicode_code_points() -> Non
     missing = json.loads(json.dumps(response))
     missing.pop("construction")
     mutations.append(missing)
-    missing_quote = json.loads(json.dumps(response))
-    missing_quote["construction"].pop("rule_quote")
-    mutations.append(missing_quote)
+    missing_policy = json.loads(json.dumps(response))
+    missing_policy.pop("policy")
+    mutations.append(missing_policy)
     extra = json.loads(json.dumps(response))
     extra["construction"]["extra"] = True
     mutations.append(extra)
@@ -1092,22 +1080,23 @@ def test_c7a_author_construction_is_closed_and_uses_unicode_code_points() -> Non
     reordered["construction"]["option_checks"].reverse()
     mutations.append(reordered)
     too_long = json.loads(json.dumps(response))
-    too_long["construction"]["rule_quote"] = "é" * 241
+    too_long["policy"] = "é" * 240 + "."
     mutations.append(too_long)
     reason_too_long = json.loads(json.dumps(response))
     reason_too_long["construction"]["option_checks"][0]["reason"] = "é" * 161
     mutations.append(reason_too_long)
-    out_of_state = json.loads(json.dumps(response))
-    out_of_state["construction"]["rule_quote"] = "different policy"
-    mutations.append(out_of_state)
-    blank_quote = json.loads(json.dumps(response))
-    blank_quote["construction"]["rule_quote"] = " "
-    mutations.append(blank_quote)
-    control_quote = json.loads(json.dumps(response))
-    control_quote["construction"]["rule_quote"] = "\u0001"
-    mutations.append(control_quote)
-    non_nfc_quote = json.loads(json.dumps(response))
-    non_nfc_quote["construction"]["rule_quote"] = "e\u0301"
+    missing_facts = json.loads(json.dumps(response))
+    missing_facts.pop("facts")
+    mutations.append(missing_facts)
+    bad_punctuation = json.loads(json.dumps(response))
+    bad_punctuation["policy"] = "different policy"
+    mutations.append(bad_punctuation)
+    blank_policy = json.loads(json.dumps(response))
+    blank_policy["policy"] = " "
+    mutations.append(blank_policy)
+    control_policy = json.loads(json.dumps(response))
+    control_policy["policy"] = "\u0001"
+    mutations.append(control_policy)
     blank_reason = json.loads(json.dumps(response))
     blank_reason["construction"]["option_checks"][0]["reason"] = " "
     mutations.append(blank_reason)
@@ -1131,15 +1120,19 @@ def test_c7a_author_construction_is_closed_and_uses_unicode_code_points() -> Non
     mutations.append(support_answer_mismatch)
     for invalid in mutations:
         with pytest.raises(ValueError):
-            v02_corpus.parse_role_response(_raw(invalid), plan, slot["slot_id"], "training_author")
-    for invalid in (non_nfc_quote, non_nfc_reason):
+            parsed = v02_corpus.parse_role_response(
+                _raw(invalid), plan, slot["slot_id"], "training_author"
+            )
+            v02_corpus.case_from_author(parsed, plan, slot["slot_id"])
+    for invalid in (non_nfc_reason,):
         with pytest.raises(ValueError):
-            v02_corpus.parse_role_response(
+            parsed = v02_corpus.parse_role_response(
                 json.dumps(invalid, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
                 plan,
                 slot["slot_id"],
                 "training_author",
             )
+            v02_corpus.case_from_author(parsed, plan, slot["slot_id"])
 
 
 def _training_author_text_schemas(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1156,10 +1149,10 @@ def _training_author_text_schemas(schema: dict[str, Any]) -> dict[str, dict[str,
         checks["items"] if checks.get("items") is not False else checks["prefixItems"][0],
     )
     return {
-        "state": cast(dict[str, Any], properties["state"]),
+        "policy": cast(dict[str, Any], properties["policy"]),
+        "facts": cast(dict[str, Any], properties["facts"]),
         "question": cast(dict[str, Any], properties["question"]),
         "description": cast(dict[str, Any], option_item["properties"]["description"]),
-        "rule_quote": cast(dict[str, Any], construction["rule_quote"]),
         "reason": cast(dict[str, Any], check_item["properties"]["reason"]),
     }
 
@@ -1172,38 +1165,41 @@ def test_c8_training_author_patterns_restrict_only_the_generation_subset() -> No
         v02_corpus.native_decoder_schema("training_author", slot)
     )
     unbounded_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]+$'
-    quote_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$'
+    native_policy_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]{0,239}[.!?]$'
     reason_pattern = r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,160}$'
     assert {name: schema["pattern"] for name, schema in full.items()} == {
-        "state": unbounded_pattern,
+        "policy": native_policy_pattern,
+        "facts": unbounded_pattern,
         "question": unbounded_pattern,
         "description": unbounded_pattern,
-        "rule_quote": quote_pattern,
         "reason": reason_pattern,
     }
     assert {name: schema["pattern"] for name, schema in native.items()} == {
-        "state": unbounded_pattern,
+        "policy": native_policy_pattern,
+        "facts": unbounded_pattern,
         "question": unbounded_pattern,
         "description": unbounded_pattern,
-        "rule_quote": quote_pattern,
         "reason": reason_pattern,
     }
-    for schema in full.values():
+    for name, schema in full.items():
+        if name == "policy":
+            continue
         assert schema["minLength"] == 1
-    assert full["rule_quote"]["maxLength"] == 240
+    assert full["policy"]["minLength"] == 1 and full["policy"]["maxLength"] == 240
     assert full["reason"]["maxLength"] == 160
     for schema in native.values():
         assert "minLength" not in schema and "maxLength" not in schema
 
     valid = json.loads(json.dumps("Decisão PT-BR and English l'option café 🧭"))
     forbidden = [chr(codepoint) for codepoint in (*range(0x00, 0x20), *range(0x7F, 0xA0))]
-    for schema in (*full.values(), *native.values()):
+    for name, schema in (*full.items(), *native.items()):
         pattern = cast(str, schema["pattern"])
-        assert re.fullmatch(pattern, valid)
+        candidate = valid + "." if name == "policy" else valid
+        assert re.fullmatch(pattern, candidate)
         for character in [*forbidden, '"', "\\"]:
             assert re.fullmatch(pattern, json.loads(json.dumps(character))) is None
-    assert re.fullmatch(quote_pattern, "é" * 240)
-    assert re.fullmatch(quote_pattern, "é" * 241) is None
+    assert re.fullmatch(native_policy_pattern, "é" * 239 + ".")
+    assert re.fullmatch(native_policy_pattern, "é" * 240 + ".") is None
     assert re.fullmatch(reason_pattern, "é" * 160)
     assert re.fullmatch(reason_pattern, "é" * 161) is None
 
@@ -1211,30 +1207,16 @@ def test_c8_training_author_patterns_restrict_only_the_generation_subset() -> No
 def test_c8_final_training_validator_still_accepts_quotes_and_backslashes() -> None:
     plan = v02_corpus._generate_training_plan()
     slot = cast(list[dict[str, Any]], plan["slots"])[0]
-    answer = f"option_{slot['gold_position']}"
     state = 'Policy says "approve" only through \\review.'
-    response: dict[str, Any] = {
-        **_case(cast(int, slot["option_count"]), state=state),
-        "answer": answer,
-        "construction": _construction(slot, state, answer),
-        "semantic": {
-            "scenario_code": slot["scenario_code"],
-            "criterion_roles": slot["criterion_roles"],
-        },
-        **_judgments(),
-    }
-    response["question"] = 'Which "action" follows \\review?'
-    for index, option in enumerate(cast(list[dict[str, str]], response["options"])):
+    case = _case(cast(int, slot["option_count"]), state=state)
+    case["question"] = 'Which "action" follows \\review?'
+    for index, option in enumerate(cast(list[dict[str, str]], case["options"])):
         option["description"] = f'Use "approved" \\review path {index}.'
-    response["construction"]["rule_quote"] = state
-    for check in cast(list[dict[str, Any]], response["construction"]["option_checks"]):
-        check["reason"] = 'Checked "policy" at \\review.'
-    assert v02_corpus.parse_role_response(
-        _raw(cast(dict[str, object], response)),
-        plan,
-        slot["slot_id"],
-        "training_author",
-    )
+    assert v02_corpus.validate_case(case, slot) == case
+    raw = _author_response(slot)
+    raw["policy"] = state
+    with pytest.raises(ValueError, match="single-paragraph"):
+        v02_corpus.parse_role_response(_raw(raw), plan, slot["slot_id"], "training_author")
 
 
 def test_c7a_author_envelopes_require_v2_but_failure_v1_stays_valid(tmp_path: Path) -> None:
@@ -1257,20 +1239,8 @@ def test_c7a_author_envelopes_require_v2_but_failure_v1_stays_valid(tmp_path: Pa
 def test_c7a_proof_stays_outside_case_and_blind_role_contracts() -> None:
     plan = v02_corpus._generate_training_plan()
     slot = cast(list[dict[str, Any]], plan["slots"])[0]
-    case = _case(cast(int, slot["option_count"]), state="Policy allows only fictional action")
-    parsed: dict[str, Any] = {
-        **case,
-        "answer": f"option_{slot['gold_position']}",
-        "construction": _construction(
-            slot, cast(str, case["state"]), f"option_{slot['gold_position']}"
-        ),
-        "semantic": {
-            "scenario_code": slot["scenario_code"],
-            "criterion_roles": slot["criterion_roles"],
-        },
-        **_judgments(),
-    }
-    parsed["construction"]["rule_quote"] = "Policy allows only fictional action"
+    parsed = _author_response(slot, state="Policy allows only fictional action")
+    case = v02_corpus.case_from_author(parsed, plan, cast(str, slot["slot_id"]))
     assert v02_corpus.case_from_author(parsed, plan, cast(str, slot["slot_id"])) == case
     author = v02_corpus.role_envelope(
         parsed, plan, cast(str, slot["slot_id"]), "training_author", case, _all_gates()
@@ -1529,11 +1499,11 @@ def test_c8_frozen_non_author_contracts_and_allocations_match_source643(tmp_path
     baseline_training = baseline._generate_training_plan()
     assert current_plan == baseline_plan
     assert v02_corpus._ROLE_SYSTEM_TEMPLATE == baseline._ROLE_SYSTEM_TEMPLATE
-    assert v02_corpus.ROLE_TEMPLATES["training_author"] == (
-        baseline.ROLE_TEMPLATES["training_author"]
-        + " Authoring fields must use nonempty single-paragraph NFC Unicode text without "
-        "category Cc characters, double quotes, or backslashes."
+    assert (
+        v02_corpus.ROLE_TEMPLATES["training_author"] != baseline.ROLE_TEMPLATES["training_author"]
     )
+    assert "policy" in v02_corpus.ROLE_TEMPLATES["training_author"]
+    assert "facts" in v02_corpus.ROLE_TEMPLATES["training_author"]
     frozen_training_fields = (
         "schema_version",
         "lane",
@@ -1973,9 +1943,8 @@ def _judgments() -> dict[str, bool]:
     }
 
 
-def _construction(slot: Mapping[str, Any], state: str, answer: str) -> dict[str, Any]:
+def _construction(slot: Mapping[str, Any], answer: str) -> dict[str, Any]:
     return {
-        "rule_quote": state.split()[0],
         "option_checks": [
             {
                 "option_id": f"option_{index}",
@@ -1987,8 +1956,51 @@ def _construction(slot: Mapping[str, Any], state: str, answer: str) -> dict[str,
     }
 
 
+def _author_response(
+    slot: Mapping[str, Any], *, state: str = "Fictional target label semantic state"
+) -> dict[str, Any]:
+    """Build an actual C9 raw author response; case state is producer-derived."""
+    answer = f"option_{slot['gold_position']}"
+    case = _case(cast(int, slot["option_count"]))
+    return {
+        "policy": "Fictional policy.",
+        "facts": state,
+        "question": case["question"],
+        "options": case["options"],
+        "answer": answer,
+        "construction": _construction(slot, answer),
+        "semantic": {
+            "scenario_code": slot["scenario_code"],
+            "criterion_roles": slot["criterion_roles"],
+        },
+        **_judgments(),
+    }
+
+
 def _raw(value: dict[str, object]) -> bytes:
     return canonical_json_bytes(cast(JsonValue, value))
+
+
+def _store_author_fixture(
+    root: Path, plan: dict[str, object], slot: Mapping[str, Any], *, state: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Persist C9's genuine raw response components before its derived case/event."""
+    identity_id = cast(str, slot["slot_id"])
+    raw = _author_response(slot, state=state)
+    content = _raw(cast(dict[str, object], raw))
+    case = {
+        "state": v02_corpus.materialize_training_state(raw["policy"], raw["facts"]),
+        "question": raw["question"],
+        "options": raw["options"],
+    }
+    # The envelope entry independently parses/validates the complete raw
+    # response and compares its materialized case. Persist genuine components
+    # before the caller writes any derived case or event.
+    envelope = v02_corpus.role_envelope(
+        raw, plan, identity_id, "training_author", case, _all_gates()
+    )
+    v02_corpus._store_author_components(root, identity_id, raw, case, content)
+    return case, envelope
 
 
 def test_c1_prompt_contract_is_deterministic_and_six_roles_are_bound() -> None:
@@ -2018,19 +2030,8 @@ def test_c1_prompt_contract_is_deterministic_and_six_roles_are_bound() -> None:
 def test_c1_author_reviewer_annotator_and_adjudicator_round_trip() -> None:
     training = v02_corpus._generate_training_plan()
     slot = training["slots"][0]
-    training_case = _case(slot["option_count"])
-    author_response = {
-        **training_case,
-        "answer": f"option_{slot['gold_position']}",
-        "construction": _construction(
-            slot, cast(str, training_case["state"]), f"option_{slot['gold_position']}"
-        ),
-        "semantic": {
-            "scenario_code": slot["scenario_code"],
-            "criterion_roles": slot["criterion_roles"],
-        },
-        **_judgments(),
-    }
+    author_response = _author_response(slot)
+    training_case = v02_corpus.case_from_author(author_response, training, slot["slot_id"])
     parsed_author = v02_corpus.parse_role_response(
         _raw(author_response), training, slot["slot_id"], "training_author"
     )
@@ -2094,6 +2095,91 @@ def test_c1_author_reviewer_annotator_and_adjudicator_round_trip() -> None:
     )
 
 
+def test_c9_public_response_boundaries_validate_once_and_reject_mutated_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training = v02_corpus._generate_training_plan()
+    slot = training["slots"][0]
+    author_response = _author_response(slot)
+    author_case = v02_corpus.case_from_author(author_response, training, slot["slot_id"])
+    author_parsed = v02_corpus.parse_role_response(
+        _raw(author_response), training, slot["slot_id"], "training_author"
+    )
+    reviewer_response = {
+        "answer": author_response["answer"],
+        "semantic": author_response["semantic"],
+        **_judgments(),
+    }
+    reviewer_parsed = v02_corpus.parse_role_response(
+        _raw(reviewer_response), training, slot["slot_id"], "independent_reviewer"
+    )
+    sealed = v02_corpus._generate_sealed_plan()
+    sealed_identity = sealed["identities"][0]
+    sealed_case = _case(sealed_identity["option_count"])
+    sealed_response = {**sealed_case, "target": "option_0", **_judgments()}
+    sealed_parsed = v02_corpus.parse_role_response(
+        _raw(sealed_response), sealed, sealed_identity["identity_id"], "sealed_author"
+    )
+
+    original = v02_corpus._validate_frozen_plan
+    calls = 0
+
+    def counting_guard(plan_data: dict[str, Any]) -> None:
+        nonlocal calls
+        calls += 1
+        original(plan_data)
+
+    monkeypatch.setattr(v02_corpus, "_validate_frozen_plan", counting_guard)
+
+    for _ in range(2):
+        v02_corpus.parse_role_response(
+            _raw(author_response), training, slot["slot_id"], "training_author"
+        )
+    assert calls == 2
+
+    # Reusing this exact mutable object after a successful call must not turn
+    # the canonical guard into a cross-call cache.
+    training["slots"][0]["scenario_code"] = "tampered"
+    with pytest.raises(ValueError, match="frozen"):
+        v02_corpus.parse_role_response(
+            _raw(author_response), training, slot["slot_id"], "training_author"
+        )
+    training["slots"][0]["scenario_code"] = author_response["semantic"]["scenario_code"]
+
+    calls = 0
+    assert v02_corpus.case_from_author(author_response, training, slot["slot_id"]) == author_case
+    assert calls == 1
+
+    for parsed, plan, identity_id, role, case in (
+        (author_parsed, training, slot["slot_id"], "training_author", author_case),
+        (reviewer_parsed, training, slot["slot_id"], "independent_reviewer", author_case),
+        (sealed_parsed, sealed, sealed_identity["identity_id"], "sealed_author", sealed_case),
+    ):
+        calls = 0
+        v02_corpus.role_envelope(parsed, plan, identity_id, role, case, _all_gates())
+        assert calls == 1
+
+    for entry in ("parse", "case", "envelope"):
+        mutated = json.loads(json.dumps(training))
+        mutated["slots"][0]["scenario_code"] = "tampered"
+        with pytest.raises(ValueError, match="frozen"):
+            if entry == "parse":
+                v02_corpus.parse_role_response(
+                    _raw(author_response), mutated, slot["slot_id"], "training_author"
+                )
+            elif entry == "case":
+                v02_corpus.case_from_author(author_response, mutated, slot["slot_id"])
+            else:
+                v02_corpus.role_envelope(
+                    author_parsed,
+                    mutated,
+                    slot["slot_id"],
+                    "training_author",
+                    author_case,
+                    _all_gates(),
+                )
+
+
 def test_c1_blind_requests_and_closed_json_fail_closed() -> None:
     training = v02_corpus._generate_training_plan()
     slot = training["slots"][0]
@@ -2126,7 +2212,7 @@ def test_c1_blind_requests_and_closed_json_fail_closed() -> None:
         v02_corpus.validate_case(bad_unicode, slot)
 
 
-def test_c1_bilingual_source_and_gate_binding_are_constrained() -> None:
+def test_c1_bilingual_source_and_gate_binding_are_constrained(tmp_path: Path) -> None:
     training = v02_corpus._generate_training_plan()
     slots = training["slots"]
     destination = next(slot for slot in slots if slot["bilingual_pair_id"] is not None)
@@ -2136,12 +2222,20 @@ def test_c1_bilingual_source_and_gate_binding_are_constrained() -> None:
         if slot["family_id"] == destination["family_id"]
         and slot["slot_id"] != destination["slot_id"]
     )
-    source_case = _case(source["option_count"])
+    _mkdir_0700(tmp_path)
+    source_case, _author = _store_author_fixture(
+        tmp_path, training, source, state="Fictional bilingual source facts."
+    )
+    source_components = v02_corpus._read_author_components(tmp_path, source["slot_id"], source_case)
     request = v02_corpus.role_request(
         training,
         destination["slot_id"],
         "training_author",
-        bilingual_source={"source_identity_id": source["slot_id"], "case": source_case},
+        bilingual_source={
+            "source_identity_id": source["slot_id"],
+            "case": source_case,
+            "components": source_components,
+        },
     )
     assert source["slot_id"] in request[1]["content"]
     with pytest.raises(ValueError, match="distinct identity"):
@@ -2149,21 +2243,14 @@ def test_c1_bilingual_source_and_gate_binding_are_constrained() -> None:
             training,
             destination["slot_id"],
             "training_author",
-            bilingual_source={"source_identity_id": destination["slot_id"], "case": source_case},
+            bilingual_source={
+                "source_identity_id": destination["slot_id"],
+                "case": source_case,
+                "components": source_components,
+            },
         )
-    case = _case(destination["option_count"])
-    response = {
-        **case,
-        "answer": f"option_{destination['gold_position']}",
-        "construction": _construction(
-            destination, cast(str, case["state"]), f"option_{destination['gold_position']}"
-        ),
-        "semantic": {
-            "scenario_code": destination["scenario_code"],
-            "criterion_roles": destination["criterion_roles"],
-        },
-        **_judgments(),
-    }
+    response = _author_response(destination)
+    case = v02_corpus.case_from_author(response, training, destination["slot_id"])
     parsed = v02_corpus.parse_role_response(
         _raw(response), training, destination["slot_id"], "training_author"
     )
@@ -2281,15 +2368,15 @@ def test_c5a_native_response_formats_are_closed_and_do_not_force_blind_judgments
         }
         prompt_construction = prompt_schema["properties"]["construction"]
         native_construction = schema["properties"]["construction"]
-        assert prompt_construction["properties"]["rule_quote"] == {
+        assert prompt_schema["properties"]["policy"] == {
             "type": "string",
             "minLength": 1,
             "maxLength": 240,
-            "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$',
+            "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{0,239}[.!?]$',
         }
-        assert native_construction["properties"]["rule_quote"] == {
+        assert schema["properties"]["policy"] == {
             "type": "string",
-            "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{1,240}$',
+            "pattern": r'^[^\u0000-\u001F\u007F-\u009F"\\]{0,239}[.!?]$',
         }
         for construction_schema in (prompt_construction, native_construction):
             checks = construction_schema["properties"]["option_checks"]
@@ -2554,11 +2641,17 @@ def test_c1_case_limits_option_ids_and_descriptions() -> None:
         v02_corpus.validate_case(case, identity)
 
 
-def test_c1_bilingual_context_rejects_other_families_and_blind_roles() -> None:
+def test_c1_bilingual_context_rejects_other_families_and_blind_roles(tmp_path: Path) -> None:
     plan = v02_corpus._generate_training_plan()
     destination = next(row for row in plan["slots"] if row["bilingual_pair_id"] is not None)
     source = next(row for row in plan["slots"] if row["family_id"] != destination["family_id"])
-    context = {"source_identity_id": source["slot_id"], "case": _case(source["option_count"])}
+    _mkdir_0700(tmp_path)
+    case, _author = _store_author_fixture(tmp_path, plan, source, state="Foreign source facts.")
+    context = {
+        "source_identity_id": source["slot_id"],
+        "case": case,
+        "components": v02_corpus._read_author_components(tmp_path, source["slot_id"], case),
+    }
     with pytest.raises(ValueError, match="family"):
         v02_corpus.role_request(
             plan, destination["slot_id"], "training_author", bilingual_source=context
@@ -3058,24 +3151,14 @@ def _sealer_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str
     events: list[dict[str, Any]] = []
     for index, slot in enumerate(cast(list[dict[str, Any]], plan["slots"])):
         identity_id = cast(str, slot["slot_id"])
-        case = {
-            "state": f"Fictional policy scenario {index}",
-            "question": f"Which fictional action applies to scenario {index}?",
-            "options": [
-                {
-                    "id": f"option_{option_index}",
-                    "description": f"Fictional scenario {index} action {option_index}",
-                }
-                for option_index in range(cast(int, slot["option_count"]))
-            ],
-        }
+        case, author = _store_author_fixture(
+            root, plan, slot, state=f"Fictional policy scenario {index}"
+        )
         digest = v02_corpus.case_digest(case)
         v02_corpus._store_private_case(root, "training", identity_id, case)
-        author = _training_envelope(plan, "training_author", index=index)
         reviewer = _training_envelope(plan, "independent_reviewer", index=index)
         author["content_digest"] = digest
         reviewer["content_digest"] = digest
-        cast(dict[str, Any], author["construction"])["rule_quote"] = "Fictional"
         for transition, envelope in (
             ("training_author", author),
             ("training_reviewer", reviewer),
@@ -3498,17 +3581,7 @@ def _training_content(
     state: str = "Fictional target label semantic state",
     fictionality: bool = True,
 ) -> str:
-    case = _case(cast(int, slot["option_count"]), state=state)
-    payload: dict[str, Any] = {
-        **case,
-        "answer": f"option_{slot['gold_position']}",
-        "construction": _construction(slot, state, f"option_{slot['gold_position']}"),
-        "semantic": {
-            "scenario_code": slot["scenario_code"],
-            "criterion_roles": slot["criterion_roles"],
-        },
-        **_judgments(),
-    }
+    payload = _author_response(slot, state=state)
     payload["fictionality_valid"] = fictionality
     return json.dumps(payload)
 
@@ -3914,7 +3987,7 @@ def test_c2_six_roles_dispatch_once_and_resume_without_network(
     assert reviewed["dispatch"] is True and len(reviewer.posts()) == 1
     context = _message_context(reviewer.posts()[0])
     assert "gold_position" not in context and "target" not in context and "answer" not in context
-    assert context["case"]["state"] == "Fictional target label semantic state"
+    assert context["case"]["state"] == "Fictional policy. Fictional target label semantic state"
     author_envelope = cast(
         dict[str, Any], ledger.by_identity(identity_id)["training_author"]["envelope"]
     )
@@ -4338,7 +4411,7 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
     context = _message_context(second.posts()[0])
     source = cast(dict[str, Any], context["bilingual_source"])
     assert source["source_identity_id"] == left["slot_id"]
-    assert cast(dict[str, Any], source["case"])["state"] == shared_state
+    assert cast(dict[str, Any], source["case"])["state"] == f"Fictional policy. {shared_state}"
     right_envelope = cast(
         dict[str, Any],
         ledger.by_identity(cast(str, right["slot_id"]))["training_author"]["envelope"],
@@ -4346,7 +4419,7 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
     assert right_envelope["gates"]["duplicate_valid"] is False
     history = v02_corpus._same_lane_history(ledger, cast(str, right["slot_id"]))
     repeated = v02_corpus.local_case_gates(
-        _case_any(cast(int, right["option_count"]), state=shared_state),
+        _case_any(cast(int, right["option_count"]), state=f"Fictional policy. {shared_state}"),
         right,
         renderer,
         tokenizer,
