@@ -3896,7 +3896,7 @@ def test_c2_six_roles_dispatch_once_and_resume_without_network(
     assert reviewed["dispatch"] is True and len(reviewer.posts()) == 1
     context = _message_context(reviewer.posts()[0])
     assert "gold_position" not in context and "target" not in context and "answer" not in context
-    assert context["case"]["state"] == "Fictional target label semantic state"
+    assert context["case"]["state"] == "Fictional policy. Fictional target label semantic state"
     author_envelope = cast(
         dict[str, Any], ledger.by_identity(identity_id)["training_author"]["envelope"]
     )
@@ -4320,7 +4320,7 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
     context = _message_context(second.posts()[0])
     source = cast(dict[str, Any], context["bilingual_source"])
     assert source["source_identity_id"] == left["slot_id"]
-    assert cast(dict[str, Any], source["case"])["state"] == shared_state
+    assert cast(dict[str, Any], source["case"])["state"] == f"Fictional policy. {shared_state}"
     right_envelope = cast(
         dict[str, Any],
         ledger.by_identity(cast(str, right["slot_id"]))["training_author"]["envelope"],
@@ -4328,7 +4328,7 @@ def test_c2_store_history_case_drift_and_binding_drift_reject_replay(
     assert right_envelope["gates"]["duplicate_valid"] is False
     history = v02_corpus._same_lane_history(ledger, cast(str, right["slot_id"]))
     repeated = v02_corpus.local_case_gates(
-        _case_any(cast(int, right["option_count"]), state=shared_state),
+        _case_any(cast(int, right["option_count"]), state=f"Fictional policy. {shared_state}"),
         right,
         renderer,
         tokenizer,
