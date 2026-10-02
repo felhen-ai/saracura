@@ -470,3 +470,97 @@ def test_fresh_bf16_base_preserves_actual_peft_fp32_adapter_inventory(tmp_path: 
     assert receipt["precision"] == "bf16"
     assert receipt["functional_effect_verified"] is True
     assert receipt["matched_tensor_count"] == 6
+
+
+def test_interrupted_export_and_final_publish_can_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    torch: Any = pytest.importorskip("torch")
+    transformers: Any = pytest.importorskip("transformers")
+    peft: Any = pytest.importorskip("peft")
+    safetensors: Any = pytest.importorskip("safetensors.torch")
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    license_file = private / "license"
+    license_file.write_text("self-authored test license")
+    adapter, head = _components(torch, transformers, peft)
+    result = _train(torch, peft, adapter, head)
+    kwargs = dict(
+        work=private,
+        adapter=adapter,
+        pointer_head=head,
+        metrics=_metrics(result),
+        admission=_admission(),
+        config={"adapter_name": "default", "lora_rank": 2, "lora_alpha": 4, "head_dim": 8},
+        licenses={"student": license_file},
+        torch=torch,
+        safetensors=safetensors,
+    )
+    create = checkpoint._create_json
+
+    def interrupt_export(path: Path, value: dict[str, Any]) -> None:
+        if path.name == "export.json":
+            raise InterruptedError("simulated interruption before export publication")
+        create(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(checkpoint, "_create_json", interrupt_export)
+        with pytest.raises(InterruptedError):
+            checkpoint.export_private_checkpoint(**kwargs)
+    assert not (private / "export").exists()
+    preserved = (private / "training-result.json").read_bytes()
+    assert list(private.glob(".private-export-*"))
+    checkpoint.export_private_checkpoint(**kwargs)
+    assert (private / "training-result.json").read_bytes() == preserved
+    receipt = checkpoint.fresh_reload_proof(
+        export=private / "export",
+        factory=lambda: _components(torch, transformers, peft),
+        samples=_rows()[:2],
+        dev_rows=_rows()[2:],
+        torch=torch,
+        safetensors=safetensors,
+        expected_tensor_count=6,
+    )
+
+    def interrupt_final(path: Path, value: dict[str, Any]) -> None:
+        if path.name == "checkpoint.json":
+            raise InterruptedError("simulated interruption before final publication")
+        create(path, value)
+
+    final = private / "final"
+    with monkeypatch.context() as patch:
+        patch.setattr(checkpoint, "_create_json", interrupt_final)
+        with pytest.raises(InterruptedError):
+            checkpoint.publish_final_checkpoint(
+                export=private / "export", final=final, reload_receipt=receipt
+            )
+    assert not final.exists()
+    assert list(private.glob(".private-final-*"))
+    published = checkpoint.publish_final_checkpoint(
+        export=private / "export", final=final, reload_receipt=receipt
+    )
+    assert checkpoint.verify_final_checkpoint(final) == published
+
+
+@pytest.mark.parametrize("name", ["export", "final"])
+def test_atomic_checkpoint_publication_preserves_racing_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    (staging / "complete.json").write_text("{}")
+    target = tmp_path / name
+    publish = checkpoint._publish_directory_exclusively
+    inode: list[int] = []
+
+    def race(source: Path, destination: Path) -> None:
+        destination.mkdir(mode=0o700)
+        inode.append(destination.stat().st_ino)
+        publish(source, destination)
+
+    monkeypatch.setattr(checkpoint, "_publish_directory_exclusively", race)
+    with pytest.raises(FileExistsError):
+        checkpoint._publish_complete_directory(staging, target)
+    assert target.stat().st_ino == inode[0]
+    assert not list(target.iterdir())
+    assert (staging / "complete.json").read_text() == "{}"

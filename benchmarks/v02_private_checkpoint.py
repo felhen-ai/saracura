@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from benchmarks import v02_training
+from benchmarks.v02_private_training import (
+    _publish_directory_exclusively as _publish_directory_exclusively,
+)
 from saracura.contracts import Answer, DecisionResponse, ModelReference, Usage
 from saracura.serialization import canonical_json_bytes
 
@@ -369,6 +372,25 @@ def _metrics_result(metrics: dict[str, Any], exported: str) -> dict[str, Any]:
     return result
 
 
+def _publish_complete_directory(staging: Path, target: Path) -> None:
+    """Publish fully fsynced private assets without replacing a reservation."""
+    for directory in [
+        *sorted((p for p in staging.rglob("*") if p.is_dir()), reverse=True),
+        staging,
+    ]:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    _publish_directory_exclusively(staging, target)
+    fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def export_private_checkpoint(
     *,
     work: Path,
@@ -410,7 +432,9 @@ def export_private_checkpoint(
         raise ValueError("admission is not a verified private admission")
     export_config = _require_closed_config(config)
     learned = _learned_tensors(adapter, pointer_head)
-    export.mkdir(mode=0o700)
+    target = export
+    export = Path(tempfile.mkdtemp(prefix=".private-export-", dir=work))
+    export.chmod(0o700)
     try:
         adapter_tensors = {
             name: value for name, value in learned.items() if not name.startswith("pointer_head.")
@@ -444,7 +468,12 @@ def export_private_checkpoint(
             [item for item in inventory if item["path"].endswith(".safetensors")]
         )
         result = _metrics_result(metrics, trainable_digest)
-        _create_json(work / "training-result.json", result)
+        result_path = work / "training-result.json"
+        if result_path.exists():
+            if _load_json(result_path) != result:
+                raise ValueError("preserved training result differs from completed run")
+        else:
+            _create_json(result_path, result)
         descriptor = {
             "schema_version": "v02-private-export.v1",
             "artifact_id": admission["artifact_id"],
@@ -461,6 +490,7 @@ def export_private_checkpoint(
             "training_result_sha256": _sha_file(work / "training-result.json"),
         }
         _create_json(export / "export.json", descriptor)
+        _publish_complete_directory(export, target)
         return descriptor
     except BaseException:
         # Failed exports never mutate the already-completed learned state.  The
@@ -850,7 +880,9 @@ def publish_final_checkpoint(
     _private_parent(final)
     if final.exists():
         raise FileExistsError("final checkpoint is create-only")
-    final.mkdir(mode=0o700)
+    target = final
+    final = Path(tempfile.mkdtemp(prefix=".private-final-", dir=final.parent))
+    final.chmod(0o700)
     try:
         for item in descriptor["files"]:
             source, destination = export / item["path"], final / item["path"]
@@ -885,6 +917,7 @@ def publish_final_checkpoint(
             "automation_allowed": False,
         }
         _create_json(final / "checkpoint.json", checkpoint)
+        _publish_complete_directory(final, target)
         return checkpoint
     except BaseException:
         # Export assets are never touched on a failed finalisation.
