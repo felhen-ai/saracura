@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from benchmarks import v02_training
-from benchmarks.v02_private_training import _publish_directory_exclusively
+from benchmarks.v02_private_training import (
+    _publish_directory_exclusively as _publish_directory_exclusively,
+)
 from saracura.contracts import Answer, DecisionResponse, ModelReference, Usage
 from saracura.serialization import canonical_json_bytes
 
