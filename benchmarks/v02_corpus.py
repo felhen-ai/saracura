@@ -1510,10 +1510,15 @@ def case_from_author(
     if plan.get("lane") not in {"training", "sealed"}:
         raise ValueError("author plan lane is invalid")
     role = "training_author" if plan["lane"] == "training" else "sealed_author"
-    _role_identity(plan, identity_id, role)
+    identity = _validate_identity(plan, cast(str, plan["lane"]), identity_id)
+    return _case_from_author_body(parsed, identity, role)
+
+
+def _case_from_author_body(
+    parsed: dict[str, Any], identity: dict[str, Any], role: str
+) -> dict[str, Any]:
     expected = _author_response_fields(role)
     _require_exact_keys(parsed, expected, name="author response")
-    identity = _validate_identity(plan, cast(str, plan["lane"]), identity_id)
     if role == "training_author":
         policy = parsed["policy"]
         case = validate_case(
@@ -1589,13 +1594,23 @@ def parse_role_response(
 ) -> dict[str, Any]:
     """Parse one untrusted response; no model-provided digest or gate is accepted."""
     identity = _role_identity(plan, identity_id, role)
+    return _parse_role_response_body(raw_bytes, identity, identity_id, role, committed_labels)
+
+
+def _parse_role_response_body(
+    raw_bytes: bytes,
+    identity: dict[str, Any],
+    identity_id: str,
+    role: str,
+    committed_labels: list[str] | None,
+) -> dict[str, Any]:
     if role != "sealed_adjudicator" and committed_labels is not None:
         raise ValueError("committed labels are only for adjudication")
     result = _parse_response_json(raw_bytes)
     _require_exact_keys(result, _response_fields(role), name="model response")
     _validate_model_judgments(result)
     if role in {"training_author", "sealed_author"}:
-        case_from_author(result, plan, identity_id)
+        _case_from_author_body(result, identity, role)
         if role == "training_author":
             _validate_option(result["answer"], identity)
             _validate_semantic(result["semantic"], identity)
@@ -1984,16 +1999,16 @@ def role_envelope(
 ) -> dict[str, Any]:
     """Bind parsed output to independently computed case and local gates for the B2 ledger."""
     identity = _role_identity(plan, identity_id, role)
-    parsed = parse_role_response(
+    parsed = _parse_role_response_body(
         json.dumps(parsed, ensure_ascii=False, allow_nan=False).encode("utf-8"),
-        plan,
+        identity,
         identity_id,
         role,
         committed_labels,
     )
     bound_case = validate_case(case, identity)
-    if role in {"training_author", "sealed_author"} and bound_case != case_from_author(
-        parsed, plan, identity_id
+    if role in {"training_author", "sealed_author"} and bound_case != _case_from_author_body(
+        parsed, identity, role
     ):
         raise ValueError("author case differs from its parsed response")
     gates = dict(_validate_gates(local_gates))

@@ -1988,12 +1988,18 @@ def _store_author_fixture(
     identity_id = cast(str, slot["slot_id"])
     raw = _author_response(slot, state=state)
     content = _raw(cast(dict[str, object], raw))
-    parsed = v02_corpus.parse_role_response(content, plan, identity_id, "training_author")
-    case = v02_corpus.case_from_author(parsed, plan, identity_id)
-    v02_corpus._store_author_components(root, identity_id, parsed, case, content)
+    case = {
+        "state": v02_corpus.materialize_training_state(raw["policy"], raw["facts"]),
+        "question": raw["question"],
+        "options": raw["options"],
+    }
+    # The envelope entry independently parses/validates the complete raw
+    # response and compares its materialized case. Persist genuine components
+    # before the caller writes any derived case or event.
     envelope = v02_corpus.role_envelope(
-        parsed, plan, identity_id, "training_author", case, _all_gates()
+        raw, plan, identity_id, "training_author", case, _all_gates()
     )
+    v02_corpus._store_author_components(root, identity_id, raw, case, content)
     return case, envelope
 
 
@@ -2087,6 +2093,91 @@ def test_c1_author_reviewer_annotator_and_adjudicator_round_trip() -> None:
         )["choice"]
         == "option_0"
     )
+
+
+def test_c9_public_response_boundaries_validate_once_and_reject_mutated_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training = v02_corpus._generate_training_plan()
+    slot = training["slots"][0]
+    author_response = _author_response(slot)
+    author_case = v02_corpus.case_from_author(author_response, training, slot["slot_id"])
+    author_parsed = v02_corpus.parse_role_response(
+        _raw(author_response), training, slot["slot_id"], "training_author"
+    )
+    reviewer_response = {
+        "answer": author_response["answer"],
+        "semantic": author_response["semantic"],
+        **_judgments(),
+    }
+    reviewer_parsed = v02_corpus.parse_role_response(
+        _raw(reviewer_response), training, slot["slot_id"], "independent_reviewer"
+    )
+    sealed = v02_corpus._generate_sealed_plan()
+    sealed_identity = sealed["identities"][0]
+    sealed_case = _case(sealed_identity["option_count"])
+    sealed_response = {**sealed_case, "target": "option_0", **_judgments()}
+    sealed_parsed = v02_corpus.parse_role_response(
+        _raw(sealed_response), sealed, sealed_identity["identity_id"], "sealed_author"
+    )
+
+    original = v02_corpus._validate_frozen_plan
+    calls = 0
+
+    def counting_guard(plan_data: dict[str, Any]) -> None:
+        nonlocal calls
+        calls += 1
+        original(plan_data)
+
+    monkeypatch.setattr(v02_corpus, "_validate_frozen_plan", counting_guard)
+
+    for _ in range(2):
+        v02_corpus.parse_role_response(
+            _raw(author_response), training, slot["slot_id"], "training_author"
+        )
+    assert calls == 2
+
+    # Reusing this exact mutable object after a successful call must not turn
+    # the canonical guard into a cross-call cache.
+    training["slots"][0]["scenario_code"] = "tampered"
+    with pytest.raises(ValueError, match="frozen"):
+        v02_corpus.parse_role_response(
+            _raw(author_response), training, slot["slot_id"], "training_author"
+        )
+    training["slots"][0]["scenario_code"] = author_response["semantic"]["scenario_code"]
+
+    calls = 0
+    assert v02_corpus.case_from_author(author_response, training, slot["slot_id"]) == author_case
+    assert calls == 1
+
+    for parsed, plan, identity_id, role, case in (
+        (author_parsed, training, slot["slot_id"], "training_author", author_case),
+        (reviewer_parsed, training, slot["slot_id"], "independent_reviewer", author_case),
+        (sealed_parsed, sealed, sealed_identity["identity_id"], "sealed_author", sealed_case),
+    ):
+        calls = 0
+        v02_corpus.role_envelope(parsed, plan, identity_id, role, case, _all_gates())
+        assert calls == 1
+
+    for entry in ("parse", "case", "envelope"):
+        mutated = json.loads(json.dumps(training))
+        mutated["slots"][0]["scenario_code"] = "tampered"
+        with pytest.raises(ValueError, match="frozen"):
+            if entry == "parse":
+                v02_corpus.parse_role_response(
+                    _raw(author_response), mutated, slot["slot_id"], "training_author"
+                )
+            elif entry == "case":
+                v02_corpus.case_from_author(author_response, mutated, slot["slot_id"])
+            else:
+                v02_corpus.role_envelope(
+                    author_parsed,
+                    mutated,
+                    slot["slot_id"],
+                    "training_author",
+                    author_case,
+                    _all_gates(),
+                )
 
 
 def test_c1_blind_requests_and_closed_json_fail_closed() -> None:
