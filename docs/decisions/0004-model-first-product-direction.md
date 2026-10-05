@@ -5,7 +5,7 @@ area: product
 project: saracura
 collection: saracura
 owner: saracura-maintainers
-status: current
+status: historical
 canonical: docs/decisions/0004-model-first-product-direction.md
 globalRef: qmd://saracura/docs/decisions/0004-model-first-product-direction.md
 reviewCadenceDays: 30
@@ -19,7 +19,8 @@ related:
   - docs/decisions/0002-open-model-runtime-and-readiness.md
   - docs/action/specs/phase5-open-model-benchmark-and-public-readiness.md
 supersedes: []
-supersededBy: []
+supersededBy:
+  - docs/decisions/0005-open-base-benchmark-first.md
 sensitivity: public
 ---
 
@@ -27,7 +28,7 @@ sensitivity: public
 
 ## Status
 
-Accepted on 2026-09-29 as the product-direction constraint for the first public Saracura model release. It changes roadmap and public-positioning priority; it does not claim that an unpublished checkpoint already exists or authorize automation.
+Superseded by [ADR 0005](0005-open-base-benchmark-first.md) on 2026-10-02. Accepted on 2026-09-29 as the product-direction constraint for the first public Saracura model release. It changes roadmap and public-positioning priority; it does not claim that an unpublished checkpoint already exists or authorize automation.
 
 ## Context
 

@@ -6,8 +6,8 @@ project: saracura
 collection: saracura
 owner: saracura-maintainers
 status: current
-canonical: AGENTS.md
-globalRef: qmd://saracura/AGENTS.md
+canonical: CLAUDE.md
+globalRef: qmd://saracura/CLAUDE.md
 reviewCadenceDays: 30
 lastReviewedAt: 2026-10-05
 sourceRefs:

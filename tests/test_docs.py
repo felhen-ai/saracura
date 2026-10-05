@@ -65,16 +65,17 @@ def test_shadow_public_boundary_is_documented_in_spec_and_agents_policy() -> Non
         "does not connect",
     ):
         assert phrase in normalized_spec
-    assert "read-only evaluator" in agents
-    assert "no Gmail, Outlook, IMAP" in agents
-    assert "automation_allowed=false" in agents
+    # ADR 0005 moved the product boundary; AGENTS.md states it and keeps the runtime invariants.
+    assert "ADR 0005" in agents
+    assert "open base models, benchmark first" in agents
+    assert "Teacher agreement is reported as agreement, not accuracy" in agents
+    assert "Safety invariants" in agents
+    assert "Never add telemetry, remote fallback, arbitrary model paths" in agents
 
 
 def test_phase4f1_smoke_result_is_bound_and_conservative_in_both_readmes() -> None:
     root = Path(__file__).parents[1]
     report = (root / "docs/action/phase4f1-shadow-evaluation-result.md").read_text(encoding="utf-8")
-    english = (root / "README.md").read_text(encoding="utf-8")
-    portuguese = (root / "docs/README.pt-BR.md").read_text(encoding="utf-8")
 
     for binding in (
         "b6a50c51a38db49d09a310f115dbb31ecc5b675b",
@@ -103,53 +104,49 @@ def test_phase4f1_smoke_result_is_bound_and_conservative_in_both_readmes() -> No
         "not training",
     ):
         assert conservative_claim in report
-    assert "phase4f1-shadow-evaluation-result.md" in english
-    assert "action/phase4f1-shadow-evaluation-result.md" in portuguese
     for private_value in ("/Volumes/", "/Users/", "Felhen", "checkpoint.safetensors"):
         assert private_value not in report
 
 
-def test_model_first_positioning_is_bounded_and_readme_parity_is_preserved() -> None:
+def test_open_base_positioning_and_readme_parity() -> None:
     root = Path(__file__).parents[1]
     english = (root / "README.md").read_text(encoding="utf-8")
     portuguese = (root / "docs/README.pt-BR.md").read_text(encoding="utf-8")
-    adr = (root / "docs/decisions/0004-model-first-product-direction.md").read_text(
+    adr = (root / "docs/decisions/0005-open-base-benchmark-first.md").read_text(encoding="utf-8")
+    superseded = (root / "docs/decisions/0004-model-first-product-direction.md").read_text(
         encoding="utf-8"
     )
-    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    claude = (root / "CLAUDE.md").read_text(encoding="utf-8")
 
-    for document, required in (
-        (
-            english,
-            (
-                "open, local-first decision model project",
-                "model-first development preview",
-                "Small local models. Many typed decisions.",
-                "first generally usable Saracura-owned checkpoint",
-                "not as a benchmark laboratory",
-            ),
-        ),
-        (
-            portuguese,
-            (
-                "projeto aberto e local-first de modelo de decisão",
-                "preview de desenvolvimento orientado ao modelo",
-                "Modelos locais pequenos. Muitas decisões tipadas.",
-                "primeiro checkpoint próprio e de uso geral do Saracura",
-                "nem como laboratório de benchmark",
-            ),
-        ),
-    ):
-        for phrase in required:
-            assert phrase in document
+    benchmark = "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench"
+    model = "https://huggingface.co/felhen-ai/saracura-ptbr-v0"
+    for document in (english, portuguese):
+        assert benchmark in document
+        assert model in document
+        assert "0005-open-base-benchmark-first.md" in document
+        assert "research/bench.py" in document
+        # Published numbers stay identical in both front doors.
+        for figure in ("27,6%", "39,2%", "44,6%", "64,0%", "66,2%", "68,5%"):
+            assert figure.replace(",", ".") in english
+            assert figure in portuguese
+        assert "balanced accuracy" in english and "acurácia balanceada" in portuguese
 
-    english_front_door = english.split("## Evidence, not competitor marketing", 1)[0]
-    portuguese_front_door = portuguese.split("## Evidência, não marketing de concorrentes", 1)[0]
-    for competitor in ("Julia", "Laya", "Jev"):
-        assert competitor not in english_front_door
-        assert competitor not in portuguese_front_door
+    assert "supersedes:\n  - docs/decisions/0004-model-first-product-direction.md" in adr
+    assert "Open base models, benchmark first" in adr
+    assert "weights are published, rows are not" in adr
+    assert "status: historical" in superseded
+    assert "0005-open-base-benchmark-first.md" in superseded
 
-    assert "Model Preview" in adr and "Calibrated Automation" in adr
-    assert "Model Preview is the immediate milestone" in adr
-    assert "must not be presented as the recommended Saracura model" in adr
-    assert "research-only, local-first engine" not in pyproject
+    # AGENTS.md and CLAUDE.md carry the same instructions; only the canonical path differs.
+    def normalize(text: str) -> str:
+        for marker in (
+            "canonical: AGENTS.md",
+            "canonical: CLAUDE.md",
+            "qmd://saracura/AGENTS.md",
+            "qmd://saracura/CLAUDE.md",
+        ):
+            text = text.replace(marker, "")
+        return text
+
+    assert normalize(agents) == normalize(claude)

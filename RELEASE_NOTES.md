@@ -9,7 +9,7 @@ status: active
 canonical: RELEASE_NOTES.md
 globalRef: qmd://saracura/RELEASE_NOTES.md
 reviewCadenceDays: 30
-lastReviewedAt: 2026-09-28
+lastReviewedAt: 2026-10-05
 sourceRefs:
   - benchmarks/results/phase5c-julia1-cpu-smoke.json
 related:
@@ -19,6 +19,13 @@ supersedes: []
 supersededBy: []
 sensitivity: public
 ---
+
+# Saracura PT-BR v0.1 (model and benchmark, 2026-10-05)
+
+Published on the Hugging Face Hub: the PT-BR typed-decisions benchmark (7 tasks, human labels, permissive sources)
+and the Saracura PT-BR v0.1 checkpoint, a Laya multilingual fine-tune at 68.5% mean balanced accuracy on the
+benchmark and 86.8% to 89.6% agreement with an open-weight teacher on unseen questions. Details in the model and
+dataset cards and in ADR 0005. The package release below predates this direction.
 
 # Saracura 0.1.0a2
 
