@@ -8,14 +8,15 @@ owner: saracura-maintainers
 status: current
 canonical: docs/README.pt-BR.md
 globalRef: qmd://saracura/docs/README.pt-BR.md
-reviewCadenceDays: 90
-lastReviewedAt: 2026-09-29
-sourceRefs: []
+reviewCadenceDays: 60
+lastReviewedAt: 2026-10-05
+sourceRefs:
+  - https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench
+  - https://huggingface.co/felhen-ai/saracura-ptbr-v0
 related:
   - README.md
-  - docs/decisions/0004-model-first-product-direction.md
-  - SECURITY.md
-  - CONTRIBUTING.md
+  - docs/decisions/0005-open-base-benchmark-first.md
+  - research/README.md
 supersedes: []
 supersededBy: []
 sensitivity: public
@@ -25,116 +26,98 @@ sensitivity: public
 
 [English](../README.md) | [Português (Brasil)](README.pt-BR.md)
 
-Saracura é um projeto aberto e local-first de modelo de decisão para decisões tipadas rápidas em escala, com avaliação PT-BR-first e API neutra em relação ao idioma.
+Decisões tipadas sobre texto em português do Brasil: um benchmark aberto e modelos de decisão pequenos e rápidos,
+ajustados para PT-BR.
 
-> Modelos locais pequenos. Muitas decisões tipadas. Evidência em hardware real.
+> Português do Brasil de verdade. Dados abertos. Medido no mesmo benchmark que todo o resto.
 
-O Saracura está atualmente em **preview de desenvolvimento orientado ao modelo**. O runtime público e as ferramentas de avaliação já existem; o primeiro checkpoint próprio e de uso geral do Saracura é o próximo marco de release e ainda não foi publicado. Até que esse checkpoint e suas medições estejam disponíveis, o repositório não faz alegação comparativa de qualidade e não deve ser usado como gate de automação ou autorização.
+## O que existe hoje
 
-## O que estamos construindo
+| Artefato | Onde | O que é |
+|---|---|---|
+| **Benchmark** | [`felhen-ai/ptbr-typed-decisions-bench`](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench) | 7 tarefas de decisão tipada sobre texto nativo em PT-BR, de fontes com licença permissiva e rótulos humanos (proposições legislativas, jurisprudência do TCU, resumos científicos, comentários de redes sociais, alegações checadas, respostas de FAQ). Splits de treino, validação e teste. |
+| **Saracura PT-BR v0.1** | [`felhen-ai/saracura-ptbr-v0`](https://huggingface.co/felhen-ai/saracura-ptbr-v0) | Modelo de decisão de 322M de parâmetros, ajustado a partir do [Laya](https://github.com/NandhaKishorM/laya) multilíngue. Decisões de escolha e sim/não em uma passada, cerca de 3 ms por decisão em GPU, usável em CPU. |
 
-O Saracura está sendo construído como um modelo que qualquer pessoa possa baixar e executar, não como wrapper de outro modelo de decisão nem como laboratório de benchmark cujo principal resultado seja infraestrutura.
+Um checkpoint maior (4B de parâmetros, com a receita do [Kev](https://github.com/jaredpalmer/kev)) está em treino e
+será publicado com o mesmo nome.
 
-O projeto se concentra na interseção de quatro propriedades:
-
-- modelos pequenos que rodem localmente em CPU, Apple Silicon ou GPU modesta;
-- decisões tipadas sobre novos schemas por meio de uma API estável;
-- workloads de alto volume, incluindo muitas decisões sobre contexto compartilhado;
-- treino e avaliação PT-BR-first sem tornar a arquitetura específica de um idioma.
-
-O próximo marco público é um checkpoint próprio do Saracura com:
-
-- quickstart local em um comando;
-- pesos públicos e imutáveis, acompanhados de model card;
-- medições reproduzíveis de qualidade em PT-BR e de desempenho em hardware;
-- uma alegação delimitada pelo resultado que o modelo efetivamente demonstrar.
-
-Calibração, predição seletiva e segurança para automação continuam sendo marcos importantes posteriores. Eles não bloqueiam a publicação de um preview de modelo útil e honestamente delimitado.
-
-## Release atual
-
-O pacote atual fornece a API de decisões tipadas, CLI local, contratos estritos de request e response, ferramentas de benchmark e a fundação de runtime para o próximo modelo. Ele ainda **não** distribui o checkpoint público do Saracura descrito acima.
-
-Releases anteriores integraram checkpoints de terceiros e controles externos para validar o runtime e entender onde as abordagens existentes falham. Essas integrações continuam como evidência reproduzível de pesquisa, mas não são o produto Saracura, não são recomendadas como seu modelo padrão e não definem o roadmap público.
-
-O boundary permanente do produto está registrado no [ADR 0004: direção de produto model-first](decisions/0004-model-first-product-direction.md).
-
-## Roadmap
-
-As GitHub Issues são o roadmap operacional público. O [milestone v0.2.0 Model Preview](https://github.com/felhen-ai/saracura/milestone/1) mostra quanto falta para o primeiro release de modelo; o [issue de roadmap #49](https://github.com/felhen-ai/saracura/issues/49) registra a ordem das dependências e a definição de pronto.
-
-Cada issue do roadmap deve terminar em um artefato visível de modelo, avaliação, empacotamento ou release. O trabalho de automação calibrada é acompanhado separadamente e não dilui o progresso rumo à v0.2.0.
-
-## Arquitetura
-
-O Saracura expõe uma única API de decisões tipadas com dois papéis de modelo:
-
-- `universal`: o modelo Saracura padrão para novos schemas Choice;
-- `compiled`: uma especialização opcional para workflows estáveis, repetidos e de alto volume quando as medições a justificarem.
-
-O primeiro release de modelo tem como alvo o papel universal. Uma rota compiled só tem valor quando melhora a fronteira entre qualidade e vazão para um workload declarado; ela não é motivo para atrasar o checkpoint universal.
-
-Consulte o [ADR 0001](decisions/0001-two-tier-decision-architecture.md) para a arquitetura em duas camadas e o [ADR 0002](decisions/0002-open-model-runtime-and-readiness.md) para os limites de evidência e release.
-
-## Instalação para desenvolvimento
-
-É necessário usar Python 3.11+ e [uv](https://docs.astral.sh/uv/).
+## Como usar o modelo
 
 ```bash
-git clone https://github.com/felhen-ai/saracura.git
-cd saracura
+pip install laya
+```
+
+```python
+import laya
+
+agent = laya.load("felhen-ai/saracura-ptbr-v0")
+
+resultado = agent.predict(
+    "Requer informações ao Ministro da Saúde sobre a distribuição de vacinas nos municípios do interior.",
+    {
+        "tema": {
+            "type": "choice",
+            "instructions": "Qual é o tema desta proposição legislativa?",
+            "criteria": {"saude": "Saúde", "educacao": "Educação", "economia": "Economia"},
+        }
+    },
+)
+print(resultado["answers"]["tema"]["choice"])  # saude
+```
+
+Sem conta, sem servidor, sem download além dos pesos. O model card traz os resultados completos, os dados de treino e
+as limitações.
+
+## Resultados (acurácia balanceada, split de teste do benchmark)
+
+| Modelo | Média das 7 tarefas |
+|---|---:|
+| Classe mais comum | 27,6% |
+| `convaiinnovations/laya-multilingual` (sem ajuste) | 39,2% |
+| `telepatia-ai/laya-pt-es-typed` (ajustado em dados traduzidos) | 44,6% |
+| TF-IDF + regressão logística, um classificador por tarefa | 64,0% |
+| `Qwen/Qwen3.8-27B` sem ajuste, com descrições das classes (versão anterior do benchmark) | 66,2% |
+| **Saracura PT-BR v0.1 (322M, um modelo só)** | **68,5%** |
+
+Em perguntas e textos que o modelo nunca viu (gerados por um professor de pesos abertos), a v0.1 concorda com o
+professor em 86,8% dos casos em textos reais e em 89,6% em textos sintéticos de oito casos de uso (triagem de e-mail,
+roteamento de tickets, qualificação de leads, intenção em WhatsApp, documentos financeiros, avaliações de produto,
+moderação, supervisão de agente). São números de concordância, não de acerto contra rótulo humano.
+
+## Avalie o seu modelo
+
+As linhas do benchmark são JSONL no formato de requisição do Laya: `text`, `type` (`choice` ou `noul`),
+`instructions`, `criteria` e `gold`. O `research/bench.py` avalia qualquer checkpoint compatível com o Laya e os
+baselines clássicos:
+
+```bash
 uv sync --dev
-uv run pytest -q
+uv run python research/bench.py baselines
+uv run python research/bench.py eval --name meu --model sua-org/seu-checkpoint --device cpu
 ```
 
-O ambiente padrão continua leve e não baixa pesos nem dependências pesadas de ML. A aquisição de modelos é sempre explícita e pinada por revisão.
+Reporte acurácia balanceada com a ordem das opções embaralhada por item, como os scripts fazem, para os resultados
+continuarem comparáveis.
 
-## Exercitar o contrato atual da API
+## Como os modelos são treinados
 
-O repositório inclui uma fixture PT-BR autoescrita para que contribuidores exercitem o contrato tipado antes de baixar artefatos de modelo:
+Está tudo em [`research/`](../research/README.md): a montagem do benchmark a partir das fontes, a geração de
+perguntas variadas com professores de pesos abertos, o ajuste com as receitas do Laya e do Kev e os scripts de
+avaliação. Dados de treino que não são redistribuídos (anúncios de marketplace, documentos internos) estão declarados
+nos model cards.
 
-```bash
-uv run saracura decide \
-  --request examples/ptbr-support-request.json \
-  --calibration examples/ptbr-support-calibration.json
-```
+A direção e seus motivos estão na [ADR 0005](decisions/0005-open-base-benchmark-first.md). As ADRs anteriores e os
+pacotes `src/` e `benchmarks/` pertencem ao runtime de pesquisa que a precedeu; ficam como API tipada e registro
+histórico.
 
-Essa fixture é infraestrutura de teste, não um modelo treinado nem evidência de qualidade de decisão. Este README substituirá a seção pelo quickstart do modelo quando o checkpoint Saracura for publicado.
+## Como contribuir
 
-## Evidência, não marketing de concorrentes
-
-O Saracura mantém registros reproduzíveis de pesquisa, inclusive resultados negativos. Modelos de terceiros só devem aparecer nesses registros como controles sob o mesmo protocolo declarado. A página principal não posiciona o Saracura como adapter ou pequena variação de um checkpoint externo específico.
-
-Registros relevantes:
-
-- [protocolo de prontidão e avaliação de modelos abertos](action/specs/phase5-open-model-benchmark-and-public-readiness.md);
-- [protocolo do benchmark nativo em PT-BR](action/specs/phase5d-native-ptbr-benchmark.md);
-- [resultado histórico da comparação cega](action/phase4e-comparison-result.md);
-- [resultado da avaliação shadow somente leitura](action/phase4f1-shadow-evaluation-result.md).
-
-Resultados históricos de benchmark não estabelecem que o próximo modelo Saracura seja melhor. Uma alegação comparativa só se torna pública quando existirem um checkpoint próprio do Saracura e evidência diretamente comparável.
-
-## Guardrail de produto
-
-Novos adapters, harnesses, integrações de candidatos ou infraestrutura de benchmark devem contribuir diretamente para pelo menos um destes resultados:
-
-1. selecionar ou treinar o checkpoint Saracura;
-2. medir qualidade, footprint, latência ou vazão do modelo;
-3. empacotar e executar o modelo localmente;
-4. melhorar uma fraqueza medida no modelo publicado.
-
-Trabalho que não satisfaça nenhum desses resultados não está no caminho crítico do release do modelo. Isso evita que a infraestrutura auxiliar vire o produto por acidente.
-
-## Segurança e independência
-
-- O Saracura continua utilizável sem Felhen, AIOS, serviços privados, dados privados ou configuração privada.
-- Nenhuma requisição dispara download implícito de modelo ou fallback remoto.
-- Scores não calibrados não são apresentados como confiança.
-- Um preview de modelo não autoriza ações automáticas de alto risco.
-- Registros de treino, calibração e avaliação held-out permanecem separados nos protocolos declarados.
-
-Consulte [SECURITY.md](../SECURITY.md) antes de acrescentar carregamento de modelo, tokenizer, dataset ou plugin. Contribuições seguem [CONTRIBUTING.md](../CONTRIBUTING.md).
+A contribuição mais valiosa é uma tarefa com texto nativo em PT-BR, rótulos humanos e licença que permita
+redistribuição. Abra uma issue com a fonte, a licença e como os rótulos foram produzidos. Contribuições seguem o
+[CONTRIBUTING.md](../CONTRIBUTING.md); leia o [SECURITY.md](../SECURITY.md) antes de adicionar carregamento de modelo
+ou dataset.
 
 ## Licença
 
-Apache-2.0. Consulte [LICENSE](../LICENSE).
+Apache-2.0. Veja [LICENSE](../LICENSE). A compilação do benchmark é CC BY 4.0, com cada tarefa sob a licença da
+fonte, listada no card do dataset.
