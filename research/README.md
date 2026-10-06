@@ -58,6 +58,7 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 | `laya_finetune_mps.py` | The upstream Laya fine-tuning script, unchanged (Apache-2.0, Convai Innovations). RLCD loss, per-type temperature calibration, checkpoint export. |
 | `run_ft_cuda.py` | Runs the upstream script on CUDA (it only offers MPS and CPU) and lets `LR_SCALE` scale the fixed learning rates. |
 | `prep_items.py`, `combo.py` | Item preparation for the marketplace task and for the combined training set (benchmark + translated typed-decisions + listings). |
+| `eval_eikos.py` | Runs another open decision model (Eikos, `caiovicentino1/Eikos-4B`) on the benchmark with its own published inference code and the same protocol. |
 | `kev_data.py`, `kev_bench_long.py`, `kev_score.py` | Conversion of the same data to the Kev request format, benchmark with the 2048-token training context, balanced accuracy from Kev predictions. |
 | `run_*.sh` | The exact chains used for each training round, as run on one RTX 5090 (train with `--micro-batch 4 --grad-accum 16` and gradient checkpointing for 2048-token contexts, or it runs out of 32 GB). |
 
