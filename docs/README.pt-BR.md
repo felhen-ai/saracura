@@ -36,10 +36,8 @@ ajustados para PT-BR.
 | Artefato | Onde | O que é |
 |---|---|---|
 | **Benchmark** | [`felhen-ai/ptbr-typed-decisions-bench`](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench) | 7 tarefas de decisão tipada sobre texto nativo em PT-BR, de fontes com licença permissiva e rótulos humanos (proposições legislativas, jurisprudência do TCU, resumos científicos, comentários de redes sociais, alegações checadas, respostas de FAQ). Splits de treino, validação e teste. |
-| **Saracura PT-BR v0.1** | [`felhen-ai/saracura-ptbr-v0`](https://huggingface.co/felhen-ai/saracura-ptbr-v0) | Modelo de decisão de 322M de parâmetros, ajustado a partir do [Laya](https://github.com/NandhaKishorM/laya) multilíngue. Decisões de escolha e sim/não em uma passada, cerca de 3 ms por decisão em GPU, usável em CPU. |
-
-Um checkpoint maior (4B de parâmetros, com a receita do [Kev](https://github.com/jaredpalmer/kev)) está em treino e
-será publicado com o mesmo nome.
+| **Saracura PT-BR v0.1** | [`felhen-ai/saracura-ptbr-v0`](https://huggingface.co/felhen-ai/saracura-ptbr-v0) | Modelo de decisão de 322M de parâmetros, ajustado a partir do [Laya](https://github.com/NandhaKishorM/laya) multilíngue. Decisões de escolha e sim/não em uma passada, cerca de 3 ms por decisão em GPU, usável em CPU. 68,5% de acurácia balanceada média no benchmark. |
+| **Saracura PT-BR 4B** | [`felhen-ai/saracura-ptbr-4b`](https://huggingface.co/felhen-ai/saracura-ptbr-4b) | Modelo de decisão de 4B de parâmetros com a receita do [Kev](https://github.com/jaredpalmer/kev) (adaptador LoRA e cabeça de ponteiro sobre o Qwen3.5-4B-Base, iniciado do `jaredpalmer/kev-4b`). Decisões de escolha, sim/não e escala; servido pelo servidor do Kev, compatível com o System One, em GPU ou Apple Silicon. 73,1% no benchmark e 96,8% na tarefa do Banco Central, fora do treino. |
 
 ## Como usar o modelo
 

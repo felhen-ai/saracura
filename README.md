@@ -37,10 +37,8 @@ Typed decisions over Brazilian Portuguese text: an open benchmark and small, fas
 | Artifact | Where | What it is |
 |---|---|---|
 | **Benchmark** | [`felhen-ai/ptbr-typed-decisions-bench`](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench) | 7 typed-decision tasks over native PT-BR text from permissively licensed sources with human labels (legislative bills, court-of-accounts case law, scientific abstracts, social media comments, fact-checked claims, FAQ answers). Train, dev and test splits. |
-| **Saracura PT-BR v0.1** | [`felhen-ai/saracura-ptbr-v0`](https://huggingface.co/felhen-ai/saracura-ptbr-v0) | A 322M-parameter decision model fine-tuned from [Laya](https://github.com/NandhaKishorM/laya) multilingual. Choice and yes/no decisions in one forward pass, about 3 ms per decision on a GPU, usable on CPU. |
-
-A larger checkpoint (4B parameters, built with the [Kev](https://github.com/jaredpalmer/kev) recipe) is in training and
-will be published under the same name family.
+| **Saracura PT-BR v0.1** | [`felhen-ai/saracura-ptbr-v0`](https://huggingface.co/felhen-ai/saracura-ptbr-v0) | A 322M-parameter decision model fine-tuned from [Laya](https://github.com/NandhaKishorM/laya) multilingual. Choice and yes/no decisions in one forward pass, about 3 ms per decision on a GPU, usable on CPU. 68.5% mean balanced accuracy on the benchmark. |
+| **Saracura PT-BR 4B** | [`felhen-ai/saracura-ptbr-4b`](https://huggingface.co/felhen-ai/saracura-ptbr-4b) | A 4B-parameter decision model built with the [Kev](https://github.com/jaredpalmer/kev) recipe (LoRA adapter and pointer head on Qwen3.5-4B-Base, warm-started from `jaredpalmer/kev-4b`). Choice, yes/no and score decisions; served by Kev's System One-compatible server on a GPU or Apple Silicon. 73.1% on the benchmark and 96.8% on the held-out Central Bank task. |
 
 ## Use the model
 
