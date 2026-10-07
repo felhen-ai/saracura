@@ -62,6 +62,17 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 | `kev_data.py`, `kev_bench_long.py`, `kev_score.py` | Conversion of the same data to the Kev request format, benchmark with the 2048-token training context, balanced accuracy from Kev predictions. |
 | `run_*.sh` | The exact chains used for each training round, as run on one RTX 5090 (train with `--micro-batch 4 --grad-accum 16` and gradient checkpointing for 2048-token contexts, or it runs out of 32 GB). |
 
+## Comparison table of open decision models
+
+| Script | What it does |
+|---|---|
+| `eval_http.py` | Runs any System One-compatible server (`POST /v1/systemone`) on the benchmark and on the Central Bank FAQ task, same protocol as `bench.py` (shuffled option order, `BENCH_MAX_CHARS=3500`). Accepts `noul` answers as `noul` or `probability`. |
+| `board_pyserve.py` | Minimal `/v1/systemone` wrapper for models that only ship a Python class (Intern-Decision, Jet). |
+| `llm_bacen.py` | Central Bank FAQ task with a local open LLM (Qwen 3.8 27B over vLLM), answers restricted to the four letters; `bench_llm.py ceiling` is the benchmark counterpart. |
+
+Each model is served by its author's own server and package, one at a time, on one RTX 5090. The table and the
+per-model results are on the benchmark card.
+
 ## Publication
 
 `publish.py` uploads the benchmark and a checkpoint to the Hub (token on stdin, never written to disk); `verify_hub.py`
