@@ -9,7 +9,7 @@ status: current
 canonical: research/README.md
 globalRef: qmd://saracura/research/README.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-05
+lastReviewedAt: 2026-10-08
 sourceRefs:
   - https://github.com/NandhaKishorM/laya
   - https://github.com/jaredpalmer/kev
@@ -72,6 +72,21 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 
 Each model is served by its author's own server and package, one at a time, on one RTX 5090. The table and the
 per-model results are on the benchmark card.
+
+## Adaptation track
+
+How much a decision model improves with a few labeled examples of the target task, and how that compares with a
+classical baseline trained on the same examples.
+
+| Script | What it does |
+|---|---|
+| `adapt_build.py` | Draws N training examples per task (fixed seed, nested sizes) and writes them as `kev.train` requests. |
+| `adapt_tfidf.py` | TF-IDF + logistic regression trained on the same N examples (50, 100, 400 and the full split). |
+| `ci.py` | 95% confidence intervals by item bootstrap, per task and for the mean, from results with per-item answers. |
+
+The decision-model points start from `jaredpalmer/kev-4b`, which has seen none of the benchmark data: one run per
+size (`kev.train --init_from jaredpalmer/kev-4b --epochs 2 --lr 2e-5`, examples repeated 4 times for 50 and 100 and
+twice for 400), each served with `kev.serve` and measured with `eval_http.py`, which also saves per-item answers.
 
 ## Publication
 

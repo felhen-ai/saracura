@@ -89,6 +89,7 @@ def main():
         lat.sort()
         m.update({"failed": failed, "median_ms": round(1000 * lat[len(lat) // 2], 1)})
         report["tasks"][task] = m
+        report.setdefault("items", {})[task] = [[g, p] for g, p in zip(gold, pred, strict=True)]
         print(args.name, task, m, flush=True)
     vals = [m["balanced_accuracy"] for m in report["tasks"].values()]
     report["mean_balanced_accuracy"] = round(sum(vals) / len(vals), 4)
