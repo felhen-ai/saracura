@@ -1,0 +1,75 @@
+{
+ "email": {
+  "description": "Inbound e-mail of one Felhen inbox, 200 items, one labeler (the inbox owner). Input: sender, subject, received date and cleaned body.",
+  "questions": {
+   "tipo": {
+    "type": "choice",
+    "instructions": "Do que trata este e-mail, do ponto de vista de quem o recebeu (Antonio, da Felhen)? O assunto manda, não o remetente nem o canal: um convite ou uma notificação automática é classificado pelo negócio por trás dele.",
+    "criteria": {
+     "cliente_oportunidade": "Quem paga ou pode pagar a Felhen: cliente, proposta, oportunidade, convite de reunião de cliente, venda feita (ex.: venda no Mercado Livre a despachar)",
+     "parceiro": "Quem constrói junto com a Felhen sem ser cliente pagante: sócio, parceiro de negócio, investidor, colaborador de projeto em andamento, convite de reunião com parceiro",
+     "fornecedor_cobranca": "Fornecedor de serviço e qualquer dinheiro a pagar, de qualquer remetente: fatura, boleto, cobrança (inclusive da contabilidade), assinatura, suporte de fornecedor",
+     "administrativo_fiscal": "Rotina da empresa que não é cobrança: contabilidade pedindo documento ou enviando balanço, impostos, banco, contratos, governo, cadastros",
+     "rede_contatos": "Relação pessoal ou profissional sem negócio em andamento: networking, convite para evento, conversa de carreira",
+     "notificacao_sistema": "Mensagem automática de ferramenta ou plataforma sem um negócio por trás: GitHub, alertas de login, avisos de conta, recibos de ferramenta, confirmação automática de chamado",
+     "newsletter_marketing": "Envio em massa de conteúdo ou promoção: newsletter, promoção, divulgação, webinar",
+     "interno": "Comunicação da equipe da Felhen: colaboradores falando de operação, tarefas ou alinhamento"
+    }
+   },
+   "precisa_acao": {
+    "type": "noul",
+    "instructions": "Este e-mail exige uma ação de quem o recebeu, como responder, pagar, enviar um produto, aceitar ou recusar um convite, revisar, assinar ou decidir algo? Resposta automática que só informa não exige ação."
+   },
+   "urgencia": {
+    "type": "choice",
+    "instructions": "Considerando a data de recebimento e o conteúdo, qual era a urgência deste e-mail quando chegou? Para convites, conta a distância até a reunião.",
+    "criteria": {
+     "alta": "Atenção no mesmo dia: prazo curto, cliente esperando, venda a despachar, falha em produção, pagamento vencendo",
+     "media": "Atenção nos próximos dias, sem prazo imediato",
+     "baixa": "Pode esperar ou não exige ação: informativo, automático ou promocional"
+    }
+   }
+  }
+ },
+ "comentario": {
+  "description": "Public YouTube comments on 2026 election coverage by five Brazilian news channels, 199 items drawn at random, one labeler. Replies are read with the parent comment.",
+  "questions": {
+   "sentimento": {
+    "type": "choice",
+    "instructions": "Qual é o sentimento predominante deste comentário?",
+    "criteria": {
+     "positivo": "elogio, entusiasmo, comemoração ou apoio",
+     "negativo": "crítica, raiva, deboche, indignação ou desconfiança",
+     "neutro": "informação, pergunta ou observação sem carga emocional clara"
+    }
+   },
+   "tema": {
+    "type": "choice",
+    "instructions": "Sobre o que é este comentário, publicado em um vídeo de cobertura das eleições?",
+    "criteria": {
+     "politica": "candidatos, partidos, políticos, governo, campanha, propostas ou votos",
+     "imprensa": "a emissora, o jornal, jornalistas, âncoras, entrevistadores ou a cobertura",
+     "processo": "urnas, apuração, TSE, pesquisas eleitorais, abstenção ou fraude",
+     "outro": "qualquer outro assunto, ou sem assunto definido"
+    }
+   },
+   "alvo": {
+    "type": "choice",
+    "instructions": "Se o comentário critica ou ataca alguém, a quem se dirige principalmente?",
+    "criteria": {
+     "lula": "Lula, o PT ou o governo atual",
+     "flavio": "Flávio Bolsonaro, a família Bolsonaro ou seus aliados",
+     "emissora": "a emissora, jornalistas ou a cobertura",
+     "ninguem": "não critica ninguém, ou critica outra pessoa ou grupo"
+    }
+   },
+   "hostil": {
+    "type": "noul",
+    "instructions": "O comentário xinga ou insulta alguém com palavrão ou termo ofensivo?"
+   }
+  }
+ },
+ "camara_tema_fresh": {
+  "description": "Bills filed in the Chamber of Deputies after a cutoff date, with a single theme assigned by the Chamber; same 24 themes and question as the public camara_tema task. Renewed quarterly; the previous set is released."
+ }
+}

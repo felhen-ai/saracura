@@ -9,7 +9,7 @@ status: current
 canonical: research/README.md
 globalRef: qmd://saracura/research/README.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-08
+lastReviewedAt: 2026-10-09
 sourceRefs:
   - https://github.com/NandhaKishorM/laya
   - https://github.com/jaredpalmer/kev
@@ -87,6 +87,14 @@ classical baseline trained on the same examples.
 The decision-model points start from `jaredpalmer/kev-4b`, which has seen none of the benchmark data: one run per
 size (`kev.train --init_from jaredpalmer/kev-4b --epochs 2 --lr 2e-5`, examples repeated 4 times for 50 and 100 and
 twice for 400), each served with `kev.serve` and measured with `eval_http.py`, which also saves per-item answers.
+
+## Private tracks
+
+`private_tasks.json` holds the public definition of the private tests reported on the benchmark card: the questions
+and categories of the real-use track (e-mail triage and public comments, labeled by one person each) and the fresh
+`camara_tema` test (bills filed after a cutoff date, theme assigned by the Chamber, renewed quarterly). Texts and
+labels are not published; the tests are scored with `eval_http.py` using `BENCH_DIR` pointed at the private copy.
+Only public models without tuning on these texts are listed.
 
 ## Publication
 
