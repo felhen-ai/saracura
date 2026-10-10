@@ -9,7 +9,7 @@ status: current
 canonical: research/README.md
 globalRef: qmd://saracura/research/README.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-09
+lastReviewedAt: 2026-10-10
 sourceRefs:
   - https://github.com/NandhaKishorM/laya
   - https://github.com/jaredpalmer/kev
@@ -66,6 +66,7 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 
 | Script | What it does |
 |---|---|
+| `ptbr_bench.py` | One-command evaluation for anyone: standard library only, downloads the test splits from the Hub, same protocol as `eval_http.py`, reports the mean with a 95% bootstrap interval and writes a results file with per-item answers. |
 | `eval_http.py` | Runs any System One-compatible server (`POST /v1/systemone`) on the benchmark and on the Central Bank FAQ task, same protocol as `bench.py` (shuffled option order, `BENCH_MAX_CHARS=3500`). Accepts `noul` answers as `noul` or `probability`. |
 | `board_pyserve.py` | Minimal `/v1/systemone` wrapper for models that only ship a Python class (Intern-Decision, Jet). |
 | `llm_bacen.py` | Central Bank FAQ task with a local open LLM (Qwen 3.8 27B over vLLM), answers restricted to the four letters; `bench_llm.py ceiling` is the benchmark counterpart. |
