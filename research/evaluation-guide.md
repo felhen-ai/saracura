@@ -144,6 +144,8 @@ uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
   --server laya --server-version 0.3.20
 ```
 
+- `--model` is the server alias or public identifier (for example `org/model`), never an endpoint URL; URLs are
+  rejected before any work. `--model` é o alias do servidor ou um identificador público, nunca uma URL de endpoint.
 - `--name` is a plain label. `--output PATH` chooses the file; an existing file is never overwritten, and the check
   happens before any request.
 - `--checkpoint-revision` must be a 40-hex Hub commit or a `sha256:<64 hex>` digest of the weights. `main` or `latest`

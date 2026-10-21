@@ -371,6 +371,13 @@ def _label(text):
     return v
 
 
+def _model_alias(text):
+    v = text.strip()
+    if not v:
+        return ""
+    return _label(v)
+
+
 def _name(text):
     if not NAME_RE.fullmatch(text):
         raise argparse.ArgumentTypeError(
@@ -402,7 +409,12 @@ def build_parser():
     ap.add_argument(
         "--base-url", required=True, type=_base_url, help="server root; never written to the report"
     )
-    ap.add_argument("--model", default="", type=str, help="model alias sent in each request")
+    ap.add_argument(
+        "--model",
+        default="",
+        type=_model_alias,
+        help="server model alias or public identifier sent in each request, never an endpoint URL",
+    )
     ap.add_argument("--name", required=True, type=_name, help="label for the results file")
     ap.add_argument(
         "--output",

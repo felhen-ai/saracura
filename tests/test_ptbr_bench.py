@@ -297,6 +297,7 @@ def test_invalid_choice_and_probability_answers_are_wrong(bench: Any) -> None:
         ["--name", "dir/file"],
         ["--name", ".hidden"],
         ["--checkpoint-id", "http://host/model"],
+        ["--model", "https://private.example/v1"],
         ["--hardware", ""],
         ["--revision", "../x"],
         ["--base-url", "ftp://host"],
@@ -324,6 +325,19 @@ def test_invalid_cli_values_are_rejected_before_any_work(
         bench.main(args)
     assert exc.value.code == 2
     assert not (tmp_path / "c").exists()
+
+
+def test_model_alias_accepts_empty_and_public_ids_but_never_echoes_urls(
+    bench: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    parser = bench.build_parser()
+    base = ["--base-url", "http://127.0.0.1:9", "--name", "ok"]
+    assert parser.parse_args(base).model == ""
+    assert parser.parse_args([*base, "--model", "  "]).model == ""
+    assert parser.parse_args([*base, "--model", "org/model-1.5"]).model == "org/model-1.5"
+    with pytest.raises(SystemExit):
+        parser.parse_args([*base, "--model", "https://private.example/v1"])
+    assert "private.example" not in capsys.readouterr().err
 
 
 def test_existing_output_is_rejected_before_network_and_left_untouched(
