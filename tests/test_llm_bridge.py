@@ -61,6 +61,37 @@ class FakeBackend:
         return self.replies.pop(0)
 
 
+class ConstrainedBackend(FakeBackend):
+    """Synthetic next-token backend; it never loads a model or weights."""
+
+    def __init__(self, scores: list[float], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.scores = scores
+        self.choice_calls: list[dict[str, int]] = []
+        self.mapping = {
+            letter: index + 100 for index, letter in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        }
+
+    def letter_token_ids(self, letters: str) -> dict[str, int]:
+        return {letter: self.mapping[letter] for letter in letters}
+
+    def generate_choice(self, ids: list[int], deadline: float, letter_ids: dict[str, int]) -> int:
+        self.generated += 1
+        self.choice_calls.append(letter_ids)
+        if self.fail:
+            raise self.fail
+        if self.on_generate:
+            self.on_generate(deadline)
+        return max(range(len(letter_ids)), key=lambda index: self.scores[index])
+
+
+class NonfiniteBackend(ConstrainedBackend):
+    def generate_choice(self, ids: list[int], deadline: float, letter_ids: dict[str, int]) -> int:
+        if self.fail is None:
+            raise AssertionError("test backend needs a failure")
+        raise self.fail
+
+
 def make_bridge(mod: Any, backend: FakeBackend, clock: Any = None, timeout: float = 90.0) -> Any:
     evidence = {"schema_version": 1, "model": {"id": MODEL}}
     kwargs = {"clock": clock} if clock else {}
@@ -297,6 +328,40 @@ def test_context_overflow_rejected_before_generation(mod: Any) -> None:
     assert bridge.handle(body(NOUL, "s"))[0] == 200
 
 
+def test_constrained_readout_uses_only_the_legal_ordered_subset(mod: Any) -> None:
+    backend = ConstrainedBackend([0.0, 2.0, 1.0])
+    bridge = mod.Bridge(backend, MODEL, {"schema_version": 1}, 90, readout="constrained-letter")
+    assert bridge.handle(body(choice(3))) == (200, {"answers": {"q": {"choice": "k01"}}})
+    assert backend.choice_calls == [{"A": 100, "B": 101, "C": 102}]
+
+
+def test_constrained_noul_budget_and_ties_are_first_legal_option(mod: Any) -> None:
+    backend = ConstrainedBackend([1.0, 1.0])
+    question = mod.parse_request(body(NOUL, "s"), MODEL).questions[0]
+    backend.context = len(mod.render_user_message("s", question)) + 1
+    bridge = mod.Bridge(backend, MODEL, {"schema_version": 1}, 90, readout="constrained-letter")
+    assert bridge.handle(body(NOUL, "s")) == (200, {"answers": {"q": {"noul": 0}}})
+    assert backend.generated == 1
+
+
+def test_constrained_token_collisions_reject_before_encoding_or_forward(mod: Any) -> None:
+    backend = ConstrainedBackend([1.0, 2.0])
+    backend.mapping["B"] = backend.mapping["A"]
+    bridge = mod.Bridge(backend, MODEL, {"schema_version": 1}, 90, readout="constrained-letter")
+    assert bridge.handle(body(NOUL)) == (422, {"error": "unsupported_letter_tokens"})
+    assert backend.prompts == [] and backend.generated == 0
+
+
+def test_constrained_deadline_blanks_the_answer(mod: Any) -> None:
+    now = [0.0]
+    backend = ConstrainedBackend([1.0, 0.0])
+    backend.on_generate = lambda deadline: now.__setitem__(0, deadline + 0.1)
+    bridge = mod.Bridge(
+        backend, MODEL, {"schema_version": 1}, 5, readout="constrained-letter", clock=lambda: now[0]
+    )
+    assert bridge.handle(body(NOUL)) == (200, {"answers": {"q": {}}, "error": "deadline"})
+
+
 def test_overflow_in_any_question_prevents_all_generation(mod: Any) -> None:
     backend = FakeBackend(["A", "A"], context=400)
     raw = json.dumps(
@@ -385,6 +450,56 @@ class FakeModel:
         return [[*input_ids.rows[0], 9]]
 
 
+class LetterTokenizer(FakeTokenizer):
+    def __call__(self, text: str, **kw: Any) -> dict[str, list[int]]:
+        if text in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            return {"input_ids": [100 + ord(text) - ord("A")]}
+        return super().__call__(text, **kw)
+
+    def decode(self, ids: list[int], skip_special_tokens: bool = False) -> str:
+        if len(ids) == 1 and 100 <= ids[0] < 126:
+            return chr(ids[0] - 100 + ord("A"))
+        return super().decode(ids, skip_special_tokens)
+
+    def convert_ids_to_tokens(self, token_id: int) -> str:
+        return f"raw-{token_id}"
+
+
+class FakeScores:
+    def __init__(self, values: list[float]) -> None:
+        self.values = values
+
+    def __getitem__(self, index: tuple[int, int, list[int]]) -> FakeScores:
+        return FakeScores([self.values[token_id] for token_id in index[2]])
+
+    def to(self, **kwargs: Any) -> FakeScores:
+        calls["score_dtype"] = kwargs
+        return self
+
+    def tolist(self) -> list[float]:
+        return self.values
+
+
+class ChoiceModel(FakeModel):
+    def forward(
+        self,
+        input_ids: FakeTensor,
+        attention_mask: FakeTensor,
+        use_cache: bool,
+        logits_to_keep: int,
+    ) -> Any:
+        calls["forward"] = {
+            "attention_mask": attention_mask,
+            "use_cache": use_cache,
+            "logits_to_keep": logits_to_keep,
+        }
+        values = [-10.0] * 130
+        values[100], values[101], values[102] = 1.0, 2.0, 2.0
+        return types.SimpleNamespace(logits=FakeScores(values))
+
+    __call__ = forward
+
+
 def fake_importer(name: str) -> Any:
     if name == "torch":
         return fake_torch()
@@ -398,6 +513,32 @@ def fake_importer(name: str) -> Any:
             StoppingCriteriaList=list,
         )
     raise AssertionError(f"unexpected import {name}")
+
+
+def constrained_importer(name: str) -> Any:
+    if name == "transformers":
+        return types.SimpleNamespace(
+            __version__="9.9",
+            AutoTokenizer=LetterTokenizer,
+            AutoModelForCausalLM=ChoiceModel,
+            AutoModelForImageTextToText=ChoiceModel,
+            StoppingCriteria=object,
+            StoppingCriteriaList=list,
+        )
+    return fake_importer(name)
+
+
+def bad_letter_importer(name: str) -> Any:
+    if name == "transformers":
+        return types.SimpleNamespace(
+            __version__="9.9",
+            AutoTokenizer=FakeTokenizer,
+            AutoModelForCausalLM=ChoiceModel,
+            AutoModelForImageTextToText=ChoiceModel,
+            StoppingCriteria=object,
+            StoppingCriteriaList=list,
+        )
+    return fake_importer(name)
 
 
 def config(mod: Any, **kw: Any) -> Any:
@@ -458,6 +599,35 @@ def test_generate_is_greedy_capped_and_decodes_without_special_tokens(mod: Any) 
         backend.generate(
             [1, 2, 3], deadline=0.0
         )  # already expired: stopping criterion flips the flag
+
+
+def test_constrained_transformers_forward_records_tokens_logits_path_and_ties(mod: Any) -> None:
+    calls.clear()
+    backend, info = mod.load_transformers_backend(
+        config(mod, readout="constrained-letter"), constrained_importer
+    )
+    assert backend.letter_token_ids("ABC") == {"A": 100, "B": 101, "C": 102}
+    assert backend.generate_choice([1, 2], float("inf"), backend.letter_token_ids("ABC")) == 1
+    assert calls["forward"]["logits_to_keep"] == 1 and calls["forward"]["use_cache"] is False
+    assert calls["score_dtype"] == {"dtype": "f32"}
+    assert info["forward_logits_to_keep"] == "enabled"
+    assert info["letter_tokens"]["A"] == {"id": 100, "token": "raw-100"}
+
+
+def test_constrained_startup_rejects_non_roundtripping_letter_tokens(mod: Any) -> None:
+    calls.clear()
+    with pytest.raises(mod.BridgeError):
+        mod.load_transformers_backend(
+            config(mod, readout="constrained-letter"), bad_letter_importer
+        )
+    assert "forward" not in calls
+
+
+def test_constrained_nonfinite_logits_are_bounded_invalid_output(mod: Any) -> None:
+    backend = NonfiniteBackend([1.0, 0.0])
+    backend.fail = mod.NonfiniteLogits()
+    bridge = mod.Bridge(backend, MODEL, {"schema_version": 1}, 90, readout="constrained-letter")
+    assert bridge.handle(body(NOUL)) == (200, {"answers": {"q": {}}, "error": "invalid_output"})
 
 
 @pytest.mark.parametrize(
@@ -598,7 +768,12 @@ def test_cli_requires_pinned_revision_and_explicit_template_kwargs(mod: Any) -> 
         "--chat-template-kwargs",
         "{}",
     ]
-    assert ap.parse_args([*ok, "--revision", REVISION]).revision == REVISION
+    strict = ap.parse_args([*ok, "--revision", REVISION])
+    assert strict.revision == REVISION and strict.readout == "strict-generation"
+    assert (
+        ap.parse_args([*ok, "--revision", REVISION, "--readout", "constrained-letter"]).readout
+        == "constrained-letter"
+    )
     for argv in ([*ok, "--revision", "main"], [*ok], ["--revision", REVISION, "--model", MODEL]):
         with pytest.raises(SystemExit):
             ap.parse_args(argv)
@@ -865,6 +1040,26 @@ def test_evidence_is_immutable_while_counters_change(mod: Any) -> None:
         and before["evidence_sha256"] == after["evidence_sha256"]
     )
     assert before["counters"]["invalid_output"] == 0 and after["counters"]["invalid_output"] == 1
+
+
+def test_readout_is_explicit_in_mode_separated_evidence(mod: Any) -> None:
+    calls.clear()
+    strict_cfg = config(mod)
+    _, strict_info = mod.load_transformers_backend(strict_cfg, fake_importer)
+    _, constrained_info = mod.load_transformers_backend(
+        config(mod, readout="constrained-letter"), constrained_importer
+    )
+    strict = mod.build_evidence(strict_cfg, strict_info, "d" * 64)
+    constrained_cfg = config(mod, readout="constrained-letter")
+    constrained = mod.build_evidence(constrained_cfg, constrained_info, "d" * 64)
+    assert strict["readout"] == "strict-generation"
+    assert strict["limits"]["max_new_tokens"] == 32
+    assert constrained["readout"] == "constrained-letter"
+    assert constrained["limits"]["max_new_tokens"] == 1
+    assert strict["decoding"] == "greedy"
+    assert constrained["decoding"] == "restricted-next-token-argmax"
+    assert constrained["backend"]["letter_tokens"]["Z"]["id"] == 125
+    assert mod.stable_json_bytes(strict) != mod.stable_json_bytes(constrained)
 
 
 def test_no_default_heavy_imports_or_downloads(mod: Any) -> None:

@@ -202,10 +202,16 @@ listed.
 General chat models have no System One server of their own. `research/llm_bridge.py` serves one pinned Transformers
 snapshot on `127.0.0.1` with the same `POST /v1/systemone` contract (standard library core; torch and transformers are
 imported only when you start it). Each question becomes one user chat message (state and question verbatim, options as
-`A)` to `Z)` in the order received) and the model must reply with exactly one uppercase letter. Anything else is a
-failed item: no repair, no retry, no constrained decoding. Boolean questions use `A) Não` / `B) Sim` and return a
-discrete 0 or 1, not a calibrated probability. Generation is greedy, at most 32 new tokens; a prompt that does not fit
-the context with that budget is rejected (422), never truncated.
+`A)` to `Z)` in the order received). Boolean questions use `A) Não` / `B) Sim` and return a discrete 0 or 1, not a
+calibrated probability.
+
+There are two separate, preregistered readout modes. `strict-generation` is the default format-following diagnostic:
+greedy generation has a 32-token budget and only one exact uppercase letter is accepted. `constrained-letter` is the
+common planned decision comparison for all seven general LLMs, regardless of a strict smoke result: it makes one causal
+next-token forward and selects the largest finite float32 logit only among the valid option-letter token IDs. The first
+legal option wins an exact tie. It has a one-token context budget. Every legal letter must be one distinct token that
+round-trips exactly; otherwise startup/request validation fails before inference. This is a discrete restricted choice,
+not a calibrated probability, and neither mode repairs, retries, or uses gold labels.
 
 Use a separate environment and replace `ORG/NAME` and `<40-hex commit>` with the model and revision you decided on
 beforehand (pinned versions as in the Laya example above):
@@ -224,7 +230,7 @@ PYTHON
 "$HOME/.cache/ptbr-bridge/venv/bin/python" research/llm_bridge.py \
   --model ORG/NAME --revision "<40-hex commit>" --device cpu --threads 4 --context 8192 \
   --chat-template-kwargs '{"enable_thinking": false}' --generation-timeout 90 \
-  --port 18031 --evidence-output ./bridge-evidence.json
+  --readout constrained-letter --port 18031 --evidence-output ./bridge-evidence.json
 ```
 
 - `--chat-template-kwargs` is mandatory: pass the model's non-thinking switch (or `{}` when it has none, after
@@ -242,8 +248,9 @@ PYTHON
   Past the deadline, or on an invalid reply, the answer is HTTP 200 with `{}` for the question: the evaluator records
   `no_answer` once and does not retry. One request runs at a time; a concurrent one gets 429.
 - `GET /health` returns the execution manifest (`evidence`: bridge SHA256, model and tokenizer revision, package
-  versions, dtype, device, threads, context, output and deadline limits, template kwargs, template SHA256, prompt
-  version and hash; `evidence_sha256`) and the mutable `counters` (`invalid_output`, `deadline`, `overbudget`). No
+  versions, dtype, device, threads, context, selected output budget, template kwargs, template SHA256, prompt version
+  and hash; readout, constrained-letter IDs/raw token strings and the `logits_to_keep` forward path when applicable;
+  `evidence_sha256`) and the mutable `counters` (`invalid_output`, `deadline`, `overbudget`). No
   request text, endpoint or local path appears in either.
 
 Smoke, then the full run, with `--server-version` set to the SHA256 of the exact evidence bytes. Capture `/health` before
@@ -258,14 +265,17 @@ uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --
 uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
   --name llm-full --output ./llm-full.json --revision 5450e73e634403993d9ac86d53d60a9b0ff76673 \
   --checkpoint-id ORG/NAME --checkpoint-revision "<40-hex commit>" \
-  --context "8192 tokens; chat template; 32 output tokens" --quantization "none; CPU float32" \
-  --hardware "<cpu, memory>" --server llm_bridge --server-version "$EVIDENCE_SHA"
+  --context "8192 tokens; chat template; constrained-letter; 1 output token" --quantization "none; CPU float32" \
+  --hardware "<cpu, memory>" --server ptbr-llm-bridge-constrained-letter --server-version "$EVIDENCE_SHA"
 curl -s http://127.0.0.1:18031/health > health-after.json
 ```
 
 Keep a sidecar next to the report that links the report SHA256, the evidence SHA256 and the source commits, with the
-actual start arguments and private values redacted. Numbers from the bridge follow this protocol only; they are not
-mixed with `lm-evaluation-harness` numbers.
+actual start arguments and private values redacted. Its readable metadata must use
+`ptbr-llm-bridge-constrained-letter` or `ptbr-llm-bridge-strict-generation` exactly, and the report name must include
+the same mode. Strict full runs are separate rows; native Q4 variants are separate rows too. Capture health before and
+after a full run: any nonzero failure counter means the full run is failed and unranked. Numbers from the bridge follow
+this protocol only; they are not mixed with `lm-evaluation-harness` numbers.
 
 ## Português do Brasil
 
@@ -380,18 +390,20 @@ nem prompts privados na discussão. Só entram modelos públicos, sem ajuste nas
 
 Modelos de chat genéricos não têm servidor System One próprio. O `research/llm_bridge.py` serve um snapshot fixado do
 Transformers em `127.0.0.1` com o mesmo contrato `POST /v1/systemone` (núcleo só com a biblioteca padrão; torch e
-transformers só são importados ao iniciá-lo). Cada pergunta vira uma mensagem de usuário (estado e pergunta literais,
-opções como `A)` a `Z)` na ordem recebida) e o modelo precisa responder com exatamente uma letra maiúscula. Qualquer
-outra coisa é item com falha: sem reparo, sem nova tentativa, sem decodificação restrita. Perguntas booleanas usam
-`A) Não` / `B) Sim` e devolvem 0 ou 1 discreto, não uma probabilidade calibrada. A geração é gulosa, com no máximo 32
-tokens novos; prompt que não cabe no contexto com esse orçamento é recusado (422), nunca truncado.
+transformers só são importados ao iniciá-lo). Há dois modos separados: `strict-generation` é o diagnóstico de seguimento
+de formato, padrão, com geração gulosa de até 32 tokens e uma única letra maiúscula exata; `constrained-letter` é a
+comparação comum planejada para os sete LLMs gerais, mesmo se o smoke strict falhar. Ele faz um forward causal e escolhe
+somente entre os IDs das letras legais, com orçamento de um token, logits finitos convertidos para float32 e desempate
+pela primeira opção legal. Cada letra precisa ser um token distinto de round-trip exato. Isso é uma escolha discreta,
+não probabilidade calibrada; nenhum modo repara, tenta de novo ou usa rótulo ouro.
 
 A receita acima vale aqui: ambiente separado, download explícito e fixado do snapshot (a ponte nunca baixa), início
 offline em loopback com `--evidence-output` (arquivo existente nunca é sobrescrito), `--chat-template-kwargs`
 obrigatório (a chave que desliga o raciocínio, ou `{}` após inspecionar o template) e `--context` explícito. O prazo
 (`--generation-timeout`, 90 s) cobre a requisição inteira e só é checado entre passos de decodificação e entre
 perguntas; mantenha o `--timeout` do avaliador maior. Resposta inválida ou prazo vencido devolvem HTTP 200 com `{}`,
-registrado como `no_answer` uma única vez. `GET /health` traz o manifesto de execução (`evidence`, `evidence_sha256`) e
-os contadores (`invalid_output`, `deadline`, `overbudget`). Use o SHA256 dos bytes exatos do arquivo de evidência como
-`--server-version`, capture `/health` antes e depois da execução completa e compare; contador diferente de zero torna a
-execução reprovada e sem ranking.
+registrado como `no_answer` uma única vez. `GET /health` traz o manifesto de execução, inclusive modo, orçamento real,
+IDs/tokens brutos e caminho de `logits_to_keep` do modo restrito, além de `evidence_sha256` e dos contadores. Use o
+SHA256 dos bytes exatos do arquivo de evidência como `--server-version`; o servidor declarado deve ser exatamente
+`ptbr-llm-bridge-constrained-letter` ou `ptbr-llm-bridge-strict-generation`, e o nome também inclui o modo. Capture
+`/health` antes e depois da execução completa; contador diferente de zero torna a execução reprovada e sem ranking.

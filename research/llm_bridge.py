@@ -1,8 +1,9 @@
 """Loopback System One bridge for a pinned, offline Transformers chat model.
 
 The evaluator (research/ptbr_bench.py) speaks POST /v1/systemone. This server turns each question into one chat
-message with letter-coded options (A..Z, in the order received), greedily generates at most 32 tokens and accepts
-exactly one uppercase letter. Anything else fails the item: no repair, no retry, no fallback, no constrained decoding.
+message with letter-coded options (A..Z, in the order received). The default strict-generation mode greedily
+generates at most 32 tokens and accepts exactly one uppercase letter; invalid output fails without repair or retry.
+Explicit constrained-letter mode uses one forward and argmax only among legal letter tokens, recorded separately.
 Boolean questions use A = Não, B = Sim and return a discrete 0/1, never a probability or a confidence.
 
 The core (request validation, prompt rendering, parsing, HTTP) is standard library only. torch and transformers are
@@ -25,7 +26,9 @@ import datetime
 import hashlib
 import http.server
 import importlib
+import inspect
 import json
+import math
 import os
 import re
 import sys
@@ -39,6 +42,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 PROMPT_VERSION = "ptbr-systemone-letter-v1"
 MAX_NEW_TOKENS = 32
+CONSTRAINED_NEW_TOKENS = 1
 MAX_BODY_BYTES = 1024 * 1024
 MAX_QUESTIONS = 16
 MIN_CHOICES, MAX_CHOICES = 2, 26
@@ -59,6 +63,7 @@ DTYPES = {
     "cuda": ("bfloat16", "float16", "float32"),
 }
 AUTO_CLASSES = ("AutoModelForCausalLM", "AutoModelForImageTextToText")
+READOUTS = ("strict-generation", "constrained-letter")
 
 # Prompt pieces are constants so that their hash is part of the execution evidence.
 PROMPT_QUESTION = "Pergunta: "
@@ -93,6 +98,14 @@ class DeadlineExceeded(Exception):
 
 class Overbudget(Exception):
     """Prompt tokens plus the output budget exceed the configured context."""
+
+
+class UnsupportedLetterTokens(Exception):
+    """The tokenizer cannot represent the requested legal letters safely."""
+
+
+class NonfiniteLogits(Exception):
+    """A constrained forward returned a non-finite legal logit."""
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -246,15 +259,26 @@ def publish_exclusive(path, payload):
 
 
 class Bridge:
-    """backend needs: context (int), encode(text) -> list[int], generate(ids, deadline) -> str."""
+    """Bridge over strict generation or a constrained next-letter backend readout."""
 
-    def __init__(self, backend, served_model, evidence, generation_timeout, clock=time.monotonic):
+    def __init__(
+        self,
+        backend,
+        served_model,
+        evidence,
+        generation_timeout,
+        readout="strict-generation",
+        clock=time.monotonic,
+    ):
+        if readout not in READOUTS:
+            raise BridgeError("unknown readout")
         self.backend = backend
         self.served_model = served_model
         self.evidence = evidence
         self.evidence_bytes = stable_json_bytes(evidence)
         self.evidence_sha256 = hashlib.sha256(self.evidence_bytes).hexdigest()
         self.generation_timeout = generation_timeout
+        self.readout = readout
         self.clock = clock
         self._inference = threading.Lock()
         self._counter_lock = threading.Lock()
@@ -286,6 +310,8 @@ class Bridge:
         except Overbudget:
             self._count("overbudget")
             return 422, {"error": "context_overflow"}
+        except UnsupportedLetterTokens:
+            return 422, {"error": "unsupported_letter_tokens"}
         except Exception:
             return 500, {"error": "internal"}
         finally:
@@ -295,17 +321,32 @@ class Bridge:
         deadline = self.clock() + self.generation_timeout
         encoded = []
         for q in request.questions:
+            letters = LETTERS[: len(option_labels(q))]
+            letter_ids = None
+            if self.readout == "constrained-letter":
+                letter_ids = self.backend.letter_token_ids(letters)
+                if tuple(letter_ids) != tuple(letters) or len(set(letter_ids.values())) != len(
+                    letter_ids
+                ):
+                    raise UnsupportedLetterTokens
             ids = self.backend.encode(render_user_message(request.state, q))
-            if len(ids) + MAX_NEW_TOKENS > self.backend.context:
+            output_budget = (
+                CONSTRAINED_NEW_TOKENS if self.readout == "constrained-letter" else MAX_NEW_TOKENS
+            )
+            if len(ids) + output_budget > self.backend.context:
                 raise Overbudget
-            encoded.append(ids)
+            encoded.append((ids, letters, letter_ids))
         answers = {}
         error = None
-        for q, ids in zip(request.questions, encoded, strict=True):
+        for q, (ids, _letters, letter_ids) in zip(request.questions, encoded, strict=True):
             try:
                 if self.clock() >= deadline:
                     raise DeadlineExceeded
-                text = self.backend.generate(ids, deadline)
+                if self.readout == "constrained-letter":
+                    index = self.backend.generate_choice(ids, deadline, letter_ids)
+                else:
+                    text = self.backend.generate(ids, deadline)
+                    index = parse_letter(text, len(option_labels(q)))
                 if self.clock() >= deadline:
                     raise DeadlineExceeded  # the deadline wins even over a valid partial letter
             except DeadlineExceeded:
@@ -314,7 +355,12 @@ class Bridge:
                     "answers": {r.name: {} for r in request.questions},
                     "error": "deadline",
                 }
-            index = parse_letter(text, len(option_labels(q)))
+            except NonfiniteLogits:
+                self._count("invalid_output")
+                return 200, {
+                    "answers": {r.name: {} for r in request.questions},
+                    "error": "invalid_output",
+                }
             if index is None:
                 self._count("invalid_output")
                 answers[q.name] = {}
@@ -406,6 +452,7 @@ class Config:
     template_date: str = FROZEN_DATE
     generation_timeout: float = 90.0
     alias: str | None = None
+    readout: str = "strict-generation"
 
 
 def resolve_dtype(device, requested):
@@ -451,6 +498,16 @@ class TransformersBackend:
         self.clock_module = clock_module
         self._stopping_base = transformers.StoppingCriteria
         self._criteria_list = transformers.StoppingCriteriaList
+        self._letter_tokens = None
+        if config.readout == "constrained-letter":
+            forward = getattr(model, "forward", None)
+            if forward is None:
+                raise BridgeError("model has no forward method for constrained readout")
+            self.forward_uses_logits_to_keep = (
+                "logits_to_keep" in inspect.signature(forward).parameters
+            )
+        else:
+            self.forward_uses_logits_to_keep = None
 
     def _render(self, text, **extra):
         messages = [{"role": "user", "content": text}]
@@ -510,6 +567,58 @@ class TransformersBackend:
         if state["expired"]:
             raise DeadlineExceeded
         return self.tokenizer.decode(out[0][len(ids) :], skip_special_tokens=True)
+
+    def prepare_letter_tokens(self):
+        """Validate A..Z once for immutable evidence; no model forward is involved."""
+        mapping = {}
+        used = set()
+        for letter in LETTERS:
+            ids = list(
+                self.tokenizer(letter, add_special_tokens=False, truncation=False)["input_ids"]
+            )
+            if len(ids) != 1 or self.tokenizer.decode(ids, skip_special_tokens=False) != letter:
+                raise BridgeError(f"letter {letter} is not one exact token")
+            token_id = ids[0]
+            if token_id in used:
+                raise BridgeError("letter tokens are not distinct")
+            raw_token = self.tokenizer.convert_ids_to_tokens(token_id)
+            if not isinstance(raw_token, str):
+                raise BridgeError("letter token has no raw token string")
+            mapping[letter] = {"id": token_id, "token": raw_token}
+            used.add(token_id)
+        self._letter_tokens = mapping
+        return mapping
+
+    def letter_token_ids(self, letters):
+        if self._letter_tokens is None:
+            raise UnsupportedLetterTokens
+        try:
+            return {letter: self._letter_tokens[letter]["id"] for letter in letters}
+        except KeyError:
+            raise UnsupportedLetterTokens from None
+
+    def generate_choice(self, ids, deadline, letter_ids, clock=time.monotonic):
+        """One causal forward and first-in-order argmax among legal next-token IDs."""
+        if clock() >= deadline:
+            raise DeadlineExceeded
+        torch = self.torch
+        tensor = torch.tensor([ids], dtype=torch.long, device=self.device)
+        kwargs = {
+            "input_ids": tensor,
+            "attention_mask": torch.ones_like(tensor),
+            "use_cache": False,
+        }
+        if self.forward_uses_logits_to_keep:
+            kwargs["logits_to_keep"] = 1
+        with torch.inference_mode():
+            out = self.model(**kwargs)
+        if clock() >= deadline:
+            raise DeadlineExceeded
+        scores = out.logits[0, -1, list(letter_ids.values())].to(dtype=torch.float32).tolist()
+        if not all(math.isfinite(float(score)) for score in scores):
+            raise NonfiniteLogits
+        # max keeps the first occurrence, so option order decides exact ties.
+        return max(range(len(scores)), key=lambda index: scores[index])
 
 
 TEMPLATE_KWARGS_NFC_VERSION = "nfc-v1"
@@ -589,6 +698,9 @@ def load_transformers_backend(config, import_module=importlib.import_module):
         torch, transformers, tokenizer, model, config, kwargs, clock_module
     )
     backend.probe_clock()
+    letter_tokens = None
+    if config.readout == "constrained-letter":
+        letter_tokens = backend.prepare_letter_tokens()
     info = {
         "runtime": "transformers",
         "torch": str(torch.__version__),
@@ -604,7 +716,16 @@ def load_transformers_backend(config, import_module=importlib.import_module):
         "template_date": config.template_date,
         "strftime_now_frozen": clock_module is not None,
         "chat_template_sha256": hashlib.sha256(template.encode()).hexdigest(),
+        "forward_logits_to_keep": (
+            "enabled"
+            if backend.forward_uses_logits_to_keep
+            else "unsupported"
+            if config.readout == "constrained-letter"
+            else "not_used"
+        ),
     }
+    if letter_tokens is not None:
+        info["letter_tokens"] = letter_tokens
     return backend, info
 
 
@@ -622,13 +743,18 @@ def build_evidence(config, info, code_sha256):
         "backend": info,
         "limits": {
             "context": config.context,
-            "max_new_tokens": MAX_NEW_TOKENS,
+            "max_new_tokens": (
+                CONSTRAINED_NEW_TOKENS if config.readout == "constrained-letter" else MAX_NEW_TOKENS
+            ),
             "generation_timeout_seconds": config.generation_timeout,
             "max_body_bytes": MAX_BODY_BYTES,
             "max_questions": MAX_QUESTIONS,
         },
         "prompt": {"version": PROMPT_VERSION, "sha256": PROMPT_SHA256},
-        "decoding": "greedy",
+        "decoding": (
+            "restricted-next-token-argmax" if config.readout == "constrained-letter" else "greedy"
+        ),
+        "readout": config.readout,
     }
 
 
@@ -693,6 +819,7 @@ def build_parser():
         "--alias", type=_model, help="model name the evaluator sends (default: --model)"
     )
     ap.add_argument("--generation-timeout", type=_positive_float, default=90.0)
+    ap.add_argument("--readout", choices=READOUTS, default="strict-generation")
     ap.add_argument("--template-date", type=_date, default=FROZEN_DATE)
     ap.add_argument(
         "--evidence-output", type=Path, help="write the execution evidence here, never overwriting"
@@ -722,12 +849,19 @@ def main(argv=None):
             template_date=args.template_date,
             generation_timeout=args.generation_timeout,
             alias=args.alias,
+            readout=args.readout,
         )
         backend, info = load_transformers_backend(config)
         evidence = build_evidence(
             config, info, hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         )
-        bridge = Bridge(backend, config.alias or config.model, evidence, config.generation_timeout)
+        bridge = Bridge(
+            backend,
+            config.alias or config.model,
+            evidence,
+            config.generation_timeout,
+            readout=config.readout,
+        )
         if args.evidence_output:
             publish_exclusive(args.evidence_output, bridge.evidence_bytes)
     except BridgeError as e:
