@@ -57,7 +57,7 @@
     "constrained-letter-smokes/Qwen--Qwen3.5-4B-smoke-constrained-letter-evidence.json": "bbbdbe07225cfe850ecb871c52a3d1946cc578a69db3ddf64df1313367da41ea",
     "constrained-live-synthetic.json": "89477b335c6a69f014645bc540b6f96d5146857501dd7a5b8ca111cc6b430628",
     "constrained-state.json": "0fd42e2e054b27a9283a1e4f5b2dcc34c1d1b6f553645d2dc253ab6198ca59e6",
-    "execution-progress.json": "73591b1fd19cd2bad5ebb7135db14c32c7acb687d5b5f29861ca5da015414a7a",
+    "execution-progress.json": "3f9a0de5100a7ff138e6f0e05fad872cc293fbdb0347ac467e6ae1aacb323262",
     "kev08-mlx-bf16-evidence.json": "0953348ced9f2f7b7a4bd7dafc6fbd32b1e06cba5d15c5f1746e26097c1d6cc0",
     "kev08-mlx-bf16.json": "82762648d1c04c9cbb5439f0d5034852d7ab55940d4b22e9ac78a0f75ce93b93",
     "kev08-native-smoke.json": "c575512f5c06b82c3a5a4b52b7fdf6b5760236fe17c47cb8de5562938f0b2846",

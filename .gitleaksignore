@@ -6,3 +6,7 @@ research/rounds/2026-10-21/results/strict-generation-smokes/Qwen--Qwen3.5-4B-smo
 research/rounds/2026-10-21/results/strict-generation-smokes/microsoft--Phi-4-mini-instruct-smoke-evidence.json:generic-api-key:1
 research/rounds/2026-10-21/results/strict-generation-smokes/Qwen--Qwen2.5-7B-Instruct-smoke-evidence.json:generic-api-key:1
 research/rounds/2026-10-21/results/strict-generation-smokes/ibm-granite--granite-3.3-8b-instruct-smoke-evidence.json:generic-api-key:1
+
+# Public model revision and the SHA256 of the tokenizer preflight artifact; verified against frozen pins/file bytes.
+research/rounds/2026-10-21/results/constrained-letter-smokes/Qwen--Qwen3.5-4B-smoke-constrained-letter-evidence.json:generic-api-key:1
+research/rounds/2026-10-21/results/index.json:generic-api-key:55
