@@ -187,7 +187,7 @@ def validate(report, source=None):
         report.get("model"),
         *(ckpt.values() if isinstance(ckpt, dict) else []),
     ]
-    if any(isinstance(v, str) and "://" in v for v in declared):
+    if any(isinstance(v, str) and bench.looks_like_uri(v) for v in declared):
         errors.append("a declared label contains a URL; reports must not carry endpoints")
     return errors, warnings
 

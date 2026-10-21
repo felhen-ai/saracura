@@ -532,6 +532,71 @@ def tamper_url(r: dict[str, Any]) -> None:
     r["checkpoint"]["server"] = "http://10.0.0.5:8000"
 
 
+URI_FORMS = [
+    "http://private.example/v1",
+    "https://private.example/v1",
+    "HTTPS://private.example/v1",
+    "http:private.example/v1",
+    "https:private.example/v1",
+    "HtTpS:private.example",
+    "//private.example/v1",
+    "  https:private.example/v1",
+    "  //private.example/v1",
+    "ftp://private.example",
+]
+PLAIN_LABELS = ["org/model-1.5", "CPU:4threads", "sha256:" + "a" * 64, "max_len 1024, head 256"]
+
+
+@pytest.mark.parametrize("value", URI_FORMS)
+def test_uri_predicate_and_cli_reject_every_url_form_before_network_or_file(
+    bench: Any,
+    validator: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    value: str,
+) -> None:
+    def forbidden(*a: object, **k: object) -> None:
+        raise AssertionError("network used")
+
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+    assert bench.looks_like_uri(value)
+    assert validator.bench.looks_like_uri is bench.looks_like_uri
+    monkeypatch.chdir(tmp_path)
+    for flag in ("--model", "--checkpoint-id", "--hardware", "--server", "--context"):
+        argv = ["--base-url", "http://127.0.0.1:9", "--name", "ok", f"{flag}={value}"]
+        with pytest.raises(SystemExit) as exc:
+            bench.main(argv)
+        assert exc.value.code == 2
+        assert "private.example" not in capsys.readouterr().err
+        assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("value", PLAIN_LABELS)
+def test_uri_predicate_accepts_ordinary_metadata(bench: Any, value: str) -> None:
+    assert not bench.looks_like_uri(value)
+    assert bench._label(value) == value
+
+
+@pytest.mark.parametrize("value", URI_FORMS)
+@pytest.mark.parametrize("where", ["name", "model", "server", "hardware"])
+def test_validator_rejects_every_url_form_in_declared_labels(
+    validator: Any,
+    source: dict[str, bytes],
+    good: dict[str, Any],
+    where: str,
+    value: str,
+) -> None:
+    broken = copy.deepcopy(good)
+    if where in ("name", "model"):
+        broken[where] = value
+    else:
+        broken["checkpoint"][where] = value
+    errors = check(validator, source, broken)
+    assert errors != []
+    assert all("private.example" not in e for e in errors)
+
+
 def tamper_not_ready(r: dict[str, Any]) -> None:
     r["run"]["submission_ready"] = False
 

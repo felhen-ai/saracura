@@ -362,9 +362,21 @@ def _non_negative_int(text):
     return v
 
 
+def looks_like_uri(text):
+    """True for anything that could carry an endpoint: any `://`, http(s) scheme forms (also without slashes,
+    any case) and network-path references starting with `//`. Unparseable text counts as a URI."""
+    v = text.strip()
+    if "://" in v or v.startswith("//"):
+        return True
+    try:
+        return urllib.parse.urlsplit(v).scheme.lower() in ("http", "https")
+    except ValueError:
+        return True
+
+
 def _label(text):
     v = text.strip()
-    if not v or len(v) > 200 or not v.isprintable() or "://" in v:
+    if not v or len(v) > 200 or not v.isprintable() or looks_like_uri(v):
         raise argparse.ArgumentTypeError(
             "must be 1 to 200 printable characters and must not contain a URL"
         )
