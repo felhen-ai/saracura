@@ -1,0 +1,49 @@
+import pathlib,json,sys
+R=pathlib.Path.home()/'saracura-round-2026-10-21'
+source=(R/'native_cpu_queue.py').read_text().split('for model,kind,base in models:')[0]
+exec(compile(source,'native_queue_shared','exec'),globals())
+records=json.load(open(STATE))['models']
+for model,kind,base in models:
+ rec=records[model]
+ # KeV's strict encoder preflight covers every item. Other runtimes need their own complete audit.
+ if rec.get('stage')!='smoke_pass':continue
+ a=next(x for x in M['models'] if x['id']==model);slug=model.replace('/','--');rec['full_stage']='download';save()
+ try:
+  if shutil.disk_usage(R).free<20*1024**3:raise RuntimeError('disk reserve refuses full download')
+  path=dl(model,a['revision']);
+  if base:
+   dl(*base);refs=CACHE/('models--'+base[0].replace('/','--'))/'refs';refs.mkdir(parents=True,exist_ok=True);(refs/'main').write_text(base[1])
+  args=['systemd-run','--user','--unit=saracura-round-native-model','--property=MemoryMax=20G','--property=MemorySwapMax=0','--property=CPUQuota=250%','--setenv=CUDA_VISIBLE_DEVICES=',P,'-u',str(R/'native_cpu_server.py'),kind,path,base[1] if base else 'full'];subprocess.run(args,check=True,capture_output=True)
+  ready=False
+  for _ in range(180):
+   try:health();ready=True;break
+   except (OSError,ValueError):pass
+   if subprocess.run(['systemctl','--user','is-active','saracura-round-native-model'],capture_output=True,text=True).stdout.strip()=='failed':raise RuntimeError('upstream startup failed')
+   time.sleep(2)
+  if not ready:raise RuntimeError('startup timeout')
+  pre=json.load(open(R/(pathlib.Path(path).name+'-cpu-reference-preflight.json')));assert pre['items']==5196 and pre['status']=='pass' and not pre['state_truncated']
+  ep=R/(slug+'-cpu-reference-smoke-evidence.json');esha=hashlib.sha256(ep.read_bytes()).hexdigest();out=R/(slug+'-cpu-reference-full.json');rec['full_stage']='running';save()
+  args=[P,'-u',str(R/'ptbr_bench.py'),'--base-url','http://127.0.0.1:18032','--model',model,'--name',slug.lower()+'-cpu-reference-full','--output',str(out),'--revision',M['dataset']['revision'],'--checkpoint-id',model,'--checkpoint-revision',a['revision'],'--context','native preflight5196; '+pre.get('upstream_preprocessing','kev strict no truncation'),'--hardware','Ryzen7 7700X CPU2threads capped250percent','--quantization','none bf16','--server',kind+'-cpu','--server-version',esha,'--timeout','240']
+  with (R/(slug+'-cpu-reference-full.log')).open('x') as f:
+   client=subprocess.Popen(args,stdout=f,stderr=f)
+   try:
+    while client.poll() is None:
+     active=subprocess.run(['systemctl','--user','is-active','saracura-round-native-model'],capture_output=True,text=True).stdout.strip()
+     if active!='active':raise RuntimeError('native_model_exited_during_full')
+     time.sleep(5)
+    if client.returncode:raise RuntimeError('evaluator_exit_'+str(client.returncode))
+   finally:
+    if client.poll() is None:
+     client.terminate()
+     try:client.wait(timeout=10)
+     except subprocess.TimeoutExpired:client.kill();client.wait()
+
+  report=json.load(open(out));failed=sum(t['failed'] for t in report['tasks'].values());rec['full_stage']='pass' if not failed else 'failed';rec['full_failed']=failed;save()
+  if not failed:
+   with (R/(slug+'-cpu-reference-full-validation.log')).open('x') as f:v=subprocess.run([P,str(R/'validate_submission.py'),str(out)],stdout=f,stderr=f)
+   rec['validator_exit']=v.returncode;save()
+ except Exception as e:rec.update(full_stage='operational_failure',full_error=type(e).__name__+':'+str(e)[:180]);save()
+ finally:
+  stop()
+  if CACHE.exists():assert not CACHE.is_symlink();shutil.rmtree(CACHE)
+print('Eligible native full queue complete',flush=True)

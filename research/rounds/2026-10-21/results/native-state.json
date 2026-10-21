@@ -1,0 +1,37 @@
+{
+  "updated": "2026-10-21T22:37:16.092736+00:00",
+  "models": {
+    "felhen-ai/saracura-ptbr-4b": {
+      "stage": "smoke_pass",
+      "revision": "9b27a7be153afee62b778b61eb5d664ce978d3b1",
+      "items": 14,
+      "failed": 0,
+      "full": "pending full-context preprocessing audit",
+      "report_sha256": "2d6a30227d3654a1a10a61912f625f9b01f2d96df23fd454b74e96b6a094e410"
+    },
+    "jaredpalmer/kev-4b": {
+      "stage": "smoke_pass",
+      "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+      "items": 14,
+      "failed": 0,
+      "full": "pending full-context preprocessing audit",
+      "report_sha256": "30582ce161a835f9bd9b34ff5c2fa9c4d0b31da2c1b48f9b3ff94cb04a0baa20"
+    },
+    "Mapika/decider-4b": {
+      "stage": "smoke_pass",
+      "revision": "585473dec4fa93f0325c2bf02dda7273b61f44c1",
+      "items": 14,
+      "failed": 0,
+      "full": "pending full-context preprocessing audit",
+      "report_sha256": "f5404ea22288aa5321d318b3594534a7e9e39eb69e5fc1bfa0177df758aa7f7e"
+    },
+    "interfaze-ai/lev": {
+      "stage": "smoke_pass",
+      "revision": "8721908e50dffd5fe8726507c09498e3def5b2f6",
+      "items": 14,
+      "failed": 0,
+      "full": "pending full-context preprocessing audit",
+      "report_sha256": "e5945dd6ea136d659bb57631a57ffab826331e27ae24b9d7a93a60c67dd040c6"
+    }
+  }
+}

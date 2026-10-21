@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "items": 5196,
+  "max_record_tokens": 1823,
+  "max_state_tokens": 1427,
+  "state_truncated": false,
+  "strict": true,
+  "base_revision": "1001bb4d826a52d1f399e183466143f4da7b741b"
+}

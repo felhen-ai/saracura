@@ -1,0 +1,16 @@
+import pathlib,json
+R=pathlib.Path.home()/'saracura-round-2026-10-21'
+source=(R/'constrained_queue.py').read_text().split('passing=[]')[0]
+exec(compile(source,'constrained_queue_shared','exec'),globals())
+records=json.load(open(R/'constrained-state.json'))['models']
+for a in M['models']:
+ rec=records.get(a['id'],{})
+ if rec.get('smoke',{}).get('state')!='pass':continue
+ rec['state']='full_download';save()
+ try:
+  download(a);rec['full_preflight']=preflight(a);h=start(a,'full');assert h['evidence']['readout']=='constrained-letter';rec['state']='full_running';save();rec['full']=evaluate(a,'full',h);rec['state']='full_'+rec['full']['state'];save()
+  if rec['full']['state']=='pass':
+   report=R/(a['id'].replace('/','--')+'-full-constrained-letter.json');v=subprocess.run([PY,str(R/'validate_submission.py'),str(report)],capture_output=True,text=True);(R/(a['id'].replace('/','--')+'-full-constrained-validation.log')).write_text(v.stdout+v.stderr);rec['validator_exit']=v.returncode;save()
+ except Exception as e:rec['full_error']=type(e).__name__+':'+str(e)[:180];save()
+ finally:stop(a);cleanup(a)
+print('Constrained full queue complete',flush=True)

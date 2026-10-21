@@ -1,0 +1,19 @@
+{
+  "updated": "2026-10-21T22:39:13.833682+00:00",
+  "models": {
+    "Qwen/Qwen3.5-4B": {
+      "state": "smoke_running",
+      "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 1835,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {
+          "enable_thinking": false
+        },
+        "status": "pass"
+      }
+    }
+  }
+}
