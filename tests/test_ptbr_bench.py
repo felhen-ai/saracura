@@ -268,6 +268,54 @@ def test_bad_server_answers_count_wrong_with_bounded_codes(
     assert any("failed items" in i for i in report["run"]["readiness_issues"])
 
 
+def _race_setup(
+    bench: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, winner: bytes
+) -> tuple[bytes, Path]:
+    """A concurrent process publishes `winner` between our absent check and our os.link."""
+    task = "olid_alvo"
+    mine = make_data([task])[task]
+    monkeypatch.setattr(bench, "download", lambda revision, t: mine)
+    target = tmp_path / "cache" / DATASET_SHA / f"{task}.test.jsonl"
+    real_link = bench.os.link
+
+    def racing_link(src: Any, dst: Any) -> None:
+        Path(dst).write_bytes(winner)
+        real_link(src, dst)
+
+    monkeypatch.setattr(bench.os, "link", racing_link)
+    return mine, target
+
+
+def test_cache_race_reuses_identical_winner_and_cleans_temp(
+    bench: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mine, target = _race_setup(bench, monkeypatch, tmp_path, make_data(["olid_alvo"])["olid_alvo"])
+    data, rows = bench.fetch(DATASET_SHA, "olid_alvo", tmp_path / "cache")
+    assert data == mine and rows
+    assert target.read_bytes() == mine
+    assert [p.name for p in target.parent.iterdir()] == [target.name]
+
+
+@pytest.mark.parametrize("winner", [b"not json\n", make_data(["olid_ofensivo"])["olid_ofensivo"]])
+def test_cache_race_with_different_winner_is_rejected_without_overwrite(
+    bench: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, winner: bytes
+) -> None:
+    _, target = _race_setup(bench, monkeypatch, tmp_path, winner)
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        bench.fetch(DATASET_SHA, "olid_alvo", tmp_path / "cache")
+    assert target.read_bytes() == winner
+    assert [p.name for p in target.parent.iterdir()] == [target.name]
+
+
+def test_invalid_download_is_never_published(
+    bench: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(bench, "download", lambda revision, t: b"garbage\n")
+    with pytest.raises(ValueError):
+        bench.fetch(DATASET_SHA, "olid_alvo", tmp_path / "cache")
+    assert not (tmp_path / "cache").exists()
+
+
 def test_invalid_choice_and_probability_answers_are_wrong(bench: Any) -> None:
     q = {"type": "choice", "criteria": {"a": "x", "b": "y"}}
     assert bench.pick({"choice": "b"}, q) == ("b", None)

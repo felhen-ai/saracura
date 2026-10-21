@@ -178,22 +178,28 @@ def parse_rows(data, task):
 
 
 def fetch(revision, task, cache):
-    """(bytes, rows) for one split; the cache is keyed by the immutable commit and written atomically."""
+    """(bytes, rows) for one split; the cache is keyed by the immutable commit and created once, never replaced."""
     path = Path(cache) / revision / f"{task}.test.jsonl"
     if path.is_file():
         data = path.read_bytes()
-    else:
-        data = download(revision, task)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{task}.")
+        return data, parse_rows(data, task)
+    data = download(revision, task)
+    rows = parse_rows(data, task)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{task}.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            os.replace(tmp, path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
-    return data, parse_rows(data, task)
+            os.link(tmp, path)
+        except FileExistsError:
+            if path.read_bytes() != data:
+                raise ValueError(
+                    f"{task}: cached split differs from the downloaded source; refusing to overwrite"
+                ) from None
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    return data, rows
 
 
 def question(row, rng):
