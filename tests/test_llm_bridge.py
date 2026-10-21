@@ -502,11 +502,11 @@ def test_time_dependent_template_requires_frozen_clock(mod: Any) -> None:
 
     def render(self: FakeTokenizer, messages: list[dict[str, str]], **kw: Any) -> str:
         if "chat_template" in kw:  # the startup probe
-            return clock_module.datetime.now().strftime("%Y-%m-%d")
+            return str(clock_module.datetime.now().strftime("%Y-%m-%d"))
         return "<s>" + messages[0]["content"]
 
     original = FakeTokenizer.apply_chat_template
-    FakeTokenizer.apply_chat_template = render  # type: ignore[method-assign,assignment]
+    FakeTokenizer.apply_chat_template = render  # type: ignore[method-assign]
     try:
         backend, info = mod.load_transformers_backend(config(mod), importer)
     finally:
@@ -552,6 +552,36 @@ def test_template_kwargs_validation(mod: Any) -> None:
     for bad in ("[]", "x", '{"messages": 1}', '{"a": {"b": 1}}', '{"a": 1, "a": 2}'):
         with pytest.raises(mod.BridgeError):
             mod.parse_template_kwargs(bad)
+
+
+def test_template_kwargs_supported_subset_and_finite(mod: Any) -> None:
+    assert mod.parse_template_kwargs("{}") == {}
+    assert mod.parse_template_kwargs('{"thinking": false, "date_string": "2026-10-21"}') == {
+        "thinking": False,
+        "date_string": "2026-10-21",
+    }
+    bad_inputs = (
+        '{"enable_thinking": NaN}',
+        '{"date_string": Infinity}',
+        '{"enable_thinking": 1}',
+        '{"enable_thinking": "false"}',
+        '{"date_string": "2026-13-40"}',
+        '{"date_string": "21/10/2026"}',
+        '{"date_string": 20261021}',
+        '{"model_path": "/Users/someone/private"}',
+        '{"endpoint": "https://example.test"}',
+        '{"x": "file:///etc/passwd"}',
+    )
+    for bad in bad_inputs:
+        with pytest.raises(mod.BridgeError):
+            mod.parse_template_kwargs(bad)
+
+
+def test_stable_json_bytes_rejects_nonfinite_and_is_deterministic(mod: Any) -> None:
+    assert mod.stable_json_bytes({"b": 1, "a": "é"}) == '{"a":"é","b":1}\n'.encode()
+    with pytest.raises(ValueError):
+        mod.stable_json_bytes({"x": float("nan")})
+    assert mod.STABLE_JSON_ENCODING == "stable-json-v1"
 
 
 def test_cli_requires_pinned_revision_and_explicit_template_kwargs(mod: Any) -> None:

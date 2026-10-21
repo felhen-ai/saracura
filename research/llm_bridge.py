@@ -21,6 +21,7 @@ Usage (see research/evaluation-guide.md for the whole recipe):
 
 import argparse
 import contextlib
+import datetime
 import hashlib
 import http.server
 import importlib
@@ -205,9 +206,16 @@ def answer_for(question, index):
 # Bridge: validation + one inference at a time + counters
 
 
-def canonical_bytes(obj):
+STABLE_JSON_ENCODING = (
+    "stable-json-v1"  # sorted keys, compact separators, UTF-8, finite numbers only
+)
+
+
+def stable_json_bytes(obj):
+    """Deterministic file encoding for the evidence hash. Not an RFC 8785 typed-state canonical identity."""
     return (
-        json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+        json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        + "\n"
     ).encode()
 
 
@@ -239,7 +247,7 @@ class Bridge:
         self.backend = backend
         self.served_model = served_model
         self.evidence = evidence
-        self.evidence_bytes = canonical_bytes(evidence)
+        self.evidence_bytes = stable_json_bytes(evidence)
         self.evidence_sha256 = hashlib.sha256(self.evidence_bytes).hexdigest()
         self.generation_timeout = generation_timeout
         self.clock = clock
@@ -499,18 +507,51 @@ class TransformersBackend:
         return self.tokenizer.decode(out[0][len(ids) :], skip_special_tokens=True)
 
 
-def parse_template_kwargs(text):
+TEMPLATE_KWARGS_NFC_VERSION = "nfc-v1"
+_DATE_STRING = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _reject_nonfinite(token):
+    raise ValueError(token)
+
+
+def _valid_date_string(value):
+    if not isinstance(value, str) or not _DATE_STRING.fullmatch(value):
+        return False
     try:
-        value = json.loads(text, object_pairs_hook=_no_duplicate_keys)
+        datetime.date.fromisoformat(value)
     except ValueError:
-        raise BridgeError("--chat-template-kwargs must be a JSON object") from None
+        return False
+    return True
+
+
+def parse_template_kwargs(text):
+    """Supported subset only: enable_thinking (bool), thinking (bool), date_string (valid YYYY-MM-DD)."""
+    try:
+        value = json.loads(
+            text, object_pairs_hook=_no_duplicate_keys, parse_constant=_reject_nonfinite
+        )
+    except ValueError:
+        raise BridgeError("--chat-template-kwargs must be a finite JSON object") from None
     if not isinstance(value, dict) or any(not isinstance(k, str) for k in value):
         raise BridgeError("--chat-template-kwargs must be a JSON object")
-    if RESERVED_TEMPLATE_KWARGS & set(value):
-        raise BridgeError("--chat-template-kwargs uses a reserved name")
-    if any(not isinstance(v, str | int | float | bool) for v in value.values()):
-        raise BridgeError("--chat-template-kwargs values must be scalars")
-    return {unicodedata.normalize("NFC", k): v for k, v in value.items()}
+    out = {}
+    for key, item in value.items():
+        name = unicodedata.normalize("NFC", key)  # versioned: TEMPLATE_KWARGS_NFC_VERSION
+        if name in out:
+            raise BridgeError("--chat-template-kwargs has colliding keys after NFC")
+        if name in ("enable_thinking", "thinking"):
+            ok = isinstance(item, bool)
+        elif name == "date_string":
+            ok = _valid_date_string(item)
+        else:
+            raise BridgeError(
+                "--chat-template-kwargs supports only enable_thinking, thinking, date_string"
+            )
+        if not ok:
+            raise BridgeError(f"--chat-template-kwargs has an invalid value for {name}")
+        out[name] = item
+    return out
 
 
 def load_transformers_backend(config, import_module=importlib.import_module):
@@ -554,6 +595,7 @@ def load_transformers_backend(config, import_module=importlib.import_module):
         "attention": "eager",
         "auto_class": config.auto_class,
         "template_kwargs": kwargs,
+        "evidence_encoding": STABLE_JSON_ENCODING,
         "template_date": config.template_date,
         "strftime_now_frozen": clock_module is not None,
         "chat_template_sha256": hashlib.sha256(template.encode()).hexdigest(),

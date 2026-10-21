@@ -230,7 +230,10 @@ PYTHON
 - `--chat-template-kwargs` is mandatory: pass the model's non-thinking switch (or `{}` when it has none, after
   inspecting its template). Templates that call `strftime_now` are rendered with the date frozen to `2026-10-21`
   (`--template-date`); if the installed transformers cannot freeze it, startup fails. The template itself is the
-  official `tokenizer.chat_template`, never replaced; its SHA256 is in the evidence.
+  official `tokenizer.chat_template`, never replaced; its SHA256 is in the evidence. The accepted kwargs are a closed
+  subset: `enable_thinking` (boolean), `thinking` (boolean) and `date_string` (valid `YYYY-MM-DD`); other keys, other
+  types, `NaN`/`Infinity` and keys that collide after NFC are rejected before the model loads. The evidence file is hashed
+  as `stable-json-v1` (sorted keys, compact, UTF-8, finite numbers): a stable file hash, not an RFC 8785 typed identity.
 - `--device` is explicit (`cpu`, `mps`, `cuda`); the dtype follows the device (`float32`, `float16`, `bfloat16`) unless
   `--dtype` says otherwise, and is recorded. Attention is `eager`. `--auto-class AutoModelForImageTextToText` selects the
   conditional-generation class for text-only Qwen3.5; no `trust_remote_code` anywhere.
