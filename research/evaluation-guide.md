@@ -36,6 +36,8 @@ cd saracura
 
 ## English
 
+For a chat/instruct LLM, start with the [local bridge](#chat-llms-through-the-local-bridge), then run the smoke, full evaluation and validation below. If your model already serves System One, start at step 1.
+
 Two scripts, both Python standard library only (no ML packages needed to run them):
 
 - `research/ptbr_bench.py` sends the 5,196 test items of the seven public tasks to a System One-compatible server
@@ -197,7 +199,9 @@ listed.
 - `research/lm_eval/ptbr_typed_decisions` is a separate protocol for `lm-evaluation-harness` (generic prompting of
   language models). Its numbers are not comparable with `ptbr_bench.py` numbers and are never mixed in one table.
 
-### Chat LLMs through the local bridge
+#Native runtime preprocessing is part of the reported configuration. Laya 0.3.20 clips each option to 48 tokens internally; this affects 599 items in the frozen round. Declare that cap in evidence and context metadata, preserve original descriptions, and verify the whole state fits the selected runtime context. Earlier preflight holds over this cap remain historical. The evaluator and bridge add no truncation beyond the common 3,500-character state limit.
+
+## Chat LLMs through the local bridge
 
 General chat models have no System One server of their own. `research/llm_bridge.py` serves one pinned Transformers
 snapshot on `127.0.0.1` with the same `POST /v1/systemone` contract (standard library core; torch and transformers are
@@ -278,6 +282,8 @@ after a full run: any nonzero failure counter means the full run is failed and u
 this protocol only; they are not mixed with `lm-evaluation-harness` numbers.
 
 ## Português do Brasil
+
+Para um LLM de chat/instruções, comece pela [ponte local](#llms-de-chat-pela-ponte-local), depois faça o teste rápido, a avaliação completa e a validação abaixo. Se seu modelo já atende System One, comece no passo 1.
 
 Dois scripts, só com a biblioteca padrão do Python (não precisam de pacote de ML):
 
@@ -407,3 +413,9 @@ IDs/tokens brutos e caminho de `logits_to_keep` do modo restrito, além de `evid
 SHA256 dos bytes exatos do arquivo de evidência como `--server-version`; o servidor declarado deve ser exatamente
 `ptbr-llm-bridge-constrained-letter` ou `ptbr-llm-bridge-strict-generation`, e o nome também inclui o modo. Capture
 `/health` antes e depois da execução completa; contador diferente de zero torna a execução reprovada e sem ranking.
+
+Limites internos dos runtimes devem aparecer na configuração publicada. Laya 0.3.20 corta cada opção em 48 tokens, afetando 599 itens desta rodada. Declare esse cap na evidência e nos metadados de contexto, preserve as descrições originais e confira o contexto integral antes do full. O bloqueio anterior por esse cap fica como histórico; avaliador e ponte não acrescentam cortes além dos 3.500 caracteres comuns.
+
+CPU troubleshooting: use an isolated environment with CPU PyTorch wheels and without FLA/Triton. Reusing a CUDA-optimized environment can make Qwen3.5 select GPU kernels even with `CUDA_VISIBLE_DEVICES` empty; this is a runtime error, not an incorrect model answer. The internal CPU run uses `torch==2.8.0+cpu` from the official PyTorch CPU index and `transformers==5.20.2`. Record actual installed versions in the execution evidence.
+
+Problemas na CPU: use um ambiente isolado com PyTorch para CPU, sem FLA/Triton. Reutilizar um ambiente otimizado para CUDA pode fazer o Qwen3.5 selecionar kernels de GPU mesmo com `CUDA_VISIBLE_DEVICES` vazio; isso é erro de runtime. A rodada interna em CPU usa `torch==2.8.0+cpu` do índice oficial de CPU do PyTorch e `transformers==5.20.2`; registre as versões efetivas na evidência.

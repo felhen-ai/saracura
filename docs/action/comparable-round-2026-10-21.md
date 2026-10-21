@@ -103,3 +103,12 @@ A validação final da integração exige o dataset reconhecido como benchmark, 
 3. Executar os 14 conjuntos completos sequencialmente; recalcular métricas e publicar relatórios reproduzíveis antes de convidar autores a reproduzir.
 4. Registrar o framework e solicitar habilitação nativa ao HF com o protocolo e as evidências, após autorização do contato externo.
 5. Usar a classificação completa para selecionar os modelos do estudo de transferência a casos reais, preservando os testes reservados desse estudo.
+
+
+## Execução iniciada em 21/10
+
+A ponte local foi implementada com carregamento offline, limite de contexto, prazo por requisição e evidência imutável. A conformidade passou em 216 testes focados, Ruff e mypy; a revisão independente retornou PASS. Os sete LLMs gerais concluíram os smokes de geração livre: quatro com zero falhas, dois com erros de formato e Qwen3.5 com erro de runtime CPU. A comparação principal continua pré-registrada em `constrained-letter` para todos os sete; nenhum melhor modo foi selecionado por modelo.
+
+Os [relatórios desta rodada](../../research/rounds/2026-10-21/results/index.json) incluem Kev-0.8B em MLX bf16 (5.196 decisões, zero falhas, média 50,83%) e Laya em CPU float32, cap upstream de 48 tokens por opção declarado (5.196 decisões, zero falhas, média 39,18%). Saracura-v0 em CPU float32, com o mesmo cap upstream declarado, também completou 5.196 decisões com zero falhas e média 68,49%. Os três passaram pelo validador com dados públicos baixados novamente. São resultados da configuração identificada, sem substituir as linhas históricas. O [estado de execução](../../research/rounds/2026-10-21/results/execution-progress.json) é um snapshot intermediário, não o ranking completo dos 14.
+
+A GPU permanece ocupada pelo serviço existente. Runtimes de CPU foram isolados em um ambiente com PyTorch CPU, Transformers 5.20.2 e sem FLA/Triton, após uma tentativa no ambiente CUDA reutilizado selecionar kernels incompatíveis com CPU. Os processos de experimento usam limites de CPU/memória; nenhuma interrupção dos serviços atuais foi autorizada ou realizada. A tentativa de full Kev-4B em MLX bf16 e a preparação pós-merge para Q4 foram interrompidas por pressão de memória do Mac; não geram notas publicáveis. A alternativa é o runtime nativo em CPU.

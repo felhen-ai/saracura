@@ -67,7 +67,33 @@
       "research/validate_submission.py",
       "qwen--qwen3-4b-instruct-2507-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "Qwen/Qwen3-4B-Instruct-2507",
+      "--revision",
+      "cdbee75f17c01a7cc42f958dc650907174af0554",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{}",
+      "--evidence-output",
+      "Qwen--Qwen3-4B-Instruct-2507-constrained-letter-evidence.json"
+    ]
   },
   {
     "id": "Qwen/Qwen3-8B",
@@ -137,7 +163,33 @@
       "research/validate_submission.py",
       "qwen--qwen3-8b-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "Qwen/Qwen3-8B",
+      "--revision",
+      "b968826d9c46dd6066d109eabc6255188de91218",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{\"enable_thinking\":false}",
+      "--evidence-output",
+      "Qwen--Qwen3-8B-constrained-letter-evidence.json"
+    ]
   },
   {
     "id": "Qwen/Qwen3.5-4B",
@@ -207,7 +259,35 @@
       "research/validate_submission.py",
       "qwen--qwen3.5-4b-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "Qwen/Qwen3.5-4B",
+      "--revision",
+      "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{\"enable_thinking\":false}",
+      "--evidence-output",
+      "Qwen--Qwen3.5-4B-constrained-letter-evidence.json",
+      "--auto-class",
+      "AutoModelForImageTextToText"
+    ]
   },
   {
     "id": "Qwen/Qwen2.5-7B-Instruct",
@@ -277,7 +357,33 @@
       "research/validate_submission.py",
       "qwen--qwen2.5-7b-instruct-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "Qwen/Qwen2.5-7B-Instruct",
+      "--revision",
+      "a09a35458c702b33eeacc393d103063234e8bc28",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{}",
+      "--evidence-output",
+      "Qwen--Qwen2.5-7B-Instruct-constrained-letter-evidence.json"
+    ]
   },
   {
     "id": "microsoft/Phi-4-mini-instruct",
@@ -347,7 +453,33 @@
       "research/validate_submission.py",
       "microsoft--phi-4-mini-instruct-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "microsoft/Phi-4-mini-instruct",
+      "--revision",
+      "cfbefacb99257ffa30c83adab238a50856ac3083",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{}",
+      "--evidence-output",
+      "microsoft--Phi-4-mini-instruct-constrained-letter-evidence.json"
+    ]
   },
   {
     "id": "HuggingFaceTB/SmolLM3-3B",
@@ -417,7 +549,33 @@
       "research/validate_submission.py",
       "huggingfacetb--smollm3-3b-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "HuggingFaceTB/SmolLM3-3B",
+      "--revision",
+      "a07cc9a04f16550a088caea529712d1d335b0ac1",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{\"enable_thinking\":false}",
+      "--evidence-output",
+      "HuggingFaceTB--SmolLM3-3B-constrained-letter-evidence.json"
+    ]
   },
   {
     "id": "ibm-granite/granite-3.3-8b-instruct",
@@ -487,7 +645,33 @@
       "research/validate_submission.py",
       "ibm-granite--granite-3.3-8b-instruct-full-constrained-letter.json"
     ],
-    "readout": "constrained-letter"
+    "readout": "constrained-letter",
+    "bridge_argv_template": [
+      "python",
+      "research/llm_bridge.py",
+      "--model",
+      "ibm-granite/granite-3.3-8b-instruct",
+      "--revision",
+      "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
+      "--device",
+      "cpu",
+      "--dtype",
+      "bfloat16",
+      "--threads",
+      "2",
+      "--context",
+      "8192",
+      "--port",
+      "18021",
+      "--readout",
+      "constrained-letter",
+      "--generation-timeout",
+      "180",
+      "--chat-template-kwargs",
+      "{\"thinking\":false}",
+      "--evidence-output",
+      "ibm-granite--granite-3.3-8b-instruct-constrained-letter-evidence.json"
+    ]
   },
   {
     "id": "felhen-ai/saracura-ptbr-4b",

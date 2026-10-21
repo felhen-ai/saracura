@@ -1,0 +1,23 @@
+{
+  "kev": {
+    "repo": "https://github.com/jaredpalmer/kev",
+    "revision": "1f04cfa28e6a708485b28a9585010b9e436b776e",
+    "source_archive_sha256": "d4d78e6f104c2555a5cc57b0ab08e6a7c7cc74a5a8b2dc05088cfc7a349ba30c"
+  },
+  "lev": {
+    "repo": "https://github.com/Abhinavexists/lev",
+    "revision": "1b8da5ce397adcad2e7044de054588fbf34a2dfb",
+    "version": "0.1.1",
+    "source_archive_sha256": "09c2daee2eec3f0e2d65affb6c29c862cdde488b261367fd4d145f45e2efbb34"
+  },
+  "decider": {
+    "distribution": "decider-ai",
+    "version": "1.10.0",
+    "repo": "https://github.com/Mapika/decider"
+  },
+  "native_cpu_launcher": {
+    "file": "runtime/native_cpu_server.py.txt",
+    "sha256": "a4db7a6fd4d0ab6984b0eebd34884f0b87ec423f4a3a083b59b8bf978f7f527f"
+  },
+  "note": "Root execution provenance supplement; runtime pins are independent from unknown historical training-base pins. CPU reference attempts are distinct from earlier CUDA-environment errors."
+}

@@ -66,6 +66,8 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 
 ## Comparison table of open decision models
 
+Runtime preprocessing and quantization are explicit configurations: Laya 0.3.20 has an intrinsic 48-token option cap (599 affected items in this round); bridge-added truncation is forbidden. Keep native, strict-generation and constrained-letter results labelled separately.
+
 | Script | What it does |
 |---|---|
 | `ptbr_bench.py` | One-command evaluation for anyone: standard library only, pins the test splits to an immutable Hub commit, same protocol as `eval_http.py`, reports the mean with a 95% bootstrap interval and writes a results file (never overwritten) with per-item answers, declared model metadata, timing and failure codes. `--limit` runs are smoke runs and never submission-ready. |

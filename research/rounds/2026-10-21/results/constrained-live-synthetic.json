@@ -1,0 +1,338 @@
+{
+  "kind": "synthetic live contract check, not benchmark score",
+  "evidence": {
+    "schema_version": 1,
+    "bridge_sha256": "72259342cf530bdac754f54cb22551bf1a53e87b2c292e52c7789634360fa2d7",
+    "model": {
+      "id": "Qwen/Qwen3.5-0.8B-Base",
+      "alias": "Qwen/Qwen3.5-0.8B-Base",
+      "revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+      "tokenizer_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
+    },
+    "backend": {
+      "runtime": "transformers",
+      "torch": "2.8.0",
+      "transformers": "5.20.2",
+      "python": "3.12.12",
+      "dtype": "float32",
+      "device": "cpu",
+      "threads": 2,
+      "attention": "eager",
+      "auto_class": "AutoModelForCausalLM",
+      "template_kwargs": {
+        "enable_thinking": false
+      },
+      "evidence_encoding": "stable-json-v1",
+      "template_date": "2026-10-21",
+      "strftime_now_frozen": false,
+      "chat_template_sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "forward_logits_to_keep": "enabled",
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      }
+    },
+    "limits": {
+      "context": 8192,
+      "max_new_tokens": 1,
+      "generation_timeout_seconds": 120,
+      "max_body_bytes": 1048576,
+      "max_questions": 16
+    },
+    "prompt": {
+      "version": "ptbr-systemone-letter-v1",
+      "sha256": "3b635810832215aa8b0f1c584ed311e5d34ac62abf0a3c7b78eb155e411a9191"
+    },
+    "decoding": "restricted-next-token-argmax",
+    "readout": "constrained-letter"
+  },
+  "evidence_sha256": "e8452466c7c7e8a1d5977db0ef731330b2363055e473b31d2058a8d599f858f5",
+  "requests": [
+    {
+      "received_order": [
+        "par",
+        "impar"
+      ],
+      "response": {
+        "answers": {
+          "q": {
+            "choice": "par"
+          }
+        }
+      },
+      "seconds": 2.761
+    },
+    {
+      "received_order": [
+        "impar",
+        "par"
+      ],
+      "response": {
+        "answers": {
+          "q": {
+            "choice": "par"
+          }
+        }
+      },
+      "seconds": 1.407
+    }
+  ],
+  "health_after": {
+    "evidence": {
+      "schema_version": 1,
+      "bridge_sha256": "72259342cf530bdac754f54cb22551bf1a53e87b2c292e52c7789634360fa2d7",
+      "model": {
+        "id": "Qwen/Qwen3.5-0.8B-Base",
+        "alias": "Qwen/Qwen3.5-0.8B-Base",
+        "revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68",
+        "tokenizer_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
+      },
+      "backend": {
+        "runtime": "transformers",
+        "torch": "2.8.0",
+        "transformers": "5.20.2",
+        "python": "3.12.12",
+        "dtype": "float32",
+        "device": "cpu",
+        "threads": 2,
+        "attention": "eager",
+        "auto_class": "AutoModelForCausalLM",
+        "template_kwargs": {
+          "enable_thinking": false
+        },
+        "evidence_encoding": "stable-json-v1",
+        "template_date": "2026-10-21",
+        "strftime_now_frozen": false,
+        "chat_template_sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+        "forward_logits_to_keep": "enabled",
+        "letter_tokens": {
+          "A": {
+            "id": 32,
+            "token": "A"
+          },
+          "B": {
+            "id": 33,
+            "token": "B"
+          },
+          "C": {
+            "id": 34,
+            "token": "C"
+          },
+          "D": {
+            "id": 35,
+            "token": "D"
+          },
+          "E": {
+            "id": 36,
+            "token": "E"
+          },
+          "F": {
+            "id": 37,
+            "token": "F"
+          },
+          "G": {
+            "id": 38,
+            "token": "G"
+          },
+          "H": {
+            "id": 39,
+            "token": "H"
+          },
+          "I": {
+            "id": 40,
+            "token": "I"
+          },
+          "J": {
+            "id": 41,
+            "token": "J"
+          },
+          "K": {
+            "id": 42,
+            "token": "K"
+          },
+          "L": {
+            "id": 43,
+            "token": "L"
+          },
+          "M": {
+            "id": 44,
+            "token": "M"
+          },
+          "N": {
+            "id": 45,
+            "token": "N"
+          },
+          "O": {
+            "id": 46,
+            "token": "O"
+          },
+          "P": {
+            "id": 47,
+            "token": "P"
+          },
+          "Q": {
+            "id": 48,
+            "token": "Q"
+          },
+          "R": {
+            "id": 49,
+            "token": "R"
+          },
+          "S": {
+            "id": 50,
+            "token": "S"
+          },
+          "T": {
+            "id": 51,
+            "token": "T"
+          },
+          "U": {
+            "id": 52,
+            "token": "U"
+          },
+          "V": {
+            "id": 53,
+            "token": "V"
+          },
+          "W": {
+            "id": 54,
+            "token": "W"
+          },
+          "X": {
+            "id": 55,
+            "token": "X"
+          },
+          "Y": {
+            "id": 56,
+            "token": "Y"
+          },
+          "Z": {
+            "id": 57,
+            "token": "Z"
+          }
+        }
+      },
+      "limits": {
+        "context": 8192,
+        "max_new_tokens": 1,
+        "generation_timeout_seconds": 120,
+        "max_body_bytes": 1048576,
+        "max_questions": 16
+      },
+      "prompt": {
+        "version": "ptbr-systemone-letter-v1",
+        "sha256": "3b635810832215aa8b0f1c584ed311e5d34ac62abf0a3c7b78eb155e411a9191"
+      },
+      "decoding": "restricted-next-token-argmax",
+      "readout": "constrained-letter"
+    },
+    "evidence_sha256": "e8452466c7c7e8a1d5977db0ef731330b2363055e473b31d2058a8d599f858f5",
+    "counters": {
+      "invalid_output": 0,
+      "deadline": 0,
+      "overbudget": 0
+    }
+  }
+}

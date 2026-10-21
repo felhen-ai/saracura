@@ -1,0 +1,32 @@
+{
+  "snapshot_at": "2026-10-21T22:20:59.187358+00:00",
+  "round_complete": false,
+  "primary_general_readout": "constrained-letter for all7; strict diagnostics separate",
+  "validated_fulls": [
+    "kev08-mlx-bf16.json",
+    "laya-cpu-nativecap48.json",
+    "saracura-v0-cpu-nativecap48.json"
+  ],
+  "running_full": null,
+  "server_pipeline": [
+    "four native CPU reference smokes",
+    "seven constrained-letter CPU reference smokes",
+    "passing native fulls after5196tokenization preflight",
+    "passing constrained fulls"
+  ],
+  "cpu_isolation": {
+    "torch": "2.8.0+cpu",
+    "transformers": "5.20.2",
+    "fla": false,
+    "triton": false,
+    "cuda_available": false
+  },
+  "operational_findings": [
+    "Native Qwen3.5 on reused CUDA environment selected FLA/Triton kernels and failed on CPU; isolated CPU environment replaces it.",
+    "Mac Kev4 bf16 full interrupted due memory pressure; post-merge Q4 preparation also interrupted before quantization; no result from either interrupted attempt.",
+    "Laya intrinsic option48 cap declared, affects599items; evaluator adds no cuts beyond3500chars."
+  ],
+  "service_policy": "Only task-owned PIDs/units stopped; no production GPU service changed; no paid model inference.",
+  "synthetic_live_constrained_http": "PASS:2requests, same options permuted, no failures; not a benchmark ranking",
+  "native_cpu_smoke": "Saracura4 PASS14/14; remaining models running/queued"
+}

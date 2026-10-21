@@ -1,0 +1,14 @@
+{
+  "checkpoint": "felhen-ai/saracura-ptbr-v0",
+  "dataset_revision": "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
+  "device": "cpu",
+  "evaluator_extra_truncation": false,
+  "head_max_len": 2048,
+  "intrinsic_option_cap_tokens": 48,
+  "max_len": 8192,
+  "methodology": "r6 declared upstream preprocessing",
+  "option_overflow_items": 599,
+  "revision": "ae97728cb3ae6575d382f3e68c19054084de27d7",
+  "runtime": "laya0.3.20",
+  "threads": 4
+}

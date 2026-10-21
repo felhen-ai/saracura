@@ -61,7 +61,7 @@
     "score_scale": "0..1 internally; percent only in presentation",
     "order": "alphabetical task order, one seeded random stream for shuffled options",
     "adapter_comparability_gate": "same evaluator request bytes, same labels and golds; no lm_eval legacy scores in this round",
-    "generated_bridge_status": "strict-generation implemented and reviewed; constrained-letter implementation in progress, smoke per model/mode required before full",
+    "generated_bridge_status": "implemented and reviewed PASS;216focusedtests and mypy169files; each checkpoint/readout still requires live smoke before full",
     "generated_primary_settings": {
       "temperature": 0,
       "do_sample": false,

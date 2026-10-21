@@ -1,0 +1,94 @@
+{
+  "snapshot_at": "2026-10-21T22:20:59.187358+00:00",
+  "warning": "Immutable interim snapshot, not a completed14-model ranking. Smoke scores not quality rankings. Strict and constrained modes never pooled.",
+  "validated_fulls": [
+    {
+      "report": "kev08-mlx-bf16.json",
+      "checkpoint": {
+        "id": "jaredpalmer/kev-0.8b",
+        "revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+        "subfolder": "unknown",
+        "context": "native strict max_state 65536; observed max_state1427 max_record1823",
+        "quantization": "none bf16",
+        "hardware": "Apple M4 Pro 24GiB MLX",
+        "server": "kev",
+        "server_version": "1f04cfa28e6a708485b28a9585010b9e436b776e"
+      },
+      "mean_balanced_accuracy": 0.5083,
+      "items": 5196,
+      "failed": 0
+    },
+    {
+      "report": "laya-cpu-nativecap48.json",
+      "checkpoint": {
+        "id": "convaiinnovations/laya",
+        "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",
+        "subfolder": "unknown",
+        "context": "8192 head2048 upstream option_cap48",
+        "quantization": "none float32",
+        "hardware": "Apple M4 Pro CPU4threads",
+        "server": "laya",
+        "server_version": "6f8bd0850e3970717ea31693eef09b842e0bbddbb96bc08da373765a453ef410"
+      },
+      "mean_balanced_accuracy": 0.3918,
+      "items": 5196,
+      "failed": 0
+    },
+    {
+      "report": "saracura-v0-cpu-nativecap48.json",
+      "checkpoint": {
+        "id": "felhen-ai/saracura-ptbr-v0",
+        "revision": "ae97728cb3ae6575d382f3e68c19054084de27d7",
+        "subfolder": "unknown",
+        "context": "8192 head2048 upstream option_cap48",
+        "quantization": "none float32",
+        "hardware": "Apple M4 Pro CPU4threads",
+        "server": "laya",
+        "server_version": "99753ecc7560e723f7eb767118870a5b5241e9e5c2aa7ef4126d42b546c52ba2"
+      },
+      "mean_balanced_accuracy": 0.6849,
+      "items": 5196,
+      "failed": 0
+    }
+  ],
+  "artifact_sha256": {
+    "bridge-valid-data-equivalence.json": "de62becdafead8d428e8c4d598366274a020179a0c284789620da505a34c702d",
+    "constrained-live-synthetic.json": "89477b335c6a69f014645bc540b6f96d5146857501dd7a5b8ca111cc6b430628",
+    "execution-progress.json": "cee8c4fb18422a0ab8396217c25386d7c0f48d377d59539fdd5ece92d6701936",
+    "kev08-mlx-bf16-evidence.json": "0953348ced9f2f7b7a4bd7dafc6fbd32b1e06cba5d15c5f1746e26097c1d6cc0",
+    "kev08-mlx-bf16.json": "82762648d1c04c9cbb5439f0d5034852d7ab55940d4b22e9ac78a0f75ce93b93",
+    "kev08-native-smoke.json": "c575512f5c06b82c3a5a4b52b7fdf6b5760236fe17c47cb8de5562938f0b2846",
+    "kev08-validation.txt": "6c4f4dd52f4db6e789eee4f811c474dc78bb3dfc7c31d2f4f98ca2fee937194b",
+    "kev4-native-smoke.json": "510ce39c38db01ad815da7268cfa963e122c3015e1ff683e4fb8abbbb066c32d",
+    "laya-cpu-nativecap48-evidence.json": "6f8bd0850e3970717ea31693eef09b842e0bbddbb96bc08da373765a453ef410",
+    "laya-cpu-nativecap48.json": "d303e0b19a4c80e26dacadbbb0aaeb0a4d757efef1359dd27c3817afbbe3e70d",
+    "laya-native-smoke.json": "5878453402badb045f1bb6d13c5f79fea43d9df6db463c6ad9bfaba0f9bb3ef1",
+    "laya-validation.txt": "1bebf0e90bda683c7d60609aadc1da559a69c11faccbd60d5163e7f959a55cd6",
+    "runtime/native_cpu_server.py.txt": "a4db7a6fd4d0ab6984b0eebd34884f0b87ec423f4a3a083b59b8bf978f7f527f",
+    "runtime-source-evidence.json": "28ab0cdf5024ad09e63839b292afac362291fba7f784f852356c575a6fc5fe37",
+    "saracura-v0-cpu-nativecap48-evidence.json": "99753ecc7560e723f7eb767118870a5b5241e9e5c2aa7ef4126d42b546c52ba2",
+    "saracura-v0-cpu-nativecap48.json": "951c1c0727c81fe0ee1dc5b2e634f980481cc5ffb4d8bfdfe047d6179035cb2d",
+    "saracura-v0-validation.txt": "62c7bcce96e10d3486785472dfe0dc2cdeb76a32d1d7fa4c1fbda1573fa70249",
+    "strict-generation-smokes/Qwen--Qwen2.5-7B-Instruct-smoke-evidence.json": "e7b41122d76e1b479ac19eb03aae944c9040cd106b072c3a2860701230e84a0f",
+    "strict-generation-smokes/Qwen--Qwen2.5-7B-Instruct-smoke-sidecar.json": "29761dc4899708ba83e8ead58a6318497553c16584efe4c1739b43db383e6a44",
+    "strict-generation-smokes/Qwen--Qwen2.5-7B-Instruct-smoke.json": "f694d1554b8f382f581d4a8107071a97d16c3f9f232ed12e1f863030528c45a6",
+    "strict-generation-smokes/Qwen--Qwen3-4B-Instruct-2507-smoke-evidence.json": "227d2c2bdc30dceb762eb60d9364f52b17d6adf8403a9afc4deb9a0273020633",
+    "strict-generation-smokes/Qwen--Qwen3-4B-Instruct-2507-smoke-sidecar.json": "6fb4c888ad38191e3cc2669ecad99dd761b8d409821a11a1a2cd7640b66c6ae3",
+    "strict-generation-smokes/Qwen--Qwen3-4B-Instruct-2507-smoke.json": "2ce6ec899efbba393de79feff78b8f3bc9485238264010f5c568fd8cd9b59a58",
+    "strict-generation-smokes/Qwen--Qwen3-8B-smoke-evidence.json": "5d94c7cb152dc15e7f2183be0d605d0284bae945450d9c779c55b51017ddd9ff",
+    "strict-generation-smokes/Qwen--Qwen3-8B-smoke-sidecar.json": "d17c15ddeb1a46873a2a16f1f9d6ca134f33b9f7e73490e09b856f4621a0e695",
+    "strict-generation-smokes/Qwen--Qwen3-8B-smoke.json": "77e3f6d8baef4ca3a786da8be27451c7f17027a71cdee8d8f93e8bb7f7a33de2",
+    "strict-generation-smokes/Qwen--Qwen3.5-4B-smoke-evidence.json": "22451fe3d036c3c263ddd8beb7a95827812b089bd03300d16842e8e9b5becec2",
+    "strict-generation-smokes/Qwen--Qwen3.5-4B-smoke-sidecar.json": "1a19ba5041038fcb95988f816e824ae8091aa3a0c039d9f3cad1d429594a6590",
+    "strict-generation-smokes/Qwen--Qwen3.5-4B-smoke.json": "7ed7eed4523ee2aadbf9fe5f29643eb2afc070f0ee2654aeb762bf9723bfb688",
+    "strict-generation-smokes/ibm-granite--granite-3.3-8b-instruct-smoke-evidence.json": "c17446f2443e6818bbe1c0eecf67b6fe7d17cbc5839107f6ff5f00a732130ccf",
+    "strict-generation-smokes/ibm-granite--granite-3.3-8b-instruct-smoke-sidecar.json": "31ef893825aef89f8f0d92b955266d3347bb56b5a80ed08bca4dd179ab9f018d",
+    "strict-generation-smokes/ibm-granite--granite-3.3-8b-instruct-smoke.json": "8a6a31d11a6928170199d85e3037ee7af19df7d2b6979bf19ef556c5289c2207",
+    "strict-generation-smokes/microsoft--Phi-4-mini-instruct-smoke-evidence.json": "05e1501ed6099ef621eaa8f52cef9e69f4ab72984e565d5498ec940730be49a0",
+    "strict-generation-smokes/microsoft--Phi-4-mini-instruct-smoke-sidecar.json": "f3603df08f2e9b43cc6601054f83c6c2d8f69898c3574a1403b1f0edf4083283",
+    "strict-generation-smokes/microsoft--Phi-4-mini-instruct-smoke.json": "45025ffbfcf50c8db47f12119824a4e73fb3e1f78f609ac68e31812b98e3e84c",
+    "strict-generation-smokes/smol-smoke.json": "5cbbd562976eec35d91c5f680d06f5f1262f60d6ac61847931f25f017666810f",
+    "strict-generation-state.json": "121415f431860683d56a6073ab13d342fb8fbcf202fe676139237b55cd6a1f2e",
+    "v0-native-smoke.json": "cb010c5273d0cbff91d8a9f2841411063b78f1b073c5d1e1738e26e0fdd57ae2"
+  }
+}

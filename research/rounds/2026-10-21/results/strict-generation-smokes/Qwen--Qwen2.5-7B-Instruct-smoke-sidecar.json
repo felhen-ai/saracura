@@ -1,0 +1,12 @@
+{
+  "state": "pass",
+  "items": 14,
+  "failed": 0,
+  "report_sha256": "f694d1554b8f382f581d4a8107071a97d16c3f9f232ed12e1f863030528c45a6",
+  "evidence_sha256": "e7b41122d76e1b479ac19eb03aae944c9040cd106b072c3a2860701230e84a0f",
+  "counters": {
+    "invalid_output": 0,
+    "deadline": 0,
+    "overbudget": 0
+  }
+}

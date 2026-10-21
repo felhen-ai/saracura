@@ -1,0 +1,2 @@
+warning: checkpoint.subfolder is unknown
+VALID: mean balanced accuracy 68.5% over 7 tasks (declared metadata, recomputed scores)
