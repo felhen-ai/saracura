@@ -1,0 +1,56 @@
+name: Benchmark submission
+description: Submit a model result for manual review on the PT-BR typed-decisions benchmark
+title: "Benchmark submission: <model>"
+labels: ["evaluation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Follow the evaluation guide (research/evaluation-guide.md in this repository). Maintainers review every submission by hand.
+        Do not paste credentials, private prompts, private text or server addresses.
+  - type: input
+    id: model
+    attributes:
+      label: Public model id and Hub commit (or sha256 weights digest)
+      description: A 40-hex commit or `sha256:<64 hex>`. `main` does not qualify.
+      placeholder: org/model @ 0123456789abcdef0123456789abcdef01234567
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      description: Serving software and version, hardware, quantization, context settings, subfolder.
+    validations:
+      required: true
+  - type: input
+    id: dataset
+    attributes:
+      label: Dataset commit
+      description: The `revision` value in your report (40 hex).
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Output of `validate_submission.py`
+      description: Paste the final lines (VALID or INVALID, plus warnings).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: Attach the report JSON from `ptbr_bench.py`, or link a public copy. Mean balanced accuracy and 95% interval as printed.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: The model is public and was not tuned on the private tracks.
+          required: true
+        - label: The report is a full run, contains no private text, credentials, hostnames or paths.
+          required: true

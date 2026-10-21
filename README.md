@@ -85,16 +85,12 @@ agreement numbers, not accuracy against human labels.
 
 ## Evaluate your own model
 
-The benchmark rows are plain JSONL in the Laya request format: `text`, `type` (`choice` or `noul`), `instructions`,
-`criteria` and `gold`. `research/bench.py` evaluates any Laya-compatible checkpoint and the classical baselines:
+Follow the [evaluation and submission guide](research/evaluation-guide.md): serve a listed external model on CPU,
+run a short smoke, evaluate all seven tasks, validate the JSON and submit it for manual review. The evaluator and
+validator use only Python's standard library. The guide includes the separate optional ML environment for serving.
 
-```bash
-uv sync --dev
-uv run python research/bench.py baselines
-uv run python research/bench.py eval --name mine --model your-org/your-checkpoint --device cpu
-```
-
-Report balanced accuracy with the option order shuffled per item, as the scripts do, so results stay comparable.
+For locally prepared datasets and Laya checkpoint experiments, the lower-level `research/bench.py` commands remain
+available; see [research scripts](research/README.md).
 
 ## How the models are trained
 
