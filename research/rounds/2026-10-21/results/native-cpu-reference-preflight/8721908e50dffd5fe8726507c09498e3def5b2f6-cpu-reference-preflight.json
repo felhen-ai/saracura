@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "items": 5196,
+  "max_record_tokens": 1900,
+  "max_state_tokens": 1476,
+  "state_truncated": false,
+  "upstream_preprocessing": "candidate readout clips candidate tokens to64 in lev",
+  "base_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+}

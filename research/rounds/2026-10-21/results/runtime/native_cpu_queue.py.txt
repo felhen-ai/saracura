@@ -1,0 +1,50 @@
+"""Task-owned native CPU smoke queue; never touches GPU or pre-existing units."""
+import os,pathlib,subprocess,json,time,hashlib,urllib.request,shutil,datetime
+R=pathlib.Path.home()/'saracura-round-2026-10-21';P=str(R/'cpu-venv/bin/python');CACHE=R/'hub-native';STATE=R/'native-state.json';M=json.load(open(R/'manifest.json'));records={}
+def save():STATE.write_text(json.dumps({'updated':datetime.datetime.now(datetime.timezone.utc).isoformat(),'models':records},indent=2))
+def dl(repo,rev):
+ if shutil.disk_usage(R).free<10*1024**3:raise RuntimeError('disk reserve before download')
+ code='from huggingface_hub import snapshot_download;import sys;print(snapshot_download(sys.argv[1],revision=sys.argv[2],cache_dir=sys.argv[3],allow_patterns=["*.safetensors","*.json","*.pt","*.jinja","*.model","tokenizer*"],token=False))'
+ env=dict(os.environ);env.pop('HF_HUB_OFFLINE',None);env.pop('TRANSFORMERS_OFFLINE',None)
+ with (R/(repo.replace('/','--')+'-native-download.log')).open('a') as f:
+  z=subprocess.run([P,'-c',code,repo,rev,str(CACHE)],env=env,stdout=subprocess.PIPE,stderr=f,text=True,check=True)
+ return z.stdout.strip().splitlines()[-1]
+def health():
+ try:return json.load(urllib.request.urlopen('http://127.0.0.1:18032/health',timeout=3))
+ except urllib.error.HTTPError as e:
+  if e.code!=404:raise
+  return json.load(urllib.request.urlopen('http://127.0.0.1:18032/v1/models',timeout=3))
+def stop():subprocess.run(['systemctl','--user','stop','saracura-round-native-model'],capture_output=True)
+basekev=('Qwen/Qwen3.5-4B-Base','1001bb4d826a52d1f399e183466143f4da7b741b');baselev=('Qwen/Qwen3.5-4B','851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a')
+models=[('felhen-ai/saracura-ptbr-4b','kev',basekev),('jaredpalmer/kev-4b','kev',basekev),('Mapika/decider-4b','decider',None),('interfaze-ai/lev','lev',baselev)]
+for model,kind,base in models:
+ a=next(x for x in M['models'] if x['id']==model);slug=model.replace('/','--');records[model]={'stage':'download','revision':a['revision']};save()
+ try:
+  # At most one native checkpoint/base in this dedicated cache; reserve at least10GiB.
+  estimate=10 if base else 9
+  if shutil.disk_usage(R).free<(estimate+10)*1024**3:raise RuntimeError('disk reserve refuses download')
+  path=dl(model,a['revision']);basepath=dl(*base) if base else None
+  if base:
+   refs=CACHE/('models--'+base[0].replace('/','--'))/'refs';refs.mkdir(parents=True,exist_ok=True);(refs/'main').write_text(base[1])
+  ev={'checkpoint':model,'revision':a['revision'],'base_model':base[0] if base else 'full weights','runtime_base_revision':base[1] if base else None,'dtype':'bfloat16','device':'cpu','threads':2,'upstream_runtime':kind,'cuda_visible_devices':'','cpu_quota_percent':250,'memory_max_gib':20,'context':'full tokenization preflight required at startup', 'runtime_packages':{x:__import__('importlib.metadata',fromlist=['version']).version(x) for x in ['torch','transformers','peft','huggingface-hub','fastapi','uvicorn']},'gpu_kernels_present':False,'launcher_sha256':hashlib.sha256((R/'native_cpu_server.py').read_bytes()).hexdigest()}
+  ep=R/(slug+'-cpu-reference-smoke-evidence.json')
+  with ep.open('x') as f:json.dump(ev,f,sort_keys=True,indent=2)
+  esha=hashlib.sha256(ep.read_bytes()).hexdigest()
+  args=['systemd-run','--user','--unit=saracura-round-native-model','--property=MemoryMax=20G','--property=MemorySwapMax=0','--property=CPUQuota=250%','--setenv=CUDA_VISIBLE_DEVICES=',P,'-u',str(R/'native_cpu_server.py'),kind,path,base[1] if base else 'full']
+  subprocess.run(args,check=True,capture_output=True);records[model]['stage']='startup';save();ready=False
+  for _ in range(180):
+   try:health();ready=True;break
+   except (OSError,ValueError):pass
+   active=subprocess.run(['systemctl','--user','is-active','saracura-round-native-model'],capture_output=True,text=True).stdout.strip()
+   if active=='failed':raise RuntimeError('upstream server startup failed; see journal')
+   time.sleep(2)
+  if not ready:raise RuntimeError('startup timeout')
+  records[model]['stage']='smoke';save();out=R/(slug+'-cpu-reference-smoke.json')
+  args=[P,'-u',str(R/'ptbr_bench.py'),'--base-url','http://127.0.0.1:18032','--model',model,'--name',slug.lower()+'-cpu-reference-smoke','--output',str(out),'--limit','2','--revision',M['dataset']['revision'],'--checkpoint-id',model,'--checkpoint-revision',a['revision'],'--context','native upstream; smoke only','--hardware','Ryzen7 7700X CPU2threads capped250percent','--quantization','none bf16','--server',kind+'-cpu','--server-version',esha,'--timeout','240']
+  with (R/(slug+'-cpu-reference-smoke.log')).open('x') as f:subprocess.run(args,stdout=f,stderr=f,check=True)
+  report=json.load(open(out));failed=sum(t['failed'] for t in report['tasks'].values());records[model].update(stage='smoke_pass' if not failed else 'smoke_failed',items=sum(t['n'] for t in report['tasks'].values()),failed=failed,full='pending full-context preprocessing audit' if not failed else 'not eligible',report_sha256=hashlib.sha256(out.read_bytes()).hexdigest());save()
+ except Exception as e:records[model].update(stage='operational_failure',error=type(e).__name__+':'+str(e)[:180]);save()
+ finally:
+  stop()
+  if CACHE.exists():assert not CACHE.is_symlink();shutil.rmtree(CACHE)
+print('Native CPU smokes complete',flush=True)

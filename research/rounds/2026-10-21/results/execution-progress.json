@@ -1,0 +1,109 @@
+{
+  "snapshot_at": "2026-10-21T22:39:48.318914+00:00",
+  "round_complete": false,
+  "primary_general_readout": "constrained-letter for all7; strict diagnostics separate",
+  "validated_fulls": [
+    "kev08-mlx-bf16.json",
+    "laya-cpu-nativecap48.json",
+    "saracura-v0-cpu-nativecap48.json"
+  ],
+  "running_full": null,
+  "server_pipeline": [
+    "four native CPU reference smokes",
+    "seven constrained-letter CPU reference smokes",
+    "passing native fulls after5196tokenization preflight",
+    "passing constrained fulls"
+  ],
+  "cpu_isolation": {
+    "torch": "2.8.0+cpu",
+    "transformers": "5.20.2",
+    "fla": false,
+    "triton": false,
+    "cuda_available": false
+  },
+  "operational_findings": [
+    "Native Qwen3.5 on reused CUDA environment selected FLA/Triton kernels and failed on CPU; isolated CPU environment replaces it.",
+    "Mac Kev4 bf16 full interrupted due memory pressure; post-merge Q4 preparation also interrupted before quantization; no result from either interrupted attempt.",
+    "Laya intrinsic option48 cap declared, affects599items; evaluator adds no cuts beyond3500chars."
+  ],
+  "service_policy": "Only task-owned PIDs/units stopped; no production GPU service changed; no paid model inference.",
+  "synthetic_live_constrained_http": "PASS:2requests, same options permuted, no failures; not a benchmark ranking",
+  "native_cpu_smoke": "PASS: Saracura4,Kev4,Decider,Lev each14items zero failures; all5196tokenization preflights passed",
+  "interrupted_outputs_not_ranked": [],
+  "primary_smoke_gates": {
+    "Qwen/Qwen3-4B-Instruct-2507": {
+      "state": "queued",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "Qwen/Qwen3-8B": {
+      "state": "queued",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "Qwen/Qwen3.5-4B": {
+      "state": "smoke_running",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "Qwen/Qwen2.5-7B-Instruct": {
+      "state": "queued",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "microsoft/Phi-4-mini-instruct": {
+      "state": "queued",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "HuggingFaceTB/SmolLM3-3B": {
+      "state": "queued",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "ibm-granite/granite-3.3-8b-instruct": {
+      "state": "queued",
+      "failed": null,
+      "readout": "constrained-letter"
+    },
+    "felhen-ai/saracura-ptbr-4b": {
+      "state": "smoke_pass",
+      "failed": 0,
+      "readout": "native"
+    },
+    "felhen-ai/saracura-ptbr-v0": {
+      "state": "full_validated",
+      "failed": null,
+      "readout": "native"
+    },
+    "convaiinnovations/laya": {
+      "state": "full_validated",
+      "failed": null,
+      "readout": "native"
+    },
+    "jaredpalmer/kev-4b": {
+      "state": "smoke_pass",
+      "failed": 0,
+      "readout": "native"
+    },
+    "jaredpalmer/kev-0.8b": {
+      "state": "full_validated",
+      "failed": null,
+      "readout": "native"
+    },
+    "Mapika/decider-4b": {
+      "state": "smoke_pass",
+      "failed": 0,
+      "readout": "native"
+    },
+    "interfaze-ai/lev": {
+      "state": "smoke_pass",
+      "failed": 0,
+      "readout": "native"
+    }
+  },
+  "server_current_stage": {
+    "stage": "constrained-smokes",
+    "updated": "2026-10-21T22:37:18.451563+00:00"
+  }
+}

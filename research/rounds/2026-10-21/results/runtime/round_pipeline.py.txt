@@ -1,0 +1,29 @@
+"""Sequential bounded experiment stages. Does not touch any production service."""
+import pathlib,subprocess,json,time,shutil,datetime
+R=pathlib.Path.home()/'saracura-round-2026-10-21';P=str(R/'cpu-venv/bin/python');M=json.load(open(R/'manifest.json'));S=R/'pipeline-state.json'
+def state(stage,**extra):S.write_text(json.dumps({'stage':stage,'updated':datetime.datetime.now(datetime.timezone.utc).isoformat(),**extra},indent=2))
+state('waiting_strict_granite_smoke')
+while True:
+ z=json.load(open(R/'generic-state.json'))['models'].get('ibm-granite/granite-3.3-8b-instruct',{})
+ if z.get('state') in ['smoke_pass','smoke_failed','preflight_or_smoke_failed','full_download','full_running','full_pass','full_failed']:break
+ time.sleep(2)
+subprocess.run(['systemctl','--user','stop','saracura-round-generic-queue'],capture_output=True)
+for a in M['models']:
+ if a['cohort']!='generated_decision':continue
+ unit='saracura-round-'+a['id'].split('/')[-1].lower().replace('.','-')
+ subprocess.run(['systemctl','--user','stop',unit],capture_output=True)
+shutil.copyfile(R/'generic-state.json',R/'strict-final-state.json')
+cache=R/'hub-queue'
+if cache.exists():assert not cache.is_symlink();shutil.rmtree(cache)
+for name,script,env in [('native-smokes','native_cpu_queue.py',[]),('constrained-smokes','constrained_queue.py',['--setenv=SARACURA_SMOKE_ONLY=1']),('native-fulls','native_full_queue.py',[]),('constrained-fulls','constrained_full_queue.py',[])]:
+ state(name)
+ unit='saracura-round-'+name
+ args=['systemd-run','--user','--unit='+unit,'--property=MemoryMax=4G','--property=MemorySwapMax=0','--property=CPUQuota=100%',*env,P,'-u',str(R/script)]
+ subprocess.run(args,check=True,capture_output=True)
+ while True:
+  active=subprocess.run(['systemctl','--user','is-active',unit],capture_output=True,text=True).stdout.strip()
+  if active not in ['active','activating','deactivating']:break
+  time.sleep(5)
+ code=subprocess.run(['systemctl','--user','show',unit,'--property=ExecMainStatus','--value'],capture_output=True,text=True).stdout.strip()
+ if code!='0':state('stage_failed',failed_stage=name,exit_code=code);raise RuntimeError(name+' failed; preserve reports and inspect')
+state('complete')

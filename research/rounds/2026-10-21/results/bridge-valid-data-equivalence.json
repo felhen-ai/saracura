@@ -1,0 +1,10 @@
+{
+  "items": 5196,
+  "status": "pass",
+  "comparison": "valid request parsing, every mapped choice and literal rendered user prompt; no model inference claimed",
+  "before_source_commit": "32cffd6",
+  "before_source_sha256": "47da25333ea001f42fd3f5473f76d5af9d800d4085505afb2f4f20d21be209df",
+  "after_source_commit": "840130a",
+  "after_source_sha256": "a6766f6cdc227dae51499cf85ecddab2b235c887f4cf25766a5f158ce0cdf1e7",
+  "concatenated_prompt_sha256": "b34bc771a49f10e3060dd1744f997f110b6a0cc5b7d074d9fd0823ad90c25fc9"
+}

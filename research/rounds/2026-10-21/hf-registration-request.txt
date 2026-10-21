@@ -1,0 +1,18 @@
+DRAFT — NOT SENT
+
+Subject: Registering PT-BR Typed Decisions as a native Hub benchmark
+
+Hello Hugging Face evaluation team,
+
+We maintain felhen-ai/ptbr-typed-decisions-bench: seven closed-decision tasks on Brazilian Portuguese text, 5,196 test items, with balanced accuracy per task and an unweighted mean. The dataset is public, with source licenses documented. The evaluator shuffles option order deterministically and publishes per-item traces and checkpoint provenance. We have an auditable complete CPU reproduction with upstream Laya and are preparing a 14-model local round.
+
+Dataset: https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench
+Guide: https://github.com/felhen-ai/saracura/blob/main/research/evaluation-guide.md
+Evidence: https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/main/results/contribution-check-2026-10-21
+
+Our standalone evaluator is not currently in EVALUATION_FRAMEWORKS. We propose the id ptbr-typed-decisions and would like guidance on the framework registration and benchmark allow-list process. Can a benchmark expose seven task scores and an aggregate mean with an explicitly declared 0..1 scale? The source data uses per-task JSONL files rather than named dataset configs; what configuration mapping should eval.yaml declare?
+
+We also publish Saracura checkpoints and will disclose benchmark-training exposure and authorship on results. Local runs will include traces and provenance; we will not claim the HF verified badge or manufacture verifyTokens.
+
+Thank you,
+Antonio

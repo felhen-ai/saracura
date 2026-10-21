@@ -9,7 +9,7 @@ status: current
 canonical: research/README.md
 globalRef: qmd://saracura/research/README.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-10
+lastReviewedAt: 2026-10-21
 sourceRefs:
   - https://github.com/NandhaKishorM/laya
   - https://github.com/jaredpalmer/kev
@@ -33,6 +33,8 @@ Expected layout, relative to the directory the scripts run from: `data/` (benchm
 repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`) will not run without it.
 
 ## Benchmark
+
+[Rodada local de 14 modelos](../docs/action/comparable-round-2026-10-21.md): seleção e revisão dos resultados históricos, checkpoints e dados fixados, protocolo comparável e requisitos para integração ao ranking nativo do Hugging Face. Preparação concluída; execução completa pendente da ponte para LLMs e do preflight dos runtimes.
 
 | Script | What it does |
 |---|---|
@@ -64,9 +66,12 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 
 ## Comparison table of open decision models
 
+Runtime preprocessing and quantization are explicit configurations: Laya 0.3.20 has an intrinsic 48-token option cap (599 affected items in this round); bridge-added truncation is forbidden. Keep native, strict-generation and constrained-letter results labelled separately.
+
 | Script | What it does |
 |---|---|
 | `ptbr_bench.py` | One-command evaluation for anyone: standard library only, pins the test splits to an immutable Hub commit, same protocol as `eval_http.py`, reports the mean with a 95% bootstrap interval and writes a results file (never overwritten) with per-item answers, declared model metadata, timing and failure codes. `--limit` runs are smoke runs and never submission-ready. |
+| `llm_bridge.py` | Loopback `POST /v1/systemone` bridge for one pinned, offline Transformers chat model. `strict-generation` (default) is a separate 32-token format-following diagnostic; preregistered `constrained-letter` is the common one-token next-letter comparison for all seven general LLMs, with exact token round-trip/distinctness checks, finite float32 legal-logit argmax and mode-separated immutable evidence in `/health`. It is a discrete choice, never a calibrated probability. Standard library core; torch and transformers only at startup. See the [evaluation guide](evaluation-guide.md#chat-llms-through-the-local-bridge). |
 | `validate_submission.py` | Checks a `ptbr_bench.py` report before submission: re-downloads the public data at the report's commit, verifies gold labels, counts and predictions, recomputes scores and interval. Read-only. See the [evaluation guide](evaluation-guide.md). |
 | `eval_http.py` | Runs any System One-compatible server (`POST /v1/systemone`) on the benchmark and on the Central Bank FAQ task, same protocol as `bench.py` (shuffled option order, `BENCH_MAX_CHARS=3500`). Accepts `noul` answers as `noul` or `probability`. |
 | `board_pyserve.py` | Minimal `/v1/systemone` wrapper for models that only ship a Python class (Intern-Decision, Jet). |

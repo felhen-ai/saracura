@@ -1,0 +1,16 @@
+# PROPOSED ONLY: framework id is not registered; do not upload before HF coordination.
+# Aggregate = unweighted mean of seven balanced accuracies, scale 0..1.
+# Each task below is a sub-leaderboard, not a Hugging Face dataset config.
+# Confirm task/config mapping and metric display scale with HF before registration.
+name: PT-BR Typed Decisions
+description: Closed typed decisions on Brazilian Portuguese text; seven tasks, balanced accuracy.
+evaluation_framework: ptbr-typed-decisions
+tasks:
+  - id: typed-decisions-v1
+  - id: camara_tema-v1
+  - id: factck_veracidade-v1
+  - id: faquad_resposta-v1
+  - id: juristcu_area-v1
+  - id: olid_alvo-v1
+  - id: olid_ofensivo-v1
+  - id: scielo_area-v1

@@ -1,0 +1,163 @@
+{
+  "updated": "2026-10-21T22:09:57.294933+00:00",
+  "models": {
+    "HuggingFaceTB/SmolLM3-3B": {
+      "smoke": {
+        "state": "failed",
+        "items": 14,
+        "failed": 2
+      },
+      "full": "not_eligible"
+    },
+    "Qwen/Qwen3-8B": {
+      "state": "smoke_failed",
+      "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 2007,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {
+          "enable_thinking": false
+        },
+        "status": "pass"
+      },
+      "smoke": {
+        "state": "failed",
+        "items": 14,
+        "failed": 1,
+        "report_sha256": "77e3f6d8baef4ca3a786da8be27451c7f17027a71cdee8d8f93e8bb7f7a33de2",
+        "evidence_sha256": "5d94c7cb152dc15e7f2183be0d605d0284bae945450d9c779c55b51017ddd9ff",
+        "counters": {
+          "invalid_output": 1,
+          "deadline": 0,
+          "overbudget": 0
+        }
+      }
+    },
+    "Qwen/Qwen3-4B-Instruct-2507": {
+      "state": "smoke_pass",
+      "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 2003,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {},
+        "status": "pass"
+      },
+      "smoke": {
+        "state": "pass",
+        "items": 14,
+        "failed": 0,
+        "report_sha256": "2ce6ec899efbba393de79feff78b8f3bc9485238264010f5c568fd8cd9b59a58",
+        "evidence_sha256": "227d2c2bdc30dceb762eb60d9364f52b17d6adf8403a9afc4deb9a0273020633",
+        "counters": {
+          "invalid_output": 0,
+          "deadline": 0,
+          "overbudget": 0
+        }
+      }
+    },
+    "Qwen/Qwen3.5-4B": {
+      "state": "smoke_failed",
+      "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 1835,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {
+          "enable_thinking": false
+        },
+        "status": "pass"
+      },
+      "smoke": {
+        "state": "failed",
+        "items": 14,
+        "failed": 14,
+        "report_sha256": "7ed7eed4523ee2aadbf9fe5f29643eb2afc070f0ee2654aeb762bf9723bfb688",
+        "evidence_sha256": "22451fe3d036c3c263ddd8beb7a95827812b089bd03300d16842e8e9b5becec2",
+        "counters": {
+          "invalid_output": 0,
+          "deadline": 0,
+          "overbudget": 0
+        }
+      }
+    },
+    "Qwen/Qwen2.5-7B-Instruct": {
+      "state": "smoke_pass",
+      "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 2024,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {},
+        "status": "pass"
+      },
+      "smoke": {
+        "state": "pass",
+        "items": 14,
+        "failed": 0,
+        "report_sha256": "f694d1554b8f382f581d4a8107071a97d16c3f9f232ed12e1f863030528c45a6",
+        "evidence_sha256": "e7b41122d76e1b479ac19eb03aae944c9040cd106b072c3a2860701230e84a0f",
+        "counters": {
+          "invalid_output": 0,
+          "deadline": 0,
+          "overbudget": 0
+        }
+      }
+    },
+    "microsoft/Phi-4-mini-instruct": {
+      "state": "smoke_pass",
+      "revision": "cfbefacb99257ffa30c83adab238a50856ac3083",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 1565,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {},
+        "status": "pass"
+      },
+      "smoke": {
+        "state": "pass",
+        "items": 14,
+        "failed": 0,
+        "report_sha256": "45025ffbfcf50c8db47f12119824a4e73fb3e1f78f609ac68e31812b98e3e84c",
+        "evidence_sha256": "05e1501ed6099ef621eaa8f52cef9e69f4ab72984e565d5498ec940730be49a0",
+        "counters": {
+          "invalid_output": 0,
+          "deadline": 0,
+          "overbudget": 0
+        }
+      }
+    },
+    "ibm-granite/granite-3.3-8b-instruct": {
+      "state": "smoke_pass",
+      "revision": "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
+      "preflight": {
+        "items": 5196,
+        "max_prompt_tokens": 2248,
+        "context": 8192,
+        "additional_truncation": false,
+        "template_kwargs": {
+          "thinking": false
+        },
+        "status": "pass"
+      },
+      "smoke": {
+        "state": "pass",
+        "items": 14,
+        "failed": 0,
+        "report_sha256": "8a6a31d11a6928170199d85e3037ee7af19df7d2b6979bf19ef556c5289c2207",
+        "evidence_sha256": "c17446f2443e6818bbe1c0eecf67b6fe7d17cbc5839107f6ff5f00a732130ccf",
+        "counters": {
+          "invalid_output": 0,
+          "deadline": 0,
+          "overbudget": 0
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "base_model": "Qwen/Qwen3.5-4B-Base",
+  "checkpoint": "jaredpalmer/kev-4b",
+  "context": "full tokenization preflight required at startup",
+  "cpu_quota_percent": 250,
+  "cuda_visible_devices": "",
+  "device": "cpu",
+  "dtype": "bfloat16",
+  "gpu_kernels_present": false,
+  "launcher_sha256": "a4db7a6fd4d0ab6984b0eebd34884f0b87ec423f4a3a083b59b8bf978f7f527f",
+  "memory_max_gib": 20,
+  "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+  "runtime_base_revision": "1001bb4d826a52d1f399e183466143f4da7b741b",
+  "runtime_packages": {
+    "fastapi": "0.159.1",
+    "huggingface-hub": "2.2.0",
+    "peft": "0.21.0",
+    "torch": "2.8.0+cpu",
+    "transformers": "5.20.2",
+    "uvicorn": "0.54.0"
+  },
+  "threads": 2,
+  "upstream_runtime": "kev"
+}

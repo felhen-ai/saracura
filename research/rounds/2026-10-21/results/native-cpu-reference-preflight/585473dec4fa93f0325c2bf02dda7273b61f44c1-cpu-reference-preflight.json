@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "items": 5196,
+  "max_record_tokens": 1836,
+  "max_state_tokens": 1426,
+  "state_truncated": false,
+  "upstream_preprocessing": "original decider schema/state preparation; state cap8192 not reached",
+  "base_revision": "full"
+}

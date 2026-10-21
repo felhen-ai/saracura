@@ -1,0 +1,5 @@
+Captured operator scripts for reproducibility, not installed entrypoints. They use an explicitly prepared task-owned scratch directory and CPU environment on Linux/systemd. No existing production service is managed. All model services are loopback and CUDA_VISIBLE_DEVICES is empty.
+
+The evaluated model code is unchanged upstream: use the source revisions in ../runtime-source-evidence.json and package versions in cpu-reference-versions.json. Copy the reviewed research/llm_bridge.py as llm_bridge_constrained.py, together with ptbr_bench.py, validate_submission.py and the frozen manifest, into the scratch directory before replay. Downloaded caches are exclusively owned by this experiment. Reports/evidence are exclusive-create; failed or interrupted attempts are never overwritten or ranked. Generic constrained tokenization/readout source is in the main research script, not duplicated here.
+
+The supervisor checks model process health while an evaluator runs; a dead model terminates only its own evaluation client. Queue controls do not alter scores or retry model content. Full results still require fresh-data validation before publication.

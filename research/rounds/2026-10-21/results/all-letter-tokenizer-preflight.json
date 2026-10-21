@@ -1,0 +1,855 @@
+{
+  "kind": "tokenizer/context compatibility only, not a model smoke",
+  "dataset_revision": "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
+  "bridge_sha256": "72259342cf530bdac754f54cb22551bf1a53e87b2c292e52c7789634360fa2d7",
+  "models": {
+    "Qwen/Qwen3-4B-Instruct-2507": {
+      "status": "pass",
+      "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+      "items": 5196,
+      "max_prompt_tokens": 2003,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {},
+      "template_sha256": "64f85b198065d0fba2a81f37e10ed68161ce2c19a754c7100e67e0ca2ee9c326",
+      "rendered_stream_length_framed_sha256": "26cfefda4d75528e698a0c886f47c8a8eb87afd35eb4dcd762087c238b8a8be8",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    },
+    "Qwen/Qwen3-8B": {
+      "status": "pass",
+      "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+      "items": 5196,
+      "max_prompt_tokens": 2007,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {
+        "enable_thinking": false
+      },
+      "template_sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+      "rendered_stream_length_framed_sha256": "7733826a7f4b607570e7b1e8a16c6dac38a226a7e6f99eb0a64092a76adae93d",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    },
+    "Qwen/Qwen3.5-4B": {
+      "status": "pass",
+      "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "items": 5196,
+      "max_prompt_tokens": 1835,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {
+        "enable_thinking": false
+      },
+      "template_sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715",
+      "rendered_stream_length_framed_sha256": "7733826a7f4b607570e7b1e8a16c6dac38a226a7e6f99eb0a64092a76adae93d",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    },
+    "Qwen/Qwen2.5-7B-Instruct": {
+      "status": "pass",
+      "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+      "items": 5196,
+      "max_prompt_tokens": 2024,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {},
+      "template_sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f",
+      "rendered_stream_length_framed_sha256": "49801f4ed55cf3591ed1e8c7c3dba9ba1a16a90812b0341143ab7d9d9f967304",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    },
+    "microsoft/Phi-4-mini-instruct": {
+      "status": "pass",
+      "revision": "cfbefacb99257ffa30c83adab238a50856ac3083",
+      "items": 5196,
+      "max_prompt_tokens": 1565,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {},
+      "template_sha256": "febf589225c9728ab791f52e8897d7607a823d45368f0a4c92fa68997b40cce9",
+      "rendered_stream_length_framed_sha256": "79fe2ceb74621f9a56d66877700ac8abc95a0eaf5a46878f174f7ccde1c5115f",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    },
+    "HuggingFaceTB/SmolLM3-3B": {
+      "status": "pass",
+      "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+      "items": 5196,
+      "max_prompt_tokens": 1845,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 32,
+          "token": "A"
+        },
+        "B": {
+          "id": 33,
+          "token": "B"
+        },
+        "C": {
+          "id": 34,
+          "token": "C"
+        },
+        "D": {
+          "id": 35,
+          "token": "D"
+        },
+        "E": {
+          "id": 36,
+          "token": "E"
+        },
+        "F": {
+          "id": 37,
+          "token": "F"
+        },
+        "G": {
+          "id": 38,
+          "token": "G"
+        },
+        "H": {
+          "id": 39,
+          "token": "H"
+        },
+        "I": {
+          "id": 40,
+          "token": "I"
+        },
+        "J": {
+          "id": 41,
+          "token": "J"
+        },
+        "K": {
+          "id": 42,
+          "token": "K"
+        },
+        "L": {
+          "id": 43,
+          "token": "L"
+        },
+        "M": {
+          "id": 44,
+          "token": "M"
+        },
+        "N": {
+          "id": 45,
+          "token": "N"
+        },
+        "O": {
+          "id": 46,
+          "token": "O"
+        },
+        "P": {
+          "id": 47,
+          "token": "P"
+        },
+        "Q": {
+          "id": 48,
+          "token": "Q"
+        },
+        "R": {
+          "id": 49,
+          "token": "R"
+        },
+        "S": {
+          "id": 50,
+          "token": "S"
+        },
+        "T": {
+          "id": 51,
+          "token": "T"
+        },
+        "U": {
+          "id": 52,
+          "token": "U"
+        },
+        "V": {
+          "id": 53,
+          "token": "V"
+        },
+        "W": {
+          "id": 54,
+          "token": "W"
+        },
+        "X": {
+          "id": 55,
+          "token": "X"
+        },
+        "Y": {
+          "id": 56,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 57,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {
+        "enable_thinking": false
+      },
+      "template_sha256": "3e0e275a527f249670056e0078e474eadbdd007c134b4fdfae5a7b3089702814",
+      "rendered_stream_length_framed_sha256": "2cd8009798de8c3c7fa134f0c8707761239a883b0faa8ef98b15af6f22977995",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    },
+    "ibm-granite/granite-3.3-8b-instruct": {
+      "status": "pass",
+      "revision": "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
+      "items": 5196,
+      "max_prompt_tokens": 2248,
+      "output_budget": 1,
+      "context": 8192,
+      "letter_tokens": {
+        "A": {
+          "id": 51,
+          "token": "A"
+        },
+        "B": {
+          "id": 52,
+          "token": "B"
+        },
+        "C": {
+          "id": 53,
+          "token": "C"
+        },
+        "D": {
+          "id": 54,
+          "token": "D"
+        },
+        "E": {
+          "id": 55,
+          "token": "E"
+        },
+        "F": {
+          "id": 56,
+          "token": "F"
+        },
+        "G": {
+          "id": 57,
+          "token": "G"
+        },
+        "H": {
+          "id": 58,
+          "token": "H"
+        },
+        "I": {
+          "id": 59,
+          "token": "I"
+        },
+        "J": {
+          "id": 60,
+          "token": "J"
+        },
+        "K": {
+          "id": 61,
+          "token": "K"
+        },
+        "L": {
+          "id": 62,
+          "token": "L"
+        },
+        "M": {
+          "id": 63,
+          "token": "M"
+        },
+        "N": {
+          "id": 64,
+          "token": "N"
+        },
+        "O": {
+          "id": 65,
+          "token": "O"
+        },
+        "P": {
+          "id": 66,
+          "token": "P"
+        },
+        "Q": {
+          "id": 67,
+          "token": "Q"
+        },
+        "R": {
+          "id": 68,
+          "token": "R"
+        },
+        "S": {
+          "id": 69,
+          "token": "S"
+        },
+        "T": {
+          "id": 70,
+          "token": "T"
+        },
+        "U": {
+          "id": 71,
+          "token": "U"
+        },
+        "V": {
+          "id": 72,
+          "token": "V"
+        },
+        "W": {
+          "id": 73,
+          "token": "W"
+        },
+        "X": {
+          "id": 74,
+          "token": "X"
+        },
+        "Y": {
+          "id": 75,
+          "token": "Y"
+        },
+        "Z": {
+          "id": 76,
+          "token": "Z"
+        }
+      },
+      "template_kwargs": {
+        "thinking": false
+      },
+      "template_sha256": "0bea7711316005a1c37c9941a7ee2a26311d223c979abee416aab0a402fc5b56",
+      "rendered_stream_length_framed_sha256": "4cb2b9fb1ad11ae106790aa409f38d44bf3f90d1ac065240f40eacb3195a46db",
+      "additional_truncation": false,
+      "model_forward_executed": false,
+      "transformers": "5.20.2"
+    }
+  }
+}

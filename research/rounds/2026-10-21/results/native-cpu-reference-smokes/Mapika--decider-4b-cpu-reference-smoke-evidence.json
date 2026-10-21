@@ -1,0 +1,24 @@
+{
+  "base_model": "full weights",
+  "checkpoint": "Mapika/decider-4b",
+  "context": "full tokenization preflight required at startup",
+  "cpu_quota_percent": 250,
+  "cuda_visible_devices": "",
+  "device": "cpu",
+  "dtype": "bfloat16",
+  "gpu_kernels_present": false,
+  "launcher_sha256": "a4db7a6fd4d0ab6984b0eebd34884f0b87ec423f4a3a083b59b8bf978f7f527f",
+  "memory_max_gib": 20,
+  "revision": "585473dec4fa93f0325c2bf02dda7273b61f44c1",
+  "runtime_base_revision": null,
+  "runtime_packages": {
+    "fastapi": "0.159.1",
+    "huggingface-hub": "2.2.0",
+    "peft": "0.21.0",
+    "torch": "2.8.0+cpu",
+    "transformers": "5.20.2",
+    "uvicorn": "0.54.0"
+  },
+  "threads": 2,
+  "upstream_runtime": "decider"
+}

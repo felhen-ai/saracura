@@ -1,0 +1,85 @@
+"""Explicit task-owned CPU launcher around unchanged public upstream native servers."""
+import os,pathlib,sys,json,random
+R=pathlib.Path.home()/'saracura-round-2026-10-21'
+os.environ['CUDA_VISIBLE_DEVICES']='';os.environ['HF_HUB_OFFLINE']='1';os.environ['TRANSFORMERS_OFFLINE']='1';os.environ['HF_HUB_CACHE']=str(R/'hub-native');os.environ['OMP_NUM_THREADS']='2';os.environ['KEV_PREFIX_CACHE']='0'
+sys.path[:0]=[str(R/'runtime-lib'),str(R/'upstream-kev')]
+import torch,uvicorn
+torch.set_num_threads(2)
+kind,path,base_revision=sys.argv[1:]
+if kind=='kev':
+ from kev.checkpoint import Checkpoint,LoadOptions
+ from kev.serve import Server,app
+ ck=Checkpoint(path)
+ assert ck.meta.base=='Qwen/Qwen3.5-4B-Base'
+ if ck.meta.base_revision is not None:assert ck.meta.base_revision==base_revision
+ ck.meta.base_revision=base_revision
+ tok,model=ck.load('cpu',LoadOptions(dtype=torch.bfloat16,backend='torch'))
+ # Encode the complete frozen stream without inference, preserving upstream strict admission.
+ sys.path.insert(0,str(R))
+ import ptbr_bench as b
+ from kev.api import SystemOneRequest,to_record
+ from kev.model import encode
+ rng=random.Random(b.SEED);maximum=0;state_max=0;count=0
+ manifest=json.load(open(R/'manifest.json'))
+ for task in b.TASKS:
+  _,rows=b.fetch(manifest['dataset']['revision'],task,pathlib.Path.home()/'.cache/ptbr-typed-decisions-bench')
+  for row in rows:
+   q=b.question(row,rng);req=SystemOneRequest.model_validate({'model':'kev-latest','state':row['text'][:3500],'questions':{'q':q}});rec,_=to_record(req)
+   z=encode(tok,rec,max_state=65536,max_branch=73728,strict=True)
+   assert not z['state_truncated'];maximum=max(maximum,len(z['ids']));state_max=max(state_max,z['state_tokens']);count+=1
+ result={'status':'pass','items':count,'max_record_tokens':maximum,'max_state_tokens':state_max,'state_truncated':False,'strict':True,'base_revision':base_revision}
+ dest=R/(pathlib.Path(path).name+'-cpu-reference-preflight.json')
+ payload=json.dumps(result,indent=2)
+ if dest.exists():assert dest.read_text()==payload
+ else:
+  with dest.open('x') as f:f.write(payload)
+ print('preflight '+str(result),flush=True)
+ app.state.server=Server(ck,tok,model,'cpu')
+elif kind=='decider':
+ os.environ['DECIDER_MODEL']=path;os.environ['DECIDER_DEVICE']='cpu';os.environ['DECIDER_IMAGES']='0';os.environ['DECIDER_WARMUP']='0';os.environ['DECIDER_MAX_STATE_TOKENS']='8192'
+ import decider.serve as s
+ # Explicit dtype configuration: keep the official engine, response and preprocessing unchanged.
+ s.resolve_device=lambda requested=None:('cpu',torch.bfloat16)
+ app=s.app
+elif kind=='lev':
+ from lev.server import create_app
+ app=create_app(checkpoint_dir=path,model_cache=str(R/'hub-native'),timeout=180)
+else:raise ValueError('unsupported task runtime')
+if kind in ('decider','lev'):
+ from contextlib import asynccontextmanager
+ original_lifespan=app.router.lifespan_context
+ @asynccontextmanager
+ async def audited_lifespan(instance):
+  async with original_lifespan(instance):
+   sys.path.insert(0,str(R))
+   import ptbr_bench as b
+   manifest=json.load(open(R/'manifest.json'));rng=random.Random(b.SEED);count=0;maximum=0;state_max=0
+   engine=None
+   if kind=='lev':
+    endpoint=next(route.endpoint for route in app.routes if getattr(route,'path','')=='/health')
+    states=[c.cell_contents for c in (endpoint.__closure__ or ()) if isinstance(c.cell_contents,dict) and 'engine' in c.cell_contents]
+    assert len(states)==1;engine=states[0]['engine']
+   for task in b.TASKS:
+    _,rows=b.fetch(manifest['dataset']['revision'],task,pathlib.Path.home()/'.cache/ptbr-typed-decisions-bench')
+    for row in rows:
+     q=b.question(row,rng);state=row['text'][:3500]
+     if kind=='decider':
+      n=len(s.eng.tok.encode(s.S1.render_state(state),add_special_tokens=False));assert n<8192
+      if s.SCHEMA_FIRST and s._worth_caching({'q':q},False):
+       tps,suffix=s._plan_schema({'q':q},False,state);width=max(tps)+len(suffix[0])
+      else:
+       _,_,items,_=s._prepare_s1(state,{'q':q},False);width=max(len(x['ids']) for x in items)
+      assert width<=s.MAX_ROW_TOKENS
+     else:
+      prepared=engine.prepare(state,{'q':q});width=prepared.width;n=len(prepared.prefix_ids)
+      assert width<=8192
+     state_max=max(state_max,n);maximum=max(maximum,width);count+=1
+   result={'status':'pass','items':count,'max_record_tokens':maximum,'max_state_tokens':state_max,'state_truncated':False,'upstream_preprocessing':'candidate readout clips candidate tokens to64 in lev' if kind=='lev' else 'original decider schema/state preparation; state cap8192 not reached','base_revision':base_revision}
+   dest=R/(pathlib.Path(path).name+'-cpu-reference-preflight.json');payload=json.dumps(result,indent=2)
+   if dest.exists():assert dest.read_text()==payload
+   else:
+    with dest.open('x') as f:f.write(payload)
+   print('preflight '+str(result),flush=True)
+   yield
+ app.router.lifespan_context=audited_lifespan
+uvicorn.run(app,host='127.0.0.1',port=18032,access_log=False)
