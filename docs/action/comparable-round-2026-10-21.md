@@ -68,6 +68,8 @@ A integração `research/lm_eval` existente usa loglikelihood de letras e ordem 
 
 Antes do primeiro full run, a ponte precisa passar casos sintéticos cobrindo choice de 3 e 24 opções, booleanos, permutação de ordem, caracteres PT-BR, resposta inválida, timeout e ausência de truncamento adicional. Um teste deve comparar as requisições e a sequência de itens dos dois percursos. Revisões do servidor, da ponte, tokenizer, modelo-base, adapter, head e dependências precisam estar fixadas. Os SHAs dos repositórios de modelo no manifesto não substituem esses pins de dependências. Não habilitar execução de código remoto sem inspecionar a revisão fixada.
 
+As referências de classe majoritária e TF-IDF + regressão logística serão recalculadas em CPU e não contam entre os 14 modelos. Usar somente o split de treino na mesma revisão do dataset para ajustar referências; escolhas de hiperparâmetros usam dev, nunca o teste. Fixar os hashes de train/dev, semente, dependências e receita antes da execução. Publicar o orçamento de dados supervisionados junto da nota de TF-IDF, sem apresentá-la como zero-shot. As notas históricas de referências também não são automaticamente revalidadas.
+
 ## Hardware e fila de execução
 
 Inspeção read-only de 21/10: Mac M4 Pro com 24 GiB de memória unificada e cerca de 30 GiB livres em disco. Servidor com RTX 5090 de 32 GiB (32.607 MiB reportados), 29.904 MiB ocupados, cerca de 23 GiB de RAM disponível e 28 GiB livres em disco. GPU com 0% de uso instantâneo continua ocupada por um serviço residente. Não descarregar esse serviço nem mudar a política do arbiter para começar o benchmark.
