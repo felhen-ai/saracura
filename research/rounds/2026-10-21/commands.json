@@ -20,11 +20,13 @@
       "--checkpoint-revision",
       "cdbee75f17c01a7cc42f958dc650907174af0554",
       "--name",
-      "qwen--qwen3-4b-instruct-2507-smoke",
+      "qwen--qwen3-4b-instruct-2507-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "qwen--qwen3-4b-instruct-2507-smoke.json"
+      "qwen--qwen3-4b-instruct-2507-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -43,9 +45,9 @@
       "--checkpoint-revision",
       "cdbee75f17c01a7cc42f958dc650907174af0554",
       "--name",
-      "qwen--qwen3-4b-instruct-2507-full",
+      "qwen--qwen3-4b-instruct-2507-full-constrained-letter",
       "--output",
-      "qwen--qwen3-4b-instruct-2507-full.json",
+      "qwen--qwen3-4b-instruct-2507-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -53,7 +55,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -63,8 +65,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "qwen--qwen3-4b-instruct-2507-full.json"
-    ]
+      "qwen--qwen3-4b-instruct-2507-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "Qwen/Qwen3-8B",
@@ -87,11 +90,13 @@
       "--checkpoint-revision",
       "b968826d9c46dd6066d109eabc6255188de91218",
       "--name",
-      "qwen--qwen3-8b-smoke",
+      "qwen--qwen3-8b-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "qwen--qwen3-8b-smoke.json"
+      "qwen--qwen3-8b-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -110,9 +115,9 @@
       "--checkpoint-revision",
       "b968826d9c46dd6066d109eabc6255188de91218",
       "--name",
-      "qwen--qwen3-8b-full",
+      "qwen--qwen3-8b-full-constrained-letter",
       "--output",
-      "qwen--qwen3-8b-full.json",
+      "qwen--qwen3-8b-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -120,7 +125,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -130,8 +135,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "qwen--qwen3-8b-full.json"
-    ]
+      "qwen--qwen3-8b-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "Qwen/Qwen3.5-4B",
@@ -154,11 +160,13 @@
       "--checkpoint-revision",
       "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
       "--name",
-      "qwen--qwen3.5-4b-smoke",
+      "qwen--qwen3.5-4b-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "qwen--qwen3.5-4b-smoke.json"
+      "qwen--qwen3.5-4b-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -177,9 +185,9 @@
       "--checkpoint-revision",
       "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
       "--name",
-      "qwen--qwen3.5-4b-full",
+      "qwen--qwen3.5-4b-full-constrained-letter",
       "--output",
-      "qwen--qwen3.5-4b-full.json",
+      "qwen--qwen3.5-4b-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -187,7 +195,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -197,8 +205,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "qwen--qwen3.5-4b-full.json"
-    ]
+      "qwen--qwen3.5-4b-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "Qwen/Qwen2.5-7B-Instruct",
@@ -221,11 +230,13 @@
       "--checkpoint-revision",
       "a09a35458c702b33eeacc393d103063234e8bc28",
       "--name",
-      "qwen--qwen2.5-7b-instruct-smoke",
+      "qwen--qwen2.5-7b-instruct-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "qwen--qwen2.5-7b-instruct-smoke.json"
+      "qwen--qwen2.5-7b-instruct-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -244,9 +255,9 @@
       "--checkpoint-revision",
       "a09a35458c702b33eeacc393d103063234e8bc28",
       "--name",
-      "qwen--qwen2.5-7b-instruct-full",
+      "qwen--qwen2.5-7b-instruct-full-constrained-letter",
       "--output",
-      "qwen--qwen2.5-7b-instruct-full.json",
+      "qwen--qwen2.5-7b-instruct-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -254,7 +265,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -264,8 +275,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "qwen--qwen2.5-7b-instruct-full.json"
-    ]
+      "qwen--qwen2.5-7b-instruct-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "microsoft/Phi-4-mini-instruct",
@@ -288,11 +300,13 @@
       "--checkpoint-revision",
       "cfbefacb99257ffa30c83adab238a50856ac3083",
       "--name",
-      "microsoft--phi-4-mini-instruct-smoke",
+      "microsoft--phi-4-mini-instruct-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "microsoft--phi-4-mini-instruct-smoke.json"
+      "microsoft--phi-4-mini-instruct-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -311,9 +325,9 @@
       "--checkpoint-revision",
       "cfbefacb99257ffa30c83adab238a50856ac3083",
       "--name",
-      "microsoft--phi-4-mini-instruct-full",
+      "microsoft--phi-4-mini-instruct-full-constrained-letter",
       "--output",
-      "microsoft--phi-4-mini-instruct-full.json",
+      "microsoft--phi-4-mini-instruct-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -321,7 +335,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -331,8 +345,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "microsoft--phi-4-mini-instruct-full.json"
-    ]
+      "microsoft--phi-4-mini-instruct-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "HuggingFaceTB/SmolLM3-3B",
@@ -355,11 +370,13 @@
       "--checkpoint-revision",
       "a07cc9a04f16550a088caea529712d1d335b0ac1",
       "--name",
-      "huggingfacetb--smollm3-3b-smoke",
+      "huggingfacetb--smollm3-3b-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "huggingfacetb--smollm3-3b-smoke.json"
+      "huggingfacetb--smollm3-3b-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -378,9 +395,9 @@
       "--checkpoint-revision",
       "a07cc9a04f16550a088caea529712d1d335b0ac1",
       "--name",
-      "huggingfacetb--smollm3-3b-full",
+      "huggingfacetb--smollm3-3b-full-constrained-letter",
       "--output",
-      "huggingfacetb--smollm3-3b-full.json",
+      "huggingfacetb--smollm3-3b-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -388,7 +405,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -398,8 +415,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "huggingfacetb--smollm3-3b-full.json"
-    ]
+      "huggingfacetb--smollm3-3b-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "ibm-granite/granite-3.3-8b-instruct",
@@ -422,11 +440,13 @@
       "--checkpoint-revision",
       "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
       "--name",
-      "ibm-granite--granite-3.3-8b-instruct-smoke",
+      "ibm-granite--granite-3.3-8b-instruct-smoke-constrained-letter",
       "--limit",
       "2",
       "--output",
-      "ibm-granite--granite-3.3-8b-instruct-smoke.json"
+      "ibm-granite--granite-3.3-8b-instruct-smoke-constrained-letter.json",
+      "--server",
+      "ptbr-llm-bridge-constrained-letter"
     ],
     "full_argv_template": [
       "uv",
@@ -445,9 +465,9 @@
       "--checkpoint-revision",
       "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
       "--name",
-      "ibm-granite--granite-3.3-8b-instruct-full",
+      "ibm-granite--granite-3.3-8b-instruct-full-constrained-letter",
       "--output",
-      "ibm-granite--granite-3.3-8b-instruct-full.json",
+      "ibm-granite--granite-3.3-8b-instruct-full-constrained-letter.json",
       "--context",
       "PENDING_PREFLIGHT",
       "--quantization",
@@ -455,7 +475,7 @@
       "--hardware",
       "PENDING_PREFLIGHT",
       "--server",
-      "PENDING_PREFLIGHT",
+      "ptbr-llm-bridge-constrained-letter",
       "--server-version",
       "PENDING_PREFLIGHT"
     ],
@@ -465,8 +485,9 @@
       "--python",
       "3.12",
       "research/validate_submission.py",
-      "ibm-granite--granite-3.3-8b-instruct-full.json"
-    ]
+      "ibm-granite--granite-3.3-8b-instruct-full-constrained-letter.json"
+    ],
+    "readout": "constrained-letter"
   },
   {
     "id": "felhen-ai/saracura-ptbr-4b",

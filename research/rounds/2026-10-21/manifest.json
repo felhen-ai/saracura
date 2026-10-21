@@ -61,8 +61,22 @@
     "score_scale": "0..1 internally; percent only in presentation",
     "order": "alphabetical task order, one seeded random stream for shuffled options",
     "adapter_comparability_gate": "same evaluator request bytes, same labels and golds; no lm_eval legacy scores in this round",
-    "generated_bridge_status": "implementation_pending; do not treat generated models as runnable until bridge passes conformance",
+    "generated_bridge_status": "strict-generation implemented and reviewed; constrained-letter implementation in progress, smoke per model/mode required before full",
     "generated_primary_settings": {
+      "temperature": 0,
+      "do_sample": false,
+      "thinking": false,
+      "max_new_tokens": 1,
+      "batch_size": 1,
+      "quantization": "none",
+      "dtype": "bfloat16 on supported CUDA; float32 CPU if required, recorded separately",
+      "content_repair_retries": 0,
+      "readout": "constrained-letter",
+      "tie_break": "first legal option in received order"
+    },
+    "publication_gate": "all 5196 items, seven tasks, 0 failures, per-item trace, immutable source/runtime/base/head revisions, fresh validator success",
+    "evaluator_sha256": "019fbc5b9a55dd92addb4d525299223c8ac840f13c222525e82ca4cf31f044db",
+    "generated_diagnostic_settings": {
       "temperature": 0,
       "do_sample": false,
       "thinking": false,
@@ -70,10 +84,11 @@
       "batch_size": 1,
       "quantization": "none",
       "dtype": "bfloat16 on supported CUDA; float32 CPU if required, recorded separately",
-      "content_repair_retries": 0
+      "content_repair_retries": 0,
+      "readout": "strict-generation"
     },
-    "publication_gate": "all 5196 items, seven tasks, 0 failures, per-item trace, immutable source/runtime/base/head revisions, fresh validator success",
-    "evaluator_sha256": "019fbc5b9a55dd92addb4d525299223c8ac840f13c222525e82ca4cf31f044db"
+    "readout_preregistration": "All seven general LLMs constrained-letter, strict diagnostics separate, no best-of-mode selection; report server/name includes mode",
+    "native_preprocessing": "Laya and Saracura-v0 upstream intrinsic cap48 tokens per option affects599items; evaluator adds no cuts beyond3500chars. Earlier cap-held state historical."
   },
   "hardware_observed": {
     "date": "2026-10-21",
