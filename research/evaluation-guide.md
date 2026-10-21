@@ -197,6 +197,73 @@ listed.
 - `research/lm_eval/ptbr_typed_decisions` is a separate protocol for `lm-evaluation-harness` (generic prompting of
   language models). Its numbers are not comparable with `ptbr_bench.py` numbers and are never mixed in one table.
 
+### Chat LLMs through the local bridge
+
+General chat models have no System One server of their own. `research/llm_bridge.py` serves one pinned Transformers
+snapshot on `127.0.0.1` with the same `POST /v1/systemone` contract (standard library core; torch and transformers are
+imported only when you start it). Each question becomes one user chat message (state and question verbatim, options as
+`A)` to `Z)` in the order received) and the model must reply with exactly one uppercase letter. Anything else is a
+failed item: no repair, no retry, no constrained decoding. Boolean questions use `A) Não` / `B) Sim` and return a
+discrete 0 or 1, not a calibrated probability. Generation is greedy, at most 32 new tokens; a prompt that does not fit
+the context with that budget is rejected (422), never truncated.
+
+Use a separate environment and replace `ORG/NAME` and `<40-hex commit>` with the model and revision you decided on
+beforehand (pinned versions as in the Laya example above):
+
+```bash
+uv venv --python 3.12 "$HOME/.cache/ptbr-bridge/venv"
+uv pip install --python "$HOME/.cache/ptbr-bridge/venv/bin/python" 'torch==2.14.1' 'transformers==5.20.2' 'huggingface_hub'
+
+# explicit, one-off download of the pinned snapshot into the normal Hub cache (the bridge never downloads)
+"$HOME/.cache/ptbr-bridge/venv/bin/python" - <<'PYTHON'
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id="ORG/NAME", revision="<40-hex commit>", token=False)
+PYTHON
+
+# start: offline, loopback only, evidence written once (an existing file is never overwritten)
+"$HOME/.cache/ptbr-bridge/venv/bin/python" research/llm_bridge.py \
+  --model ORG/NAME --revision "<40-hex commit>" --device cpu --threads 4 --context 8192 \
+  --chat-template-kwargs '{"enable_thinking": false}' --generation-timeout 90 \
+  --port 18031 --evidence-output ./bridge-evidence.json
+```
+
+- `--chat-template-kwargs` is mandatory: pass the model's non-thinking switch (or `{}` when it has none, after
+  inspecting its template). Templates that call `strftime_now` are rendered with the date frozen to `2026-10-21`
+  (`--template-date`); if the installed transformers cannot freeze it, startup fails. The template itself is the
+  official `tokenizer.chat_template`, never replaced; its SHA256 is in the evidence.
+- `--device` is explicit (`cpu`, `mps`, `cuda`); the dtype follows the device (`float32`, `float16`, `bfloat16`) unless
+  `--dtype` says otherwise, and is recorded. Attention is `eager`. `--auto-class AutoModelForImageTextToText` selects the
+  conditional-generation class for text-only Qwen3.5; no `trust_remote_code` anywhere.
+- The deadline (`--generation-timeout`, default 90 s) covers the whole request and is checked between decoding steps
+  and between questions, so a single prefill cannot be interrupted. Keep the evaluator `--timeout` larger (default 120).
+  Past the deadline, or on an invalid reply, the answer is HTTP 200 with `{}` for the question: the evaluator records
+  `no_answer` once and does not retry. One request runs at a time; a concurrent one gets 429.
+- `GET /health` returns the execution manifest (`evidence`: bridge SHA256, model and tokenizer revision, package
+  versions, dtype, device, threads, context, output and deadline limits, template kwargs, template SHA256, prompt
+  version and hash; `evidence_sha256`) and the mutable `counters` (`invalid_output`, `deadline`, `overbudget`). No
+  request text, endpoint or local path appears in either.
+
+Smoke, then the full run, with `--server-version` set to the SHA256 of the exact evidence bytes. Capture `/health` before
+and after the full run and compare `evidence_sha256` and the counters; any nonzero counter makes the run failed and
+unranked.
+
+```bash
+EVIDENCE_SHA="$(shasum -a 256 ./bridge-evidence.json | cut -d' ' -f1)"
+curl -s http://127.0.0.1:18031/health > health-before.json
+uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
+  --name llm-smoke --limit 2 --output /tmp/llm-smoke.json --revision 5450e73e634403993d9ac86d53d60a9b0ff76673
+uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
+  --name llm-full --output ./llm-full.json --revision 5450e73e634403993d9ac86d53d60a9b0ff76673 \
+  --checkpoint-id ORG/NAME --checkpoint-revision "<40-hex commit>" \
+  --context "8192 tokens; chat template; 32 output tokens" --quantization "none; CPU float32" \
+  --hardware "<cpu, memory>" --server llm_bridge --server-version "$EVIDENCE_SHA"
+curl -s http://127.0.0.1:18031/health > health-after.json
+```
+
+Keep a sidecar next to the report that links the report SHA256, the evidence SHA256 and the source commits, with the
+actual start arguments and private values redacted. Numbers from the bridge follow this protocol only; they are not
+mixed with `lm-evaluation-harness` numbers.
+
 ## Português do Brasil
 
 Dois scripts, só com a biblioteca padrão do Python (não precisam de pacote de ML):
@@ -305,3 +372,23 @@ nem prompts privados na discussão. Só entram modelos públicos, sem ajuste nas
   manual, nunca por este script.
 - `research/lm_eval/ptbr_typed_decisions` é um protocolo separado para o `lm-evaluation-harness` (prompt genérico em
   modelos de linguagem). Os números dele não são comparáveis com os do `ptbr_bench.py` e nunca entram na mesma tabela.
+
+### LLMs de chat pela ponte local
+
+Modelos de chat genéricos não têm servidor System One próprio. O `research/llm_bridge.py` serve um snapshot fixado do
+Transformers em `127.0.0.1` com o mesmo contrato `POST /v1/systemone` (núcleo só com a biblioteca padrão; torch e
+transformers só são importados ao iniciá-lo). Cada pergunta vira uma mensagem de usuário (estado e pergunta literais,
+opções como `A)` a `Z)` na ordem recebida) e o modelo precisa responder com exatamente uma letra maiúscula. Qualquer
+outra coisa é item com falha: sem reparo, sem nova tentativa, sem decodificação restrita. Perguntas booleanas usam
+`A) Não` / `B) Sim` e devolvem 0 ou 1 discreto, não uma probabilidade calibrada. A geração é gulosa, com no máximo 32
+tokens novos; prompt que não cabe no contexto com esse orçamento é recusado (422), nunca truncado.
+
+A receita acima vale aqui: ambiente separado, download explícito e fixado do snapshot (a ponte nunca baixa), início
+offline em loopback com `--evidence-output` (arquivo existente nunca é sobrescrito), `--chat-template-kwargs`
+obrigatório (a chave que desliga o raciocínio, ou `{}` após inspecionar o template) e `--context` explícito. O prazo
+(`--generation-timeout`, 90 s) cobre a requisição inteira e só é checado entre passos de decodificação e entre
+perguntas; mantenha o `--timeout` do avaliador maior. Resposta inválida ou prazo vencido devolvem HTTP 200 com `{}`,
+registrado como `no_answer` uma única vez. `GET /health` traz o manifesto de execução (`evidence`, `evidence_sha256`) e
+os contadores (`invalid_output`, `deadline`, `overbudget`). Use o SHA256 dos bytes exatos do arquivo de evidência como
+`--server-version`, capture `/health` antes e depois da execução completa e compare; contador diferente de zero torna a
+execução reprovada e sem ranking.
