@@ -72,7 +72,7 @@ def start(a,label):
 def evaluate(a,label,h,limit=None):
  slug=a['id'].replace('/','--');output=R/(slug+'-'+label+'-constrained-letter.json')
  if output.exists():raise RuntimeError('existing_report_refuse_overwrite')
- args=[PY,'-u',str(R/'ptbr_bench.py'),'--base-url','http://127.0.0.1:18031','--model',a['id'],'--name',slug.lower()+'-'+label+'-constrained-letter','--output',str(output),'--revision',M['dataset']['revision'],'--checkpoint-id',a['id'],'--checkpoint-revision',a['revision'],'--context','8192 context max_output1 no_thinking constrained-letter','--hardware','Ryzen7 7700X CPU2threads capped250percent','--quantization','none bf16','--server','ptbr-llm-bridge-constrained-letter','--server-version',h['evidence_sha256'],'--timeout','240']
+ args=[PY,'-u',str(R/'ptbr_bench.py'),'--base-url','http://127.0.0.1:18031','--model',a['id'],'--name',slug.lower()+'-'+label+'-constrained-letter','--output',str(output),'--revision',M['dataset']['revision'],'--checkpoint-id',a['id'],'--checkpoint-revision',a['revision'],'--subfolder','.','--context','8192 context max_output1 no_thinking constrained-letter','--hardware','Ryzen7 7700X CPU2threads capped250percent','--quantization','none bf16','--server','ptbr-llm-bridge-constrained-letter','--server-version',h['evidence_sha256'],'--timeout','240']
  if limit:args+=['--limit',str(limit)]
  with (R/(slug+'-'+label+'-constrained-letter.log')).open('x') as log:
   client=subprocess.Popen(args,stdout=log,stderr=log)

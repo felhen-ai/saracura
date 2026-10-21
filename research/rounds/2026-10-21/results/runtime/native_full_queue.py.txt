@@ -23,7 +23,7 @@ for model,kind,base in models:
   if not ready:raise RuntimeError('startup timeout')
   pre=json.load(open(R/(pathlib.Path(path).name+'-cpu-reference-preflight.json')));assert pre['items']==5196 and pre['status']=='pass' and not pre['state_truncated']
   ep=R/(slug+'-cpu-reference-smoke-evidence.json');esha=hashlib.sha256(ep.read_bytes()).hexdigest();out=R/(slug+'-cpu-reference-full.json');rec['full_stage']='running';save()
-  args=[P,'-u',str(R/'ptbr_bench.py'),'--base-url','http://127.0.0.1:18032','--model',model,'--name',slug.lower()+'-cpu-reference-full','--output',str(out),'--revision',M['dataset']['revision'],'--checkpoint-id',model,'--checkpoint-revision',a['revision'],'--context','native preflight5196; '+pre.get('upstream_preprocessing','kev strict no truncation'),'--hardware','Ryzen7 7700X CPU2threads capped250percent','--quantization','none bf16','--server',kind+'-cpu','--server-version',esha,'--timeout','240']
+  args=[P,'-u',str(R/'ptbr_bench.py'),'--base-url','http://127.0.0.1:18032','--model',model,'--name',slug.lower()+'-cpu-reference-full','--output',str(out),'--revision',M['dataset']['revision'],'--checkpoint-id',model,'--checkpoint-revision',a['revision'],'--subfolder','.','--context','native preflight5196; '+pre.get('upstream_preprocessing','kev strict no truncation'),'--hardware','Ryzen7 7700X CPU2threads capped250percent','--quantization','none bf16','--server',kind+'-cpu','--server-version',esha,'--timeout','240']
   with (R/(slug+'-cpu-reference-full.log')).open('x') as f:
    client=subprocess.Popen(args,stdout=f,stderr=f)
    try:

@@ -1,0 +1,32 @@
+{
+  "entries": [
+    {
+      "report": "laya-cpu-nativecap48.json",
+      "report_sha256": "d303e0b19a4c80e26dacadbbb0aaeb0a4d757efef1359dd27c3817afbbe3e70d",
+      "checkpoint_id": "convaiinnovations/laya",
+      "checkpoint_revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",
+      "checkpoint_subfolder": "multilingual",
+      "runtime_request_alias": "convaiinnovations/laya-multilingual",
+      "note": "Report optional subfolder remains unknown; this companion records the actual selected bundle/root. Request alias does not identify weights."
+    },
+    {
+      "report": "saracura-v0-cpu-nativecap48.json",
+      "report_sha256": "951c1c0727c81fe0ee1dc5b2e634f980481cc5ffb4d8bfdfe047d6179035cb2d",
+      "checkpoint_id": "felhen-ai/saracura-ptbr-v0",
+      "checkpoint_revision": "ae97728cb3ae6575d382f3e68c19054084de27d7",
+      "checkpoint_subfolder": ".",
+      "runtime_request_alias": "convaiinnovations/laya-multilingual",
+      "note": "Report optional subfolder remains unknown; this companion records the actual selected bundle/root. Request alias does not identify weights."
+    },
+    {
+      "report": "kev08-mlx-bf16.json",
+      "report_sha256": "82762648d1c04c9cbb5439f0d5034852d7ab55940d4b22e9ac78a0f75ce93b93",
+      "checkpoint_id": "jaredpalmer/kev-0.8b",
+      "checkpoint_revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+      "checkpoint_subfolder": ".",
+      "runtime_request_alias": "kev-latest",
+      "note": "Report optional subfolder remains unknown; this companion records the actual selected bundle/root. Request alias does not identify weights."
+    }
+  ],
+  "laya_bundle_proof": "research round manifest and captured CPU launcher select multilingual; Saracura-v0 loads the root of its own pinned checkpoint using the upstream Laya request alias."
+}

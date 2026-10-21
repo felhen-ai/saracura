@@ -26,7 +26,9 @@
       "--output",
       "qwen--qwen3-4b-instruct-2507-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -57,7 +59,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -122,7 +126,9 @@
       "--output",
       "qwen--qwen3-8b-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -153,7 +159,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -218,7 +226,9 @@
       "--output",
       "qwen--qwen3.5-4b-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -249,7 +259,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -316,7 +328,9 @@
       "--output",
       "qwen--qwen2.5-7b-instruct-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -347,7 +361,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -412,7 +428,9 @@
       "--output",
       "microsoft--phi-4-mini-instruct-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -443,7 +461,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -508,7 +528,9 @@
       "--output",
       "huggingfacetb--smollm3-3b-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -539,7 +561,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -604,7 +628,9 @@
       "--output",
       "ibm-granite--granite-3.3-8b-instruct-smoke-constrained-letter.json",
       "--server",
-      "ptbr-llm-bridge-constrained-letter"
+      "ptbr-llm-bridge-constrained-letter",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -635,7 +661,9 @@
       "--server",
       "ptbr-llm-bridge-constrained-letter",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -698,7 +726,9 @@
       "--limit",
       "2",
       "--output",
-      "felhen-ai--saracura-ptbr-4b-smoke.json"
+      "felhen-ai--saracura-ptbr-4b-smoke.json",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -729,7 +759,9 @@
       "--server",
       "PENDING_PREFLIGHT",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -753,7 +785,7 @@
       "--base-url",
       "http://127.0.0.1:18021",
       "--model",
-      "felhen-ai/saracura-ptbr-v0",
+      "convaiinnovations/laya-multilingual",
       "--revision",
       "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
       "--checkpoint-id",
@@ -765,7 +797,9 @@
       "--limit",
       "2",
       "--output",
-      "felhen-ai--saracura-ptbr-v0-smoke.json"
+      "felhen-ai--saracura-ptbr-v0-smoke.json",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -776,7 +810,7 @@
       "--base-url",
       "http://127.0.0.1:18021",
       "--model",
-      "felhen-ai/saracura-ptbr-v0",
+      "convaiinnovations/laya-multilingual",
       "--revision",
       "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
       "--checkpoint-id",
@@ -796,7 +830,9 @@
       "--server",
       "PENDING_PREFLIGHT",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -903,7 +939,9 @@
       "--limit",
       "2",
       "--output",
-      "jaredpalmer--kev-4b-smoke.json"
+      "jaredpalmer--kev-4b-smoke.json",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -934,7 +972,9 @@
       "--server",
       "PENDING_PREFLIGHT",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -970,7 +1010,9 @@
       "--limit",
       "2",
       "--output",
-      "jaredpalmer--kev-0.8b-smoke.json"
+      "jaredpalmer--kev-0.8b-smoke.json",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -1001,7 +1043,9 @@
       "--server",
       "PENDING_PREFLIGHT",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -1037,7 +1081,9 @@
       "--limit",
       "2",
       "--output",
-      "mapika--decider-4b-smoke.json"
+      "mapika--decider-4b-smoke.json",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -1068,7 +1114,9 @@
       "--server",
       "PENDING_PREFLIGHT",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
@@ -1104,7 +1152,9 @@
       "--limit",
       "2",
       "--output",
-      "interfaze-ai--lev-smoke.json"
+      "interfaze-ai--lev-smoke.json",
+      "--subfolder",
+      "."
     ],
     "full_argv_template": [
       "uv",
@@ -1135,7 +1185,9 @@
       "--server",
       "PENDING_PREFLIGHT",
       "--server-version",
-      "PENDING_PREFLIGHT"
+      "PENDING_PREFLIGHT",
+      "--subfolder",
+      "."
     ],
     "validate_argv": [
       "uv",
