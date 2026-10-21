@@ -674,6 +674,69 @@ def test_http_bounded_failures(served: Any, mod: Any) -> None:
     assert backend.generated == 0
 
 
+LONE = "\\ud800"  # JSON-escaped lone surrogate, as sent on the wire
+
+
+def _raw_surface(surface: str, text: str) -> bytes:
+    """Raw JSON request with `text` (already JSON-escaped) in exactly one text surface."""
+    model, state, qname, key, desc, instr = MODEL, "estado", "q", "A", "d1", "pergunta"
+    if surface == "model":
+        model = text
+    elif surface == "state":
+        state = text
+    elif surface == "question_name":
+        qname = text
+    elif surface == "choice_key":
+        key = text
+    elif surface == "description":
+        desc = text
+    else:
+        instr = text
+    return (
+        f'{{"model":"{model}","state":"{state}","questions":{{"{qname}":{{"type":"choice",'
+        f'"instructions":"{instr}","criteria":{{"{key}":"{desc}","B":"d2"}}}}}}}}'
+    ).encode()
+
+
+SURFACES = ("model", "state", "question_name", "choice_key", "description", "instructions")
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_lone_surrogate_rejected_on_every_text_surface(mod: Any, surface: str) -> None:
+    for text in (LONE, "ok" + LONE + "ok", "\\udfff"):
+        with pytest.raises(mod.RequestError) as err:
+            mod.parse_request(_raw_surface(surface, text), MODEL)
+        assert err.value.status == 400
+
+
+def test_paired_surrogate_escape_is_valid_emoji(mod: Any) -> None:
+    req = mod.parse_request(_raw_surface("state", "caf\\u00e9 \\ud83d\\ude00"), MODEL)
+    assert req.state == "café \U0001f600"
+    req = mod.parse_request(_raw_surface("choice_key", "\\ud83d\\ude00"), MODEL)
+    assert req.questions[0].keys[0] == "\U0001f600"
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_http_lone_surrogate_gets_400_without_inference(served: Any, surface: str) -> None:
+    server, backend, _ = served
+    status, payload = request(server, "POST", "/v1/systemone", _raw_surface(surface, LONE))
+    assert status == 400 and payload == {"error": "invalid_request"}
+    assert backend.generated == 0 and backend.prompts == []
+
+
+def test_http_response_is_ascii_and_emoji_survives(served: Any) -> None:
+    server, _, _ = served
+    raw = _raw_surface("description", "\\ud83d\\ude00").replace(b'"A"', b'"\\ud83d\\ude00"')
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+    conn.request("POST", "/v1/systemone", body=raw)
+    resp = conn.getresponse()
+    data = resp.read()
+    conn.close()
+    assert resp.status == 200
+    data.decode("ascii")
+    assert json.loads(data) == {"answers": {"q": {"choice": "B"}}}
+
+
 def test_http_logs_nothing(served: Any, capsys: pytest.CaptureFixture[str]) -> None:
     request(served[0], "POST", "/v1/systemone", body(NOUL, "SEGREDO-NO-ESTADO"))
     request(served[0], "POST", "/v1/systemone", b"SEGREDO-CRU")

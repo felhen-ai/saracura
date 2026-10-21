@@ -128,9 +128,12 @@ def _closed(obj, allowed):
         raise RequestError(400, "invalid_request")
 
 
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def _text(value):
-    if not isinstance(value, str):
-        raise RequestError(400, "invalid_request")
+    if not isinstance(value, str) or _SURROGATE.search(value):
+        raise RequestError(400, "invalid_request")  # lone surrogates are not valid text
     return value
 
 
@@ -146,7 +149,9 @@ def parse_question(name, raw):
     criteria = raw["criteria"]
     if not isinstance(criteria, dict) or not MIN_CHOICES <= len(criteria) <= MAX_CHOICES:
         raise RequestError(400, "invalid_request")
-    keys = tuple(criteria)  # insertion order is the order received; never sorted or shuffled
+    keys = tuple(
+        _text(k) for k in criteria
+    )  # insertion order is the order received; never sorted or shuffled
     descriptions = tuple(_text(criteria[k]) for k in keys)
     return Question(name, "choice", _text(raw["instructions"]), keys, descriptions)
 
@@ -168,7 +173,7 @@ def parse_request(raw, served_model):
         raise RequestError(400, "invalid_request")
     parsed = []
     for name, value in questions.items():
-        if not isinstance(name, str) or not 1 <= len(name) <= MAX_NAME_CHARS:
+        if not 1 <= len(_text(name)) <= MAX_NAME_CHARS:
             raise RequestError(400, "invalid_request")
         parsed.append(parse_question(name, value))
     return ParsedRequest(state, tuple(parsed))
@@ -334,7 +339,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
     def _send(self, status, payload):
-        body = json.dumps(payload, ensure_ascii=False).encode()
+        body = json.dumps(payload, ensure_ascii=True, allow_nan=False).encode("ascii")
         try:
             self.send_response(status)
             self.send_header("content-type", "application/json")
