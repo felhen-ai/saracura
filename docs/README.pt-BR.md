@@ -84,18 +84,12 @@ moderação, supervisão de agente). São números de concordância, não de ace
 
 ## Avalie o seu modelo
 
-As linhas do benchmark são JSONL no formato de requisição do Laya: `text`, `type` (`choice` ou `noul`),
-`instructions`, `criteria` e `gold`. O `research/bench.py` avalia qualquer checkpoint compatível com o Laya e os
-baselines clássicos:
+Siga o [guia de avaliação e submissão](../research/evaluation-guide.md): sirva um modelo externo em CPU, faça um teste
+rápido, avalie as sete tarefas, valide o JSON e envie para revisão manual. Avaliador e validador usam só a biblioteca
+padrão do Python. O guia inclui o ambiente opcional de ML separado para servir o modelo.
 
-```bash
-uv sync --dev
-uv run python research/bench.py baselines
-uv run python research/bench.py eval --name meu --model sua-org/seu-checkpoint --device cpu
-```
-
-Reporte acurácia balanceada com a ordem das opções embaralhada por item, como os scripts fazem, para os resultados
-continuarem comparáveis.
+Para datasets preparados localmente e experimentos com checkpoints Laya, os comandos de `research/bench.py` continuam
+disponíveis; veja os [scripts de pesquisa](../research/README.md).
 
 ## Como os modelos são treinados
 

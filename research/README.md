@@ -66,10 +66,13 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 
 | Script | What it does |
 |---|---|
-| `ptbr_bench.py` | One-command evaluation for anyone: standard library only, downloads the test splits from the Hub, same protocol as `eval_http.py`, reports the mean with a 95% bootstrap interval and writes a results file with per-item answers. |
+| `ptbr_bench.py` | One-command evaluation for anyone: standard library only, pins the test splits to an immutable Hub commit, same protocol as `eval_http.py`, reports the mean with a 95% bootstrap interval and writes a results file (never overwritten) with per-item answers, declared model metadata, timing and failure codes. `--limit` runs are smoke runs and never submission-ready. |
+| `validate_submission.py` | Checks a `ptbr_bench.py` report before submission: re-downloads the public data at the report's commit, verifies gold labels, counts and predictions, recomputes scores and interval. Read-only. See the [evaluation guide](evaluation-guide.md). |
 | `eval_http.py` | Runs any System One-compatible server (`POST /v1/systemone`) on the benchmark and on the Central Bank FAQ task, same protocol as `bench.py` (shuffled option order, `BENCH_MAX_CHARS=3500`). Accepts `noul` answers as `noul` or `probability`. |
 | `board_pyserve.py` | Minimal `/v1/systemone` wrapper for models that only ship a Python class (Intern-Decision, Jet). |
 | `llm_bacen.py` | Central Bank FAQ task with a local open LLM (Qwen 3.8 27B over vLLM), answers restricted to the four letters; `bench_llm.py ceiling` is the benchmark counterpart. |
+
+How to evaluate and submit a model, with a CPU example: [evaluation guide](evaluation-guide.md).
 
 Each model is served by its author's own server and package, one at a time, on one RTX 5090. The table and the
 per-model results are on the benchmark card.

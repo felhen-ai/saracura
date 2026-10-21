@@ -395,10 +395,16 @@ def test_reject_unrecognized_kev_env_accepts_known() -> None:
 
 def test_select_port_respects_descriptor_range() -> None:
     from types import SimpleNamespace
+    from unittest.mock import patch
 
     descriptor = SimpleNamespace(runtime=SimpleNamespace(port_range=(49152, 49152)))
-    port = operations._select_port(descriptor)  # type: ignore[arg-type]
+    # Test the descriptor boundary without assuming a host port is unused.
+    with patch("benchmarks.phase5_candidate.operations.socket.socket") as socket_factory:
+        sock = socket_factory.return_value.__enter__.return_value
+        sock.connect_ex.return_value = 111
+        port = operations._select_port(descriptor)  # type: ignore[arg-type]
     assert port == 49152
+    sock.connect_ex.assert_called_once_with(("127.0.0.1", 49152))
 
 
 def test_descriptor_root_is_digest_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
