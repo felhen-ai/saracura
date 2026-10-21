@@ -9,7 +9,7 @@ status: current
 canonical: research/README.md
 globalRef: qmd://saracura/research/README.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-10
+lastReviewedAt: 2026-10-21
 sourceRefs:
   - https://github.com/NandhaKishorM/laya
   - https://github.com/jaredpalmer/kev
@@ -33,6 +33,8 @@ Expected layout, relative to the directory the scripts run from: `data/` (benchm
 repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`) will not run without it.
 
 ## Benchmark
+
+[Rodada local de 14 modelos](../docs/action/comparable-round-2026-10-21.md): seleção e revisão dos resultados históricos, checkpoints e dados fixados, protocolo comparável e requisitos para integração ao ranking nativo do Hugging Face. Preparação concluída; execução completa pendente da ponte para LLMs e do preflight dos runtimes.
 
 | Script | What it does |
 |---|---|
