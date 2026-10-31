@@ -99,6 +99,8 @@ twice for 400), each served with `kev.serve` and measured with `eval_http.py`, w
 
 ## Private tracks
 
+[Auditoria de treino e dois pilotos de transferência](../docs/action/transfer-audit-and-pilots-2026-10-31.md): procedência dos checkpoints públicos, reuso dos conjuntos existentes, fontes candidatas e protocolo sem inferência. A independência dos novos itens permanece por comprovar.
+
 `private_tasks.json` holds the public definition of the private tests reported on the benchmark card: the questions
 and categories of the real-use track (e-mail triage and public comments, labeled by one person each) and the fresh
 `camara_tema` test (bills filed after a cutoff date, theme assigned by the Chamber, renewed quarterly). Texts and

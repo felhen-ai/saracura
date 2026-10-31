@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "audited_on": "2026-10-31",
+  "scope": "pinned public checkpoints, source recipes and existing evaluation definitions; no VM, model loading or training",
+  "status": "source_audit_complete_item_independence_unproven",
+  "models": [
+    {
+      "id": "felhen-ai/saracura-ptbr-4b",
+      "revision": "9b27a7be153afee62b778b61eb5d664ce978d3b1",
+      "model_card_url": "https://huggingface.co/felhen-ai/saracura-ptbr-4b/blob/9b27a7be153afee62b778b61eb5d664ce978d3b1/README.md",
+      "model_card_sha256": "6087eac0488cc8f4e236bb7037b1be66623c6f76e529acddb9847e1631982d33",
+      "source_recipe": "research/kev_data.py",
+      "synthetic_email_and_ticket_training_declared": true,
+      "historical_human_calibration_declared": true,
+      "item_level_nonoverlap": "not_established"
+    },
+    {
+      "id": "felhen-ai/saracura-ptbr-v0",
+      "revision": "ae97728cb3ae6575d382f3e68c19054084de27d7",
+      "model_card_url": "https://huggingface.co/felhen-ai/saracura-ptbr-v0/blob/ae97728cb3ae6575d382f3e68c19054084de27d7/README.md",
+      "model_card_sha256": "fe5693ffe2f161b91ca6c5feaabb0a7bc035d4f8cde3ec96da06a55179371211",
+      "source_recipe": "research/combo.py",
+      "synthetic_email_and_ticket_training_declared": true,
+      "historical_human_calibration_declared": true,
+      "item_level_nonoverlap": "not_established"
+    }
+  ],
+  "training_sources": [
+    "public benchmark train splits",
+    "telepatia-ai/typed-decisions-pt-es pt train",
+    "internal marketplace listings with open-model labels",
+    "internal Felhen documents",
+    "generated questions on real source texts",
+    "synthetic email/tickets/leads/WhatsApp/documents/reviews/moderation/agent cases"
+  ],
+  "local_materialized_training_inputs_available": false,
+  "eligible_pilot_items_verified": 0,
+  "gaps": [
+    "No per-item training, development, calibration and model-selection exposure manifest located in inspected checkout or local round evidence",
+    "Translated dataset load in recipes does not pin revision",
+    "Some source collections are optional globs; source code alone does not prove exact materialized run contents",
+    "Training-source counts and checkpoint lineage require original run receipts for full reconciliation",
+    "Private historical email/comment sets were used for confidence calibration per pinned model cards; exclude from untouched final test",
+    "Upstream pretraining exposure remains unknown; no universal contamination-free claim"
+  ],
+  "source_hashes": {
+    "research/combo.py": "5d6eda98ebb587bea4bac47784e83b8b9ab7795d700f4288931d1adda62e94d3",
+    "research/kev_data.py": "6eed8b8dcc67edc942adeecc69b0e5259ae63aa1717fc0d14e62ecca7dbd495d",
+    "research/private_tasks.json": "b7b61991d4daf2ccaa93ccfeb07eef5c157e73dda54c982f13d3b570a4807138"
+  }
+}

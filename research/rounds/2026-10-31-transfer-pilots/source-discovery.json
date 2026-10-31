@@ -1,0 +1,45 @@
+{
+  "searched_on": "2026-10-31",
+  "project_search_scope": "Tracked/not-ignored project files matching dataset/corpus/support/ticket and jsonl/csv/parquet; Markdown references to complaint/service corpora. No VM, production database, cloud drive or inbox queried.",
+  "local_result": "No eligible real service corpus located in this scope; code, operational SQL and infrastructure logs are not real service datasets.",
+  "candidates": [
+    {
+      "name": "ConsumerBR",
+      "url": "https://zenodo.org/records/18022568",
+      "paper": "https://aclanthology.org/2026.propor-1.66/",
+      "origin": "real complaints/company replies in Brazilian Portuguese",
+      "metadata_license": "cc-by-4.0",
+      "description_restriction": "research and academic purposes; no non-research redistribution",
+      "status": "preferred_candidate_pending_terms_and_nonoverlap",
+      "archive_bytes": 1636678431,
+      "archive_checksum": "md5:d301043b0dd0ad7658a6edcd42372c7a",
+      "downloaded_rows": 0,
+      "data_window": "2021-05 to 2025-04; not post-checkpoint data",
+      "reason": "Real service narratives, anonymized, temporal metadata; suitable for research candidate, not proven unseen."
+    },
+    {
+      "name": "Brazilian customer service conversations",
+      "url": "https://huggingface.co/datasets/RichardSakaguchiMS/brazilian-customer-service-conversations",
+      "status": "rejected_for_real_world_track",
+      "reason": "Inspected records explicitly declare generated=true; no natural-service provenance established."
+    },
+    {
+      "name": "TalkEx augmented pt-br",
+      "url": "https://huggingface.co/datasets/paulohenriquevn/talkex-augmented-pt-br",
+      "status": "not_accepted_as_real",
+      "reason": "Upstream source is the generated conversation dataset; a local synthetic flag does not establish original human provenance."
+    },
+    {
+      "name": "FalaBR / Busca LAI",
+      "url": "https://www.gov.br/acessoainformacao/pt-br/falabr/visao-geral/busca-de-pedidos-e-respostas-download-de-dados",
+      "status": "alternative_written_request_candidate_pending_inspection",
+      "reason": "Official requests/responses export; not corporate email. Must verify narrative fields, snapshot, reuse conditions and nonoverlap before selection."
+    },
+    {
+      "name": "MilkQA",
+      "url": "https://huggingface.co/datasets/eduagarcia/MilkQA",
+      "status": "not_primary_candidate",
+      "reason": "Real historical customer questions but answer-selection task and CC BY-NC-ND limits; not a drop-in ticket-routing corpus."
+    }
+  ]
+}

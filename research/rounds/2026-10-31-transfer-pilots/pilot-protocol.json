@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "status": "protocol_draft_no_inference",
+  "resource_policy": {
+    "vm151_access": false,
+    "gpu_rental": false,
+    "training": false,
+    "model_loading": false
+  },
+  "models": [
+    {
+      "model": "felhen-ai/saracura-ptbr-v0",
+      "revision": "ae97728cb3ae6575d382f3e68c19054084de27d7",
+      "readout": "native"
+    },
+    {
+      "model": "felhen-ai/saracura-ptbr-4b",
+      "revision": "9b27a7be153afee62b778b61eb5d664ce978d3b1",
+      "readout": "native"
+    },
+    {
+      "model": "convaiinnovations/laya",
+      "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",
+      "readout": "native"
+    },
+    {
+      "model": "jaredpalmer/kev-4b",
+      "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+      "readout": "native"
+    },
+    {
+      "model": "interfaze-ai/lev",
+      "revision": "8721908e50dffd5fe8726507c09498e3def5b2f6",
+      "readout": "native"
+    },
+    {
+      "model": "Qwen/Qwen3.5-4B",
+      "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "readout": "constrained-letter"
+    }
+  ],
+  "sampling_seed": 20261031,
+  "pilot_items_per_case": 50,
+  "final_target_items_per_case": 250,
+  "verified_eligible_items": 0,
+  "pilots": {
+    "email_triage": {
+      "questions": {
+        "tipo": {
+          "type": "choice",
+          "instructions": "Classifique o assunto do e-mail do ponto de vista da organização receptora, descrita no contexto comum a todos os modelos. O assunto manda, não o remetente nem o canal.",
+          "criteria": {
+            "cliente_oportunidade": "Quem paga ou pode pagar a Felhen: cliente, proposta, oportunidade, convite de reunião de cliente, venda feita (ex.: venda no Mercado Livre a despachar)",
+            "parceiro": "Quem constrói junto com a Felhen sem ser cliente pagante: sócio, parceiro de negócio, investidor, colaborador de projeto em andamento, convite de reunião com parceiro",
+            "fornecedor_cobranca": "Fornecedor de serviço e qualquer dinheiro a pagar, de qualquer remetente: fatura, boleto, cobrança (inclusive da contabilidade), assinatura, suporte de fornecedor",
+            "administrativo_fiscal": "Rotina da empresa que não é cobrança: contabilidade pedindo documento ou enviando balanço, impostos, banco, contratos, governo, cadastros",
+            "rede_contatos": "Relação pessoal ou profissional sem negócio em andamento: networking, convite para evento, conversa de carreira",
+            "notificacao_sistema": "Mensagem automática de ferramenta ou plataforma sem um negócio por trás: GitHub, alertas de login, avisos de conta, recibos de ferramenta, confirmação automática de chamado",
+            "newsletter_marketing": "Envio em massa de conteúdo ou promoção: newsletter, promoção, divulgação, webinar",
+            "interno": "Comunicação da equipe da Felhen: colaboradores falando de operação, tarefas ou alinhamento"
+          }
+        },
+        "precisa_acao": {
+          "type": "noul",
+          "instructions": "Este e-mail exige uma ação de quem o recebeu, como responder, pagar, enviar um produto, aceitar ou recusar um convite, revisar, assinar ou decidir algo? Resposta automática que só informa não exige ação."
+        },
+        "urgencia": {
+          "type": "choice",
+          "instructions": "Considerando a data de recebimento e o conteúdo, qual era a urgência deste e-mail quando chegou? Para convites, conta a distância até a reunião.",
+          "criteria": {
+            "alta": "Atenção no mesmo dia: prazo curto, cliente esperando, venda a despachar, falha em produção, pagamento vencendo",
+            "media": "Atenção nos próximos dias, sem prazo imediato",
+            "baixa": "Pode esperar ou não exige ação: informativo, automático ou promocional"
+          }
+        }
+      },
+      "reuse": "questions and historical aggregate baselines only; old 200 emails are development/exposure exclusions",
+      "source_status": "Existing historical schema retained; no new independent email corpus located in searched projects. Public written-request corpus is a separately named fallback, never described as email."
+    },
+    "support_routing": {
+      "questions": {
+        "motivo": {
+          "type": "choice",
+          "instructions": "Qual é o motivo principal do atendimento? Considere somente o texto e o contexto fornecidos.",
+          "criteria": {
+            "acesso": "Problema de acesso, cadastro ou credenciais",
+            "cobranca": "Cobrança, pagamento, fatura ou reembolso",
+            "falha_produto": "Falha funcional ou indisponibilidade do produto",
+            "como_usar": "Dúvida sobre como usar uma funcionalidade",
+            "comercial": "Plano, contratação ou proposta comercial",
+            "outro": "Outro motivo ou informação insuficiente"
+          }
+        },
+        "encaminhamento": {
+          "type": "choice",
+          "instructions": "Qual equipe deve tratar primeiro esta solicitação, conforme o mapa de responsabilidades fornecido?",
+          "criteria": {
+            "suporte": "Suporte de primeiro atendimento e orientação",
+            "financeiro": "Financeiro para cobranças, pagamentos e reembolsos",
+            "tecnico": "Equipe técnica para defeitos e indisponibilidade",
+            "comercial": "Equipe comercial para planos e contratação",
+            "revisao_humana": "Informação insuficiente, conflito de responsabilidade ou caso fora do mapa"
+          }
+        },
+        "escalonar": {
+          "type": "noul",
+          "instructions": "Segundo as regras operacionais fornecidas, este caso precisa sair do primeiro atendimento e ser escalonado? Não suponha políticas ausentes."
+        }
+      },
+      "reuse": "synthetic schema only, no synthetic rows as real test",
+      "source_status": "ConsumerBR preferred public candidate; acquisition and item-level eligibility pending; no business owner needed",
+      "source_url": "https://zenodo.org/records/18022568",
+      "label_policy": "Independent human annotations under a published routing policy; company outcomes are not routing gold and are excluded from input"
+    }
+  },
+  "stage_gate": "No inference until item-level nonoverlap, labels, permissions and operational context are recorded; incomplete provenance is quarantine, never pass"
+}
