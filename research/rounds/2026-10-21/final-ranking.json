@@ -1,0 +1,391 @@
+{
+  "id": "comparable-round-2026-10-21-complete",
+  "completed": "2026-10-31",
+  "dataset_revision": "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
+  "models": [
+    {
+      "model": "felhen-ai/saracura-ptbr-4b",
+      "tuned_ptbr": true,
+      "revision": "9b27a7be153afee62b778b61eb5d664ce978d3b1",
+      "score": 72.91,
+      "ci95": [
+        71.7,
+        74.3
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "native preflight5196; kev strict no truncation",
+      "readout": "native",
+      "report": "felhen-ai--saracura-ptbr-4b-cpu-reference-full.json",
+      "sha256": "a6061977312ffe24e95089dc790dca6649df68105d2d0d619987df28ffd9c5f0",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.6116,
+        "factck_veracidade": 0.4575,
+        "faquad_resposta": 0.9236,
+        "juristcu_area": 0.7668,
+        "olid_alvo": 0.7115,
+        "olid_ofensivo": 0.6946,
+        "scielo_area": 0.9381
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/felhen-ai--saracura-ptbr-4b-cpu-reference-full.json"
+    },
+    {
+      "model": "felhen-ai/saracura-ptbr-v0",
+      "tuned_ptbr": true,
+      "revision": "ae97728cb3ae6575d382f3e68c19054084de27d7",
+      "score": 68.49,
+      "ci95": [
+        67.11,
+        69.86
+      ],
+      "hardware": "Apple M4 Pro CPU4threads",
+      "context": "8192 head2048 upstream option_cap48",
+      "readout": "native",
+      "report": "saracura-v0-cpu-nativecap48.json",
+      "sha256": "951c1c0727c81fe0ee1dc5b2e634f980481cc5ffb4d8bfdfe047d6179035cb2d",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5926,
+        "factck_veracidade": 0.4482,
+        "faquad_resposta": 0.8989,
+        "juristcu_area": 0.6869,
+        "olid_alvo": 0.6367,
+        "olid_ofensivo": 0.6184,
+        "scielo_area": 0.9123
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/saracura-v0-cpu-nativecap48.json"
+    },
+    {
+      "model": "Mapika/decider-4b",
+      "tuned_ptbr": false,
+      "revision": "585473dec4fa93f0325c2bf02dda7273b61f44c1",
+      "score": 63.56,
+      "ci95": [
+        61.96,
+        65.31
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "native preflight5196; original decider schema/state preparation; state cap8192 not reached",
+      "readout": "native",
+      "report": "Mapika--decider-4b-cpu-reference-full.json",
+      "sha256": "fe9d8b90e9ab9484d32c0825272672cb31ded84453011d4f63c071e1a6be17bb",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5824,
+        "factck_veracidade": 0.3786,
+        "faquad_resposta": 0.8982,
+        "juristcu_area": 0.5766,
+        "olid_alvo": 0.6614,
+        "olid_ofensivo": 0.6926,
+        "scielo_area": 0.6592
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/Mapika--decider-4b-cpu-reference-full.json"
+    },
+    {
+      "model": "interfaze-ai/lev",
+      "tuned_ptbr": false,
+      "revision": "8721908e50dffd5fe8726507c09498e3def5b2f6",
+      "score": 63.09,
+      "ci95": [
+        61.47,
+        64.79
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "native preflight5196; candidate readout clips candidate tokens to64 in lev",
+      "readout": "native",
+      "report": "interfaze-ai--lev-cpu-reference-full.json",
+      "sha256": "409ebb66c86e3d967c2791ce1ecd68ba28025d3d19a809553547bc43391816d3",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5804,
+        "factck_veracidade": 0.3976,
+        "faquad_resposta": 0.871,
+        "juristcu_area": 0.5841,
+        "olid_alvo": 0.6422,
+        "olid_ofensivo": 0.6865,
+        "scielo_area": 0.6548
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/interfaze-ai--lev-cpu-reference-full.json"
+    },
+    {
+      "model": "jaredpalmer/kev-4b",
+      "tuned_ptbr": false,
+      "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+      "score": 62.11,
+      "ci95": [
+        60.58,
+        63.77
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "native preflight5196; kev strict no truncation",
+      "readout": "native",
+      "report": "jaredpalmer--kev-4b-cpu-reference-full.json",
+      "sha256": "25f6203ef8f6785be20b2972e3418b59df69ba21b6cf5e1a89a2e8fc96a763d3",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5721,
+        "factck_veracidade": 0.3482,
+        "faquad_resposta": 0.8766,
+        "juristcu_area": 0.5631,
+        "olid_alvo": 0.6333,
+        "olid_ofensivo": 0.6942,
+        "scielo_area": 0.66
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/jaredpalmer--kev-4b-cpu-reference-full.json"
+    },
+    {
+      "model": "Qwen/Qwen3.5-4B",
+      "tuned_ptbr": false,
+      "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "score": 58.91,
+      "ci95": [
+        57.57,
+        60.5
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "Qwen--Qwen3.5-4B-full-constrained-letter.json",
+      "sha256": "1e224843f3f81f56b64c2c6f59a02e13d8166acd3437dbeb95d99c1fd7e3352f",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5608,
+        "factck_veracidade": 0.3328,
+        "faquad_resposta": 0.8757,
+        "juristcu_area": 0.5578,
+        "olid_alvo": 0.5501,
+        "olid_ofensivo": 0.6222,
+        "scielo_area": 0.6243
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/Qwen--Qwen3.5-4B-full-constrained-letter.json"
+    },
+    {
+      "model": "Qwen/Qwen3-4B-Instruct-2507",
+      "tuned_ptbr": false,
+      "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+      "score": 58.330000000000005,
+      "ci95": [
+        57.089999999999996,
+        59.67
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "Qwen--Qwen3-4B-Instruct-2507-full-constrained-letter.json",
+      "sha256": "dee8c576b8e00c5fc52185b9244e97a106ee506f988fee81c5807a01c9f4da95",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5609,
+        "factck_veracidade": 0.3477,
+        "faquad_resposta": 0.8636,
+        "juristcu_area": 0.5533,
+        "olid_alvo": 0.5157,
+        "olid_ofensivo": 0.6313,
+        "scielo_area": 0.6107
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/Qwen--Qwen3-4B-Instruct-2507-full-constrained-letter.json"
+    },
+    {
+      "model": "ibm-granite/granite-3.3-8b-instruct",
+      "tuned_ptbr": false,
+      "revision": "51dd4bc2ade4059a6bd87649d68aa11e4fb2529b",
+      "score": 58.24,
+      "ci95": [
+        56.65,
+        59.88
+      ],
+      "hardware": "Runpod NVIDIA GeForce RTX 4090 CUDA bf16 2torchthreads",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "granite-gpu-full.json",
+      "sha256": "bd02f35731f46e9e6f1ff71a376a9abea94c091cc2b4237955969a39202ed7da",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.512,
+        "factck_veracidade": 0.4126,
+        "faquad_resposta": 0.7922,
+        "juristcu_area": 0.535,
+        "olid_alvo": 0.5725,
+        "olid_ofensivo": 0.6516,
+        "scielo_area": 0.6006
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/granite-gpu-full.json"
+    },
+    {
+      "model": "Qwen/Qwen3-8B",
+      "tuned_ptbr": false,
+      "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+      "score": 58.209999999999994,
+      "ci95": [
+        56.92,
+        59.68
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "Qwen--Qwen3-8B-full-constrained-letter.json",
+      "sha256": "729c57eb22ce6c9250b064ec2bef174feb93d42091d040f4192116535f12dae9",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.547,
+        "factck_veracidade": 0.3544,
+        "faquad_resposta": 0.8699,
+        "juristcu_area": 0.5296,
+        "olid_alvo": 0.5284,
+        "olid_ofensivo": 0.6364,
+        "scielo_area": 0.6087
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/Qwen--Qwen3-8B-full-constrained-letter.json"
+    },
+    {
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "tuned_ptbr": false,
+      "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+      "score": 56.64,
+      "ci95": [
+        55.120000000000005,
+        58.099999999999994
+      ],
+      "hardware": "Runpod NVIDIA GeForce RTX 4090 CUDA bf16 2torchthreads",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "qwen25-gpu-full.json",
+      "sha256": "629ef724dac3503438c5ce71761c3dc36f07ab767c9781f7e34b0dbf5e7e2dce",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.5322,
+        "factck_veracidade": 0.3709,
+        "faquad_resposta": 0.8445,
+        "juristcu_area": 0.4878,
+        "olid_alvo": 0.5622,
+        "olid_ofensivo": 0.5993,
+        "scielo_area": 0.5677
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/qwen25-gpu-full.json"
+    },
+    {
+      "model": "jaredpalmer/kev-0.8b",
+      "tuned_ptbr": false,
+      "revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+      "score": 50.83,
+      "ci95": [
+        49.33,
+        52.38
+      ],
+      "hardware": "Apple M4 Pro 24GiB MLX",
+      "context": "native strict max_state 65536; observed max_state1427 max_record1823",
+      "readout": "native",
+      "report": "kev08-mlx-bf16.json",
+      "sha256": "82762648d1c04c9cbb5439f0d5034852d7ab55940d4b22e9ac78a0f75ce93b93",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.4778,
+        "factck_veracidade": 0.3823,
+        "faquad_resposta": 0.5985,
+        "juristcu_area": 0.5003,
+        "olid_alvo": 0.4616,
+        "olid_ofensivo": 0.5499,
+        "scielo_area": 0.5876
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/kev08-mlx-bf16.json"
+    },
+    {
+      "model": "microsoft/Phi-4-mini-instruct",
+      "tuned_ptbr": false,
+      "revision": "cfbefacb99257ffa30c83adab238a50856ac3083",
+      "score": 49.36,
+      "ci95": [
+        48.14,
+        50.629999999999995
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "microsoft--Phi-4-mini-instruct-full-constrained-letter.json",
+      "sha256": "775da6224a4a11cc1c7a342e8bc98f199beebe1c18c42ae3683daff808ace656",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.4604,
+        "factck_veracidade": 0.3433,
+        "faquad_resposta": 0.769,
+        "juristcu_area": 0.3758,
+        "olid_alvo": 0.4189,
+        "olid_ofensivo": 0.5368,
+        "scielo_area": 0.5511
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/microsoft--Phi-4-mini-instruct-full-constrained-letter.json"
+    },
+    {
+      "model": "HuggingFaceTB/SmolLM3-3B",
+      "tuned_ptbr": false,
+      "revision": "a07cc9a04f16550a088caea529712d1d335b0ac1",
+      "score": 48.8,
+      "ci95": [
+        47.56,
+        50.31
+      ],
+      "hardware": "Ryzen7 7700X CPU2threads capped250percent",
+      "context": "8192 context max_output1 no_thinking constrained-letter",
+      "readout": "constrained-letter",
+      "report": "HuggingFaceTB--SmolLM3-3B-full-recovery-20261028-constrained-letter.json",
+      "sha256": "642deddcc0698426e00c87e321457a8697a12ccc0a456c5b63548ecc2ebe349a",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.4822,
+        "factck_veracidade": 0.3523,
+        "faquad_resposta": 0.5916,
+        "juristcu_area": 0.451,
+        "olid_alvo": 0.412,
+        "olid_ofensivo": 0.5461,
+        "scielo_area": 0.581
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/HuggingFaceTB--SmolLM3-3B-full-recovery-20261028-constrained-letter.json"
+    },
+    {
+      "model": "convaiinnovations/laya",
+      "tuned_ptbr": false,
+      "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",
+      "score": 39.18,
+      "ci95": [
+        37.6,
+        40.910000000000004
+      ],
+      "hardware": "Apple M4 Pro CPU4threads",
+      "context": "8192 head2048 upstream option_cap48",
+      "readout": "native",
+      "report": "laya-cpu-nativecap48.json",
+      "sha256": "d303e0b19a4c80e26dacadbbb0aaeb0a4d757efef1359dd27c3817afbbe3e70d",
+      "items": 5196,
+      "failed": 0,
+      "tasks": {
+        "camara_tema": 0.2351,
+        "factck_veracidade": 0.3419,
+        "faquad_resposta": 0.6565,
+        "juristcu_area": 0.1753,
+        "olid_alvo": 0.4472,
+        "olid_ofensivo": 0.5654,
+        "scielo_area": 0.3213
+      },
+      "report_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/blob/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete/laya-cpu-nativecap48.json"
+    }
+  ],
+  "items_per_model": 5196,
+  "tasks_per_model": 7,
+  "failed": 0,
+  "artifacts_url": "https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete",
+  "dataset_publication_commit": "11d2412c85441d56ff5bf914c647a7a56d18b75a",
+  "space_publication_commit": "10671dec363f5dbd92cba509bc232ca720549353"
+}
