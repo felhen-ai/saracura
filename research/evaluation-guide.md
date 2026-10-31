@@ -9,7 +9,7 @@ status: current
 canonical: research/evaluation-guide.md
 globalRef: qmd://saracura/research/evaluation-guide.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-21
+lastReviewedAt: 2026-10-31
 sourceRefs:
   - https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench
   - https://github.com/NandhaKishorM/laya
@@ -25,6 +25,8 @@ sensitivity: public
 # Evaluate and submit a model on the PT-BR benchmark
 
 English first, Português do Brasil [below](#português-do-brasil).
+
+Just browsing? Open the [ranking](https://huggingface.co/spaces/felhen-ai/ptbr-typed-decisions-leaderboard); no installation is needed. Quer apenas consultar? Abra o ranking; não é necessário instalar nada.
 
 Prerequisites / pré-requisitos: Git, curl and [uv](https://docs.astral.sh/uv/getting-started/installation/). Start from a fresh directory / comece em uma pasta nova:
 
@@ -57,7 +59,7 @@ Settings that matter, verified in a smoke run (14 requests, 2 per task, 0 failur
 
 Force the multilingual model. With the bundled `convaiinnovations/laya` id the upstream router picks a model by detected language, which is not what this benchmark measures. The request alias is `convaiinnovations/laya-multilingual`; the checkpoint identity is `convaiinnovations/laya` at the commit above, subfolder `multilingual`.
 
-The complete CPU run finished on 2026-10-21: 5,196 items, seven tasks, zero failed requests. This checks the evaluation path; it does not replace the historical leaderboard measurements. The following commands use the upstream server. Keep this terminal running; run the evaluator from a second terminal in the same repository directory. [Execution evidence, full report and frozen evaluator](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/main/results/contribution-check-2026-10-21) record the exact model, data, runtime and protocol. Elapsed times are operational, not isolated speed benchmarks.
+The complete CPU run finished on 2026-10-21: 5,196 items, seven tasks, zero failed requests. This checks the evaluation path. This CPU recipe uses the upstream default context (1,024 tokens, head 256); it does not reproduce the final round’s Laya row (8,192 tokens, head 2,048). The final round’s [frozen configuration and reports](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete) are the reference for comparing configurations. The commands below use that round’s dataset revision, while the linked contribution evidence retains its original revision. The following commands use the upstream server. Keep this terminal running; run the evaluator from a second terminal in the same repository directory. [Execution evidence, full report and frozen evaluator](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/main/results/contribution-check-2026-10-21) record the exact model, data, runtime and protocol. Elapsed times are operational, not isolated speed benchmarks.
 
 ### Copyable CPU example / exemplo de CPU pronto para copiar
 
@@ -110,20 +112,20 @@ The first step installs the optional ML packages; the evaluator and validator ne
 
 ### 2. Smoke run, then the full run
 
-Run with a Python that has working certificates; `uv run --python 3.12` is the tested choice. Never disable TLS verification.
+These commands bypass project dependency installation (`--no-project`). Run with a Python that has working certificates; `uv run --no-project --python 3.12` is the tested choice. Never disable TLS verification.
 
 ```bash
 # smoke: 2 items per task; the report says smoke and can never be submitted
-uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
+uv run --no-project --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
   --model convaiinnovations/laya-multilingual --name laya-smoke --limit 2 \
   --output /tmp/laya-smoke.json \
-  --revision 5450e73e634403993d9ac86d53d60a9b0ff76673
+  --revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9
 
 # full: all 5,196 items
-uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
+uv run --no-project --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
   --model convaiinnovations/laya-multilingual --name laya-cpu-full \
   --output ./laya-cpu-full.json \
-  --revision 5450e73e634403993d9ac86d53d60a9b0ff76673 \
+  --revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9 \
   --checkpoint-id convaiinnovations/laya \
   --checkpoint-revision 7b928d828b7b0e022f929d9bd2e44165aa270148 \
   --subfolder multilingual --context "max_len 1024, head 256" \
@@ -142,12 +144,12 @@ uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
 
 Each line is `task  balanced accuracy  n  failed`. Balanced accuracy is the mean per-class recall; the mean over the seven tasks has a 95% bootstrap interval. A failed item (server error, timeout, malformed or invalid answer) counts as wrong and is listed by code (`transport`, `bad_response`, `invalid_choice`, ...). The final line says whether the run is submission-ready. A run with any failure, any `--limit`, or a checkpoint without an immutable revision is not.
 
-Certificate errors: use `uv run --python 3.12`, or set `SSL_CERT_FILE` to your CA bundle. A server that does not answer shows up as `transport` failures on every item; fix the server, then run again with a new `--output`.
+Certificate errors: use `uv run --no-project --python 3.12`, or set `SSL_CERT_FILE` to your CA bundle. A server that does not answer shows up as `transport` failures on every item; fix the server, then run again with a new `--output`.
 
 ### 4. Validate and submit
 
 ```bash
-uv run --python 3.12 research/validate_submission.py laya-cpu-full.json
+uv run --no-project --python 3.12 research/validate_submission.py laya-cpu-full.json
 ```
 
 It downloads the seven splits again at the dataset commit named in the report, compares gold labels, item counts and predictions with that data, recomputes all scores and the interval, and lists unknown metadata as warnings. It writes nothing and runs nothing from the report. Reports from older versions of `ptbr_bench.py` are rejected: run again.
@@ -156,15 +158,15 @@ Passing means the file is consistent with the public data and your declaration. 
 
 Submit by opening a discussion on the benchmark dataset page (<https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/discussions>) with the report attached, or use the [GitHub issue template](https://github.com/felhen-ai/saracura/issues/new?template=benchmark-submission.yml). Maintainers review each submission by hand; nothing is posted or accepted automatically.
 
-Before you attach anything: the report must not contain private text, tokens, hostnames or paths. Do not paste credentials or private prompts into the discussion. Only public models, without tuning on the private tracks, are listed.
+Before you attach anything: the report must not contain private text, tokens, hostnames or paths. Do not paste credentials or private prompts into the discussion. Declare whether the checkpoint was fine-tuned on these benchmark tasks or their source datasets: yes, no, or unknown, with the source of that declaration. Known task-tuned models are shown separately from the main comparison, as with Saracura; their reports are preserved. An unknown history is not a certificate of unseen data. Submit only public models without tuning on the private tracks.
 
 ### Public and private tracks, and lm-eval
 
 - The seven public tasks above are what `ptbr_bench.py` measures and what the public table lists.
-- The private tracks (real-use e-mail triage and public comments, the fresh `camara_tema` test; definition in `research/private_tasks.json`) keep their texts and labels private. They are scored by the maintainers by manual review, never through this script.
+- Historical private-track definitions in `research/private_tasks.json` are outside this public submission path. They are not required to participate, and no private evaluation is offered by this guide.
 - `research/lm_eval/ptbr_typed_decisions` is a separate protocol for `lm-evaluation-harness` (generic prompting of language models). Its numbers are not comparable with `ptbr_bench.py` numbers and are never mixed in one table.
 
-#Native runtime preprocessing is part of the reported configuration. Laya 0.3.20 clips each option to 48 tokens internally; this affects 599 items in the frozen round. Declare that cap in evidence and context metadata, preserve original descriptions, and verify the whole state fits the selected runtime context. Earlier preflight holds over this cap remain historical. The evaluator and bridge add no truncation beyond the common 3,500-character state limit.
+Native runtime preprocessing is part of the reported configuration. Laya 0.3.20 clips each option to 48 tokens internally; this affects 599 items in the frozen round. Declare that cap in evidence and context metadata, preserve original descriptions, and verify the whole state fits the selected runtime context. Earlier preflight holds over this cap remain historical. The evaluator and bridge add no truncation beyond the common 3,500-character state limit.
 
 ## Chat LLMs through the local bridge
 
@@ -201,14 +203,15 @@ Smoke, then the full run, with `--server-version` set to the SHA256 of the exact
 ```bash
 EVIDENCE_SHA="$(shasum -a 256 ./bridge-evidence.json | cut -d' ' -f1)"
 curl -s http://127.0.0.1:18031/health > health-before.json
-uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
-  --name llm-smoke --limit 2 --output /tmp/llm-smoke.json --revision 5450e73e634403993d9ac86d53d60a9b0ff76673
-uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
-  --name llm-full --output ./llm-full.json --revision 5450e73e634403993d9ac86d53d60a9b0ff76673 \
+uv run --no-project --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
+  --name llm-smoke-constrained-letter --limit 2 --output /tmp/llm-smoke-constrained-letter.json --revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9
+uv run --no-project --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18031 --model ORG/NAME \
+  --name llm-full-constrained-letter --output ./llm-full-constrained-letter.json --revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9 \
   --checkpoint-id ORG/NAME --checkpoint-revision "<40-hex commit>" \
   --context "8192 tokens; chat template; constrained-letter; 1 output token" --quantization "none; CPU float32" \
   --hardware "<cpu, memory>" --server ptbr-llm-bridge-constrained-letter --server-version "$EVIDENCE_SHA"
 curl -s http://127.0.0.1:18031/health > health-after.json
+uv run --no-project --python 3.12 research/validate_submission.py ./llm-full-constrained-letter.json
 ```
 
 Keep a sidecar next to the report that links the report SHA256, the evidence SHA256 and the source commits, with the actual start arguments and private values redacted. Its readable metadata must use `ptbr-llm-bridge-constrained-letter` or `ptbr-llm-bridge-strict-generation` exactly, and the report name must include the same mode. Strict full runs are separate rows; native Q4 variants are separate rows too. Capture health before and after a full run: any nonzero failure counter means the full run is failed and unranked. Numbers from the bridge follow this protocol only; they are not mixed with `lm-evaluation-harness` numbers.
@@ -237,24 +240,24 @@ Configuração verificada em um teste rápido (14 requisições, 2 por tarefa, 0
 
 Force o modelo multilíngue. Com o id `convaiinnovations/laya` do pacote, o router do projeto original escolhe o modelo pelo idioma detectado, e não é isso que este benchmark mede. O alias da requisição é `convaiinnovations/laya-multilingual`; a identidade do checkpoint é `convaiinnovations/laya` no commit acima, subpasta `multilingual`.
 
-A execução completa em CPU terminou em 21/10/2026: 5.196 itens, sete tarefas, nenhuma requisição com falha. Ela verifica o percurso de avaliação e não substitui as medições históricas do ranking. Os comandos prontos estão na [receita de CPU acima](#copyable-cpu-example--exemplo-de-cpu-pronto-para-copiar), com explicações nos dois idiomas. Deixe o servidor aberto nesse terminal e execute os próximos comandos em outro terminal, na pasta do repositório. As [evidências da execução](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/main/results/contribution-check-2026-10-21) incluem relatório completo, avaliador executado e condições do teste. Os tempos são operacionais, não benchmarks de velocidade.
+A execução completa em CPU terminou em 21/10/2026: 5.196 itens, sete tarefas, nenhuma requisição com falha. Ela verifica o percurso de avaliação. Esta receita usa o contexto padrão do servidor (1.024 tokens, head 256), diferente da linha Laya da rodada final (8.192 tokens, head 2.048). Para comparar configurações, consulte as evidências congeladas da rodada final indicadas na seção em inglês. Os comandos abaixo usam a revisão dos dados dessa rodada; a evidência histórica de contribuição preserva a revisão original. Os comandos prontos estão na [receita de CPU acima](#copyable-cpu-example--exemplo-de-cpu-pronto-para-copiar), com explicações nos dois idiomas. Deixe o servidor aberto nesse terminal e execute os próximos comandos em outro terminal, na pasta do repositório. As [evidências da execução](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/main/results/contribution-check-2026-10-21) incluem relatório completo, avaliador executado e condições do teste. Os tempos são operacionais, não benchmarks de velocidade.
 
 ### 2. Teste rápido e depois a execução completa
 
-Use um Python com certificados funcionando; `uv run --python 3.12` é a opção testada. Não desligue a verificação TLS.
+Use um Python com certificados funcionando; `uv run --no-project --python 3.12` é a opção testada. Não desligue a verificação TLS.
 
 ```bash
 # teste rápido: 2 itens por tarefa; o relatório diz smoke e nunca pode ser enviado
-uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
+uv run --no-project --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
   --model convaiinnovations/laya-multilingual --name laya-smoke --limit 2 \
   --output /tmp/laya-smoke.json \
-  --revision 5450e73e634403993d9ac86d53d60a9b0ff76673
+  --revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9
 
 # completo: os 5.196 itens (mesmos parâmetros da seção em inglês)
-uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
+uv run --no-project --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
   --model convaiinnovations/laya-multilingual --name laya-cpu-full \
   --output ./laya-cpu-full.json \
-  --revision 5450e73e634403993d9ac86d53d60a9b0ff76673 \
+  --revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9 \
   --checkpoint-id convaiinnovations/laya \
   --checkpoint-revision 7b928d828b7b0e022f929d9bd2e44165aa270148 \
   --subfolder multilingual --context "max_len 1024, head 256" \
@@ -272,12 +275,12 @@ uv run --python 3.12 research/ptbr_bench.py --base-url http://127.0.0.1:18021 \
 
 Cada linha é `tarefa  acurácia balanceada  n  failed`. Acurácia balanceada é a média da revocação por classe; a média das sete tarefas vem com intervalo de 95% por bootstrap. Item com falha (erro do servidor, timeout, resposta malformada ou inválida) conta como erro e aparece por código (`transport`, `bad_response`, `invalid_choice`, ...). A última linha diz se a execução é enviável. Qualquer falha, qualquer `--limit` ou checkpoint sem revisão imutável a torna não enviável.
 
-Erro de certificado: use `uv run --python 3.12` ou aponte `SSL_CERT_FILE` para o seu pacote de CAs. Servidor que não responde aparece como falhas `transport` em todos os itens; corrija o servidor e rode de novo com outro `--output`.
+Erro de certificado: use `uv run --no-project --python 3.12` ou aponte `SSL_CERT_FILE` para o seu pacote de CAs. Servidor que não responde aparece como falhas `transport` em todos os itens; corrija o servidor e rode de novo com outro `--output`.
 
 ### 4. Valide e envie
 
 ```bash
-uv run --python 3.12 research/validate_submission.py laya-cpu-full.json
+uv run --no-project --python 3.12 research/validate_submission.py laya-cpu-full.json
 ```
 
 Ele baixa de novo as sete partições no commit do dataset indicado no relatório, compara rótulos, contagens e predições com esses dados, recalcula todas as notas e o intervalo e lista metadados desconhecidos como avisos. Não grava nada e não executa nada do relatório. Relatórios de versões antigas do `ptbr_bench.py` são recusados: rode de novo.
@@ -286,12 +289,12 @@ Passar significa que o arquivo é consistente com os dados públicos e com a sua
 
 Envie abrindo uma discussão na página do dataset (<https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/discussions>) com o relatório anexado, ou use o [modelo de issue do GitHub](https://github.com/felhen-ai/saracura/issues/new?template=benchmark-submission.yml). Os mantenedores revisam cada envio à mão; nada é publicado nem aceito automaticamente.
 
-Antes de anexar: o relatório não pode conter texto privado, tokens, nomes de host nem caminhos. Não cole credenciais nem prompts privados na discussão. Só entram modelos públicos, sem ajuste nas trilhas privadas.
+Antes de anexar: o relatório não pode conter texto privado, tokens, nomes de host nem caminhos. Não cole credenciais nem prompts privados na discussão. Declare se o checkpoint foi ajustado nestas tarefas ou nos datasets de origem: sim, não ou desconhecido, com a fonte da declaração. Modelos com ajuste conhecido aparecem separados da comparação principal, como o Saracura; os relatórios são preservados. Histórico desconhecido não certifica dados inéditos. Envie apenas modelos públicos sem ajuste nas trilhas privadas.
 
 ### Trilhas pública e privada, e lm-eval
 
 - As sete tarefas públicas são o que o `ptbr_bench.py` mede e o que a tabela pública lista.
-- As trilhas privadas (triagem de e-mail e comentários públicos de uso real, o teste novo de `camara_tema`; definição em `research/private_tasks.json`) mantêm textos e rótulos privados. Os mantenedores pontuam por revisão manual, nunca por este script.
+- As definições históricas de trilhas privadas em `research/private_tasks.json` estão fora deste percurso público. Elas não são exigidas para participar, e este guia não oferece avaliação privada.
 - `research/lm_eval/ptbr_typed_decisions` é um protocolo separado para o `lm-evaluation-harness` (prompt genérico em modelos de linguagem). Os números dele não são comparáveis com os do `ptbr_bench.py` e nunca entram na mesma tabela.
 
 ### LLMs de chat pela ponte local

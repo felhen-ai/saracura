@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Follow the evaluation guide (research/evaluation-guide.md in this repository). Maintainers review every submission by hand.
+        Follow the [evaluation guide](https://github.com/felhen-ai/saracura/blob/main/research/evaluation-guide.md). Maintainers review every submission by hand.
         Do not paste credentials, private prompts, private text or server addresses.
   - type: input
     id: model
@@ -28,6 +28,14 @@ body:
     attributes:
       label: Dataset commit
       description: The `revision` value in your report (40 hex).
+    validations:
+      required: true
+  - type: textarea
+    id: task-training
+    attributes:
+      label: Training on these benchmark tasks or source datasets
+      description: "State yes, no, or unknown, and link the model card or other source. Known task-tuned models are displayed separately; unknown does not certify unseen data. Private-track evaluation is not required."
+      placeholder: "Unknown; the model card does not document task-level training data. Source: ..."
     validations:
       required: true
   - type: textarea
