@@ -10,12 +10,14 @@
       "origin": "real complaints/company replies in Brazilian Portuguese",
       "metadata_license": "cc-by-4.0",
       "description_restriction": "research and academic purposes; no non-research redistribution",
-      "status": "preferred_candidate_pending_terms_and_nonoverlap",
+      "status": "restricted_research_development_sample_prepared",
       "archive_bytes": 1636678431,
       "archive_checksum": "md5:d301043b0dd0ad7658a6edcd42372c7a",
-      "downloaded_rows": 0,
+      "downloaded_rows": 1000,
       "data_window": "2021-05 to 2025-04; not post-checkpoint data",
-      "reason": "Real service narratives, anonymized, temporal metadata; suitable for research candidate, not proven unseen."
+      "reason": "Real service narratives, anonymized, temporal metadata; suitable for research candidate, not proven unseen.",
+      "sampled_rows": 50,
+      "conditions": "Explicitly authorized research only, stricter stated restrictions; original terms discrepancy unresolved; no public redistribution"
     },
     {
       "name": "Brazilian customer service conversations",
@@ -32,8 +34,13 @@
     {
       "name": "FalaBR / Busca LAI",
       "url": "https://www.gov.br/acessoainformacao/pt-br/falabr/visao-geral/busca-de-pedidos-e-respostas-download-de-dados",
-      "status": "alternative_written_request_candidate_pending_inspection",
-      "reason": "Official requests/responses export; not corporate email. Must verify narrative fields, snapshot, reuse conditions and nonoverlap before selection."
+      "status": "official_public_request_source_selected_for_pilot1",
+      "reason": "Official requests/responses export; not corporate email. Must verify narrative fields, snapshot, reuse conditions and nonoverlap before selection.",
+      "snapshot": "20261030_Pedidos_csv_2026.csv",
+      "source_rows": 67506,
+      "sampled_rows": 50,
+      "dates": "2026-10-22 to2026-10-29",
+      "conditions": "Site footer CC BY-ND3.0, third-party narrative rights not presumed; local restricted research only"
     },
     {
       "name": "MilkQA",

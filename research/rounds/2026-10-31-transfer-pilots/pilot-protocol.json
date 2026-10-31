@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "protocol_draft_no_inference",
+  "status": "two_development_samples_prepared_quarantined",
   "resource_policy": {
     "vm151_access": false,
     "gpu_rental": false,
@@ -44,39 +44,6 @@
   "final_target_items_per_case": 250,
   "verified_eligible_items": 0,
   "pilots": {
-    "email_triage": {
-      "questions": {
-        "tipo": {
-          "type": "choice",
-          "instructions": "Classifique o assunto do e-mail do ponto de vista da organização receptora, descrita no contexto comum a todos os modelos. O assunto manda, não o remetente nem o canal.",
-          "criteria": {
-            "cliente_oportunidade": "Quem paga ou pode pagar a Felhen: cliente, proposta, oportunidade, convite de reunião de cliente, venda feita (ex.: venda no Mercado Livre a despachar)",
-            "parceiro": "Quem constrói junto com a Felhen sem ser cliente pagante: sócio, parceiro de negócio, investidor, colaborador de projeto em andamento, convite de reunião com parceiro",
-            "fornecedor_cobranca": "Fornecedor de serviço e qualquer dinheiro a pagar, de qualquer remetente: fatura, boleto, cobrança (inclusive da contabilidade), assinatura, suporte de fornecedor",
-            "administrativo_fiscal": "Rotina da empresa que não é cobrança: contabilidade pedindo documento ou enviando balanço, impostos, banco, contratos, governo, cadastros",
-            "rede_contatos": "Relação pessoal ou profissional sem negócio em andamento: networking, convite para evento, conversa de carreira",
-            "notificacao_sistema": "Mensagem automática de ferramenta ou plataforma sem um negócio por trás: GitHub, alertas de login, avisos de conta, recibos de ferramenta, confirmação automática de chamado",
-            "newsletter_marketing": "Envio em massa de conteúdo ou promoção: newsletter, promoção, divulgação, webinar",
-            "interno": "Comunicação da equipe da Felhen: colaboradores falando de operação, tarefas ou alinhamento"
-          }
-        },
-        "precisa_acao": {
-          "type": "noul",
-          "instructions": "Este e-mail exige uma ação de quem o recebeu, como responder, pagar, enviar um produto, aceitar ou recusar um convite, revisar, assinar ou decidir algo? Resposta automática que só informa não exige ação."
-        },
-        "urgencia": {
-          "type": "choice",
-          "instructions": "Considerando a data de recebimento e o conteúdo, qual era a urgência deste e-mail quando chegou? Para convites, conta a distância até a reunião.",
-          "criteria": {
-            "alta": "Atenção no mesmo dia: prazo curto, cliente esperando, venda a despachar, falha em produção, pagamento vencendo",
-            "media": "Atenção nos próximos dias, sem prazo imediato",
-            "baixa": "Pode esperar ou não exige ação: informativo, automático ou promocional"
-          }
-        }
-      },
-      "reuse": "questions and historical aggregate baselines only; old 200 emails are development/exposure exclusions",
-      "source_status": "Existing historical schema retained; no new independent email corpus located in searched projects. Public written-request corpus is a separately named fallback, never described as email."
-    },
     "support_routing": {
       "questions": {
         "motivo": {
@@ -108,10 +75,46 @@
         }
       },
       "reuse": "synthetic schema only, no synthetic rows as real test",
-      "source_status": "ConsumerBR preferred public candidate; acquisition and item-level eligibility pending; no business owner needed",
+      "source_status": "50 ConsumerBR development candidates prepared for restricted research, not representative of full corpus, pending privacy/annotation/full exclusion index",
       "source_url": "https://zenodo.org/records/18022568",
       "label_policy": "Independent human annotations under a published routing policy; company outcomes are not routing gold and are excluded from input"
+    },
+    "public_request_triage": {
+      "questions": {
+        "objetivo": {
+          "type": "choice",
+          "instructions": "Qual é o objetivo principal da solicitação? Use apenas o texto recebido.",
+          "criteria": {
+            "documento": "Obter cópia de documento ou processo identificado",
+            "dados": "Obter números, listagem, planilha ou dados agregados",
+            "procedimento": "Saber como solicitar, acessar ou realizar um procedimento",
+            "regra": "Esclarecer regra, critério, fundamento ou competência",
+            "outro": "Outro objetivo ou objetivo indeterminado"
+          }
+        },
+        "tema": {
+          "type": "choice",
+          "instructions": "Qual é o tema principal do pedido, sem inferir pela identidade do solicitante?",
+          "criteria": {
+            "orcamento": "Orçamento, despesas, pagamentos e receitas públicas",
+            "contratos": "Compras, contratos e fornecedores",
+            "pessoal": "Quadro, cargos, concursos e gestão de pessoal",
+            "servicos": "Prestação e acesso a serviços públicos",
+            "outro": "Outro tema ou tema indeterminado"
+          }
+        },
+        "precisa_esclarecimento": {
+          "type": "noul",
+          "instructions": "O pedido deixa de identificar informação essencial para delimitar o objeto ou o escopo solicitado, exigindo esclarecimento antes do encaminhamento? Julgue o que está escrito, não se a instituição possui a resposta."
+        }
+      },
+      "source_status": "50 development candidate texts prepared from official CGU2026 export; registered after checkpoint freeze; pending privacy, annotation and complete exclusion checks",
+      "source_url": "https://www.gov.br/acessoainformacao/pt-br/falabr/visao-geral/busca-de-pedidos-e-respostas-download-de-dados",
+      "reuse": "Replaces email pilot because no fresh independent email corpus was located. Not described as corporate email; original schema retained separately.",
+      "label_policy": "Two human annotators and adjudication. Do not reuse old email labels. Binary action-required omitted because the request-only corpus cannot establish a representative negative class."
     }
   },
-  "stage_gate": "No inference until item-level nonoverlap, labels, permissions and operational context are recorded; incomplete provenance is quarantine, never pass"
+  "stage_gate": "No inference until item-level nonoverlap, labels, permissions and operational context are recorded; incomplete provenance is quarantine, never pass",
+  "legacy_email_schema_ref": "research/private_tasks.json#email",
+  "prepared_candidate_items": 100
 }

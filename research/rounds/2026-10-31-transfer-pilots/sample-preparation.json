@@ -1,0 +1,62 @@
+{
+  "prepared_on": "2026-10-31",
+  "status": "research_development_only_not_rankable",
+  "samples": {
+    "consumerbr": {
+      "examined_complete_rows": 1000,
+      "unique_nonempty": 981,
+      "sampling": "seeded sample from first 1000 complete rows of a bounded compressed prefix; development only, not representative of full corpus",
+      "sample_items": 50,
+      "sample_sha256": "668e8c51a3193a81046403d62ab33c524c29f366aba3620cbb91f93557b5fee9",
+      "labeled_items": 0,
+      "independence_verified_items": 0,
+      "date_min": "13/09/2021",
+      "date_max": "13/09/2021",
+      "items_over3500chars": 0,
+      "initial_sample_sha256": "e04da88ca104b6f6b2e77e46ea57f6bb1f11930f090b8f05676c1fedd3a7003c"
+    },
+    "cgu_requests": {
+      "examined_rows": 67506,
+      "eligible_unique_after_20261021": 260,
+      "sampling": "reservoir seed20261031 over unique nonempty requests registered from2026-10-22 in the whole pinned archive; development only",
+      "sample_items": 50,
+      "sample_sha256": "01fb2224a9de2b6d40fc4ea416fca16ec301e1167f24d086720a205bf8480143",
+      "labeled_items": 0,
+      "independence_verified_items": 0,
+      "date_min": "2026-10-22",
+      "date_max": "2026-10-29",
+      "items_over3500chars": 2,
+      "initial_sample_sha256": "fd5910f0d3594169ae4e9251a6eab134d09fba92ff0b760b99b064ae962197e7"
+    }
+  },
+  "public_benchmark_exclusion": {
+    "revision": "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
+    "files_checked": 21,
+    "rows_checked": 39295,
+    "exact_matches": 0,
+    "method": "NFC/casefold/whitespace normalized full states and recipe prefixes600/1500/3500 against raw candidate full states",
+    "uncovered": [
+      "private ads and internal documents",
+      "translated source at actual historical revision",
+      "generated training and teacher source texts",
+      "historical calibration and model-selection exposure items",
+      "upstream pretraining",
+      "semantic/translation/template near duplicates"
+    ]
+  },
+  "corpus_dates": {
+    "cgu": "50 requests registered2026-10-22 through2026-10-29, after checkpoint freeze2026-10-21",
+    "consumerbr": "Bounded prefix sample, all50 from2021-09-13; not representative and not temporally unseen"
+  },
+  "cross_sample_exact_duplicates": 0,
+  "labeled_items": 0,
+  "fully_independent_verified_items": 0,
+  "private_artifacts_logical_path": "projetos/felhen/saracura/.artifacts/transfer-pilots-research-20261031",
+  "privacy": "Regex removal is preliminary, not full anonymization; human review required; no raw texts in GitHub or HF",
+  "use_conditions": "ConsumerBR internal research under stricter stated restrictions, citation, no re-identification/non-research redistribution. CGU official public export, no raw redistribution. No inference or training.",
+  "prepared_file_sha256": {
+    "consumerbr-development.jsonl": "668e8c51a3193a81046403d62ab33c524c29f366aba3620cbb91f93557b5fee9",
+    "cgu_requests-development.jsonl": "01fb2224a9de2b6d40fc4ea416fca16ec301e1167f24d086720a205bf8480143"
+  },
+  "within_candidate_near_duplicate_pairs_for_review": 0
+}

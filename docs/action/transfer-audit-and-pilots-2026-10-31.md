@@ -26,7 +26,7 @@ sensitivity: public
 
 # Auditoria e pilotos: estado verificável
 
-Auditoria documental concluída para os dois checkpoints públicos exatos da rodada dos 14. Foram examinados os model cards nas revisões fixadas, as receitas de preparação, as definições das provas privadas e a disponibilidade dos insumos no checkout local. Não houve acesso à VM 151, carregamento de modelos, contratação de GPU, treino ou inferência. O resultado é um mapa de exposição e dois protocolos preparados; nenhum item foi certificado como independente e nenhuma nova pontuação foi produzida.
+Auditoria documental concluída para os dois checkpoints públicos exatos da rodada dos 14. Foram examinados os model cards nas revisões fixadas, as receitas de preparação, as definições das provas privadas e a disponibilidade dos insumos no checkout local. Não houve acesso à VM 151, carregamento de modelos, contratação de GPU, treino ou inferência. O resultado é um mapa de exposição, dois protocolos e 100 textos candidatos de desenvolvimento preparados; nenhum item foi certificado como plenamente independente e nenhuma nova pontuação foi produzida.
 
 ## O que o treino já inclui
 
@@ -46,7 +46,7 @@ O código separa os splits públicos de treino e teste; isso não prova a compos
 
 Reaproveitamos as perguntas históricas de triagem, o contrato System One, os seis checkpoints fixados, o embaralhamento de opções e as métricas do avaliador. Os textos e rótulos antigos não são promovidos a dados novos. A busca em arquivos de projetos disponíveis e suas referências não localizou um corpus real elegível de atendimento; encontrou código, logs de infraestrutura e evidências operacionais, que não substituem conversas reais. A busca não consultou bases de produção, caixas de e-mail ou Drives e não prova que não exista corpus nesses sistemas.
 
-A fonte pública preferida para o piloto de atendimento é [ConsumerBR](https://zenodo.org/records/18022568), documentada no [artigo dos autores](https://aclanthology.org/2026.propor-1.66/). São reclamações reais anonimizadas e respostas empresariais. O registro usa CC BY 4.0 no campo de licença, mas a descrição e o artigo restringem uso à pesquisa: manter essa divergência explícita, não redistribuir textos ou anunciar licença irrestrita. O arquivo tem cerca de 1,64 GB comprimido; não foi baixado integralmente. O período é anterior aos checkpoints: não sustenta novidade temporal por si só.
+A fonte pública preferida para o piloto de atendimento é [ConsumerBR](https://zenodo.org/records/18022568), documentada no [artigo dos autores](https://aclanthology.org/2026.propor-1.66/). São reclamações reais anonimizadas e respostas empresariais. O registro usa CC BY 4.0 no campo de licença, mas a descrição e o artigo restringem uso à pesquisa: manter essa divergência explícita, não redistribuir textos ou anunciar licença irrestrita. O arquivo tem cerca de 1,64 GB comprimido; foram baixados somente os primeiros 2 MiB, sem extração integral. O período é anterior aos checkpoints: não sustenta novidade temporal por si só.
 
 O dataset Brazilian Customer Service Conversations foi rejeitado como atendimento real porque os registros inspecionados declaram geração sintética. TalkEx deriva dessa fonte: marcar registros como não aumentados não comprova origem humana. MilkQA contém perguntas reais, mas corresponde a seleção de respostas e tem restrições de licença; não substitui automaticamente triagem de tickets. A Busca LAI da CGU é alternativa para solicitações escritas públicas, sujeita a inspeção do export; não será chamada de e-mail empresarial. Detalhes e URLs no [inventário de fontes](../../research/rounds/2026-10-31-transfer-pilots/source-discovery.json).
 
@@ -54,12 +54,12 @@ O dataset Brazilian Customer Service Conversations foi rejeitado como atendiment
 
 | | Piloto 1 | Piloto 2 |
 |---|---|---|
-| Caso | Triagem de e-mails/solicitações empresariais | Triagem e roteamento de atendimento |
-| Perguntas | Tipo, exige ação, urgência | Motivo, encaminhamento, escalonamento |
-| Reuso | Definição histórica de perguntas, generalizada para a organização receptora | Esquema inicial explícito, a revisar sem respostas dos modelos |
-| Fonte | Novos e-mails independentes ainda não localizados; alternativa de solicitações públicas exige outro nome e taxonomia | ConsumerBR como candidato público, sem depender de corpus interno |
-| Quantidade | 50 itens de desenvolvimento, depois alvo inicial de 250 itens finais novos | 50 itens de desenvolvimento, depois alvo inicial de 250 itens finais novos |
-| Estado atual | Protocolo pronto; zero itens independentes verificados | Protocolo pronto; zero itens independentes verificados |
+| Caso | Triagem de solicitações públicas escritas | Triagem e roteamento de atendimento |
+| Perguntas | Objetivo, tema, precisa esclarecimento | Motivo, encaminhamento, escalonamento |
+| Reuso | Contrato de decisão e metodologia; taxonomia própria para pedidos públicos | Esquema inicial explícito, a revisar sem respostas dos modelos |
+| Fonte | Export oficial CGU2026; 50 pedidos registrados de 22 a 29/10, depois do congelamento em 21/10 | ConsumerBR; 50 reclamações reais de desenvolvimento |
+| Quantidade | 50 textos preparados; alvo futuro de 250 itens finais novos | 50 textos preparados; alvo futuro de 250 itens finais novos |
+| Estado atual | Sem rótulos humanos; revisão de privacidade e índice completo pendentes | Sem rótulos humanos; revisão de privacidade e índice completo pendentes |
 
 Os seis modelos do piloto são Saracura v0, Saracura 4B, Laya multilingual, Kev 4B, Lev e Qwen3.5-4B, nas revisões da rodada publicada. Não adaptar pesos ou calibrar confiança com o teste final. A rodada confirmatória deve incluir os 14, sem escolher comparadores por seus resultados no piloto. O piloto serve para acertar rubrica e viabilidade, não para anunciar vencedor.
 
@@ -83,4 +83,19 @@ Publicar os resultados futuros em trilha separada de generalização; preservar 
 
 ## Próxima ação concreta
 
-Resolver a fonte de textos do piloto 1 e as condições do ConsumerBR; obter amostras pequenas em quarentena, revisar campos e formar o índice de exclusão. Só depois selecionar os 50 itens por caso e encaminhar à anotação. Até esse ponto, nenhum dos dois pilotos está liberado para inferência. Isso preserva a exigência de independência sem transformar ausência de dados em uma aprovação automática.
+Revisar privacidade e completar a exclusão dos insumos privados/gerados; depois encaminhar as duas fichas separadas por anotador e adjudicar divergências. Os 50 itens por caso já estão preparados, mas ambos os conjuntos permanecem em quarentena para inferência e não constituem prova final. Não há dependência da VM 151 nesta preparação.
+
+
+## Amostras preparadas e verificações em 31/10
+
+O usuário autorizou o ConsumerBR especificamente para pesquisa. Aplicamos as condições mais restritivas declaradas: release anonimizado, citação, proibição de reidentificação, sem redistribuição pública dos textos e sem uso operacional ou treino. A inconsistência entre CC BY 4.0 no campo de licença e a descrição research-only continua registrada; não foi reinterpretada como licença irrestrita. A documentação da CGU tem rodapé CC BY-ND 3.0, que não prova direitos irrestritos sobre narrativas de terceiros: os textos também ficam apenas no acervo restrito de pesquisa.
+
+ConsumerBR: 50 textos sorteados com semente 20261031 entre 981 narrativas únicas das primeiras 1.000 linhas completas de um prefixo comprimido limitado. Todos são de 13/09/2021. Essa amostra serve para depurar a rubrica; não representa o corpus inteiro nem sustenta novidade temporal. A seleção final precisará de cobertura temporal e de empresas mais ampla. Foram excluídas do input respostas das empresas, satisfação e resolução.
+
+CGU: o snapshot de 30/10 contém 67.506 pedidos de2026. O filtro de registro posterior a21/10 encontrou 260 textos não vazios únicos; uma amostragem reservoir com semente 20261031 escolheu 50, datados de 22 a 29/10. A fonte é real e posterior ao congelamento dos checkpoints fixados, mas a reutilização de histórias antigas não é descartada só pela data. O input contém apenas resumo e detalhamento; resposta, assunto atribuído pelo SIC, órgão destinatário e decisão não entram como pistas. Duas amostras têm mais de 3.500 caracteres e foram preservadas, com pendência explícita de contexto; não houve corte silencioso.
+
+O piloto1 foi renomeado: não há corpus novo de e-mail empresarial comprovado. Removemos a pergunta exige ação porque um acervo composto só de pedidos não permite presumir uma classe negativa representativa. A alternativa mede objetivo, tema e necessidade de esclarecimento; não é comparação direta com os 59,9% históricos de e-mail/comentários.
+
+Conferimos os 100 candidatos contra 39.295 registros dos 21 arquivos públicos train/dev/test na revisão 00f5d6dcc6679751723289889b8b0b28b71cbcb9: zero duplicatas exatas normalizadas, incluindo comparação com estados de treino cortados em 600/1.500/3.500 caracteres. Dentro dos 100 candidatos, zero duplicatas exatas e zero pares acima de Jaccard 0,8 em trigramas de palavras. Isso não cobre similaridade semântica, traduções, insumos internos, perguntas geradas, calibração ou pré-treino upstream. O veredito continua independência parcial, não certificação de ausência de contaminação.
+
+Há quatro fichas de anotação vazias, uma por corpus/anotador, sem respostas de modelos ou gabarito automático. Redação por regex é preliminar; revisar nomes e outros identificadores antes de disponibilizar a anotadores. As amostras, snapshots, scripts de execução capturados e recibos de pesquisa ficam no armazenamento restrito, caminho lógico projetos/felhen/saracura/.artifacts/transfer-pilots-research-20261031. O repositório contém apenas protocolo, metadados agregados e hashes de artefatos. O [recibo público de preparação](../../research/rounds/2026-10-31-transfer-pilots/sample-preparation.json) registra escopo, amostragem e pendências.
