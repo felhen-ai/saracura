@@ -1,6 +1,6 @@
 ---
 title: Rodada local comparável de modelos no benchmark PT BR
-kind: plan
+kind: report
 area: research
 project: saracura
 collection: saracura
@@ -9,8 +9,9 @@ status: current
 canonical: docs/action/comparable-round-2026-10-21.md
 globalRef: qmd://saracura/docs/action/comparable-round-2026-10-21.md
 reviewCadenceDays: 30
-lastReviewedAt: 2026-10-21
+lastReviewedAt: 2026-10-31
 sourceRefs:
+  - https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete
   - https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/00f5d6dcc6679751723289889b8b0b28b71cbcb9
   - https://huggingface.co/docs/hub/en/eval-results
   - https://huggingface.co/docs/hub/leaderboard-data-guide
@@ -27,11 +28,11 @@ sensitivity: public
 
 # Rodada local comparável de modelos no benchmark PT BR
 
-Selecionamos 14 checkpoints públicos para comparar sete LLMs de uso geral e sete modelos de decisão nas mesmas sete tarefas e 5.196 itens. Os dados, revisões de pesos e critérios estão fixados no [manifesto](../../research/rounds/2026-10-21/manifest.json). A preparação está concluída; a nova rodada completa ainda não começou. Falta implementar e validar a ponte dos LLMs para as mesmas requisições tipadas e obter disponibilidade de hardware. Não publicar uma classificação nova antes desses passos.
+Selecionamos 14 checkpoints públicos para comparar sete LLMs de uso geral e sete modelos de decisão nas mesmas sete tarefas e 5.196 itens. Os dados, revisões de pesos e critérios estão fixados no [manifesto](../../research/rounds/2026-10-21/manifest.json). A rodada foi concluída em 31/10/2026: todos os 14 checkpoints têm avaliação completa das sete tarefas e 5.196 itens, zero falhas e aprovação pelo validador congelado. [Ranking e relatórios publicados](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete); [índice final com revisões e hashes](../../research/rounds/2026-10-21/final-ranking.json). O [Space](https://huggingface.co/spaces/felhen-ai/ptbr-typed-decisions-leaderboard) destaca os 14 e preserva as medições históricas em abas separadas.
 
-A seleção privilegia modelos de uso difundido, suporte a português, diversidade de fornecedor e tamanhos de até aproximadamente 8B. Downloads e likes do Hub são sinais de adoção, registrados na consulta de 21/10/2026, não provas de qualidade. Todos os 14 têm acesso público sem gate; 13 declaram Apache-2.0 e Phi declara MIT. A execução usa os equipamentos existentes, sem API paga, HF Jobs pago, Runpod ou aluguel de GPU. Há consumo local de energia, disco e tempo.
+A seleção privilegia modelos de uso difundido, suporte a português, diversidade de fornecedor e tamanhos de até aproximadamente 8B. Downloads e likes do Hub são sinais de adoção, registrados na consulta de 21/10/2026, não provas de qualidade. Todos os 14 têm acesso público sem gate; 13 declaram Apache-2.0 e Phi declara MIT. O plano inicial usava somente equipamentos existentes, sem aluguel de GPU. Em 31/10, o usuário autorizou Runpod para Qwen2.5-7B e depois Granite, com teto cumulativo de US$ 10. Ambos foram avaliados integralmente em RTX 4090 bf16; os pods foram excluídos após coleta dos artefatos. O teste próprio do Granite na CPU só foi interrompido depois da avaliação GPU completa validada; as tentativas parciais foram preservadas. Não houve interrupção de serviços por estes comandos.
 
-## Modelos e avaliação existente
+## Seleção e avaliação existente em 21/10
 
 | Modelo | Porte | Situação no nosso ranking | Plano |
 |---|---:|---|---|
@@ -88,7 +89,7 @@ O arquivo [commands.json](../../research/rounds/2026-10-21/commands.json) conté
 
 ## Integração ao ranking nativo do Hugging Face
 
-Estado observado: dataset existe, mas não contém `eval.yaml`; o endpoint de leaderboard responde HTTP 200 com lista vazia. A tag comum `benchmark` não prova registro nativo. A documentação exige `eval.yaml`, um framework reconhecido e, na fase beta, inclusão pelo time HF na allow-list. O identificador proposto `ptbr-typed-decisions` não aparece no enum de frameworks consultado. [Registro e formato](https://huggingface.co/docs/hub/en/eval-results); [enum fixado](https://github.com/huggingface/huggingface.js/blob/234c367c120753f5e9df3ec30d9c57c687a5e407/packages/tasks/src/eval.ts).
+Estado observado em 21/10: dataset existe, mas não contém `eval.yaml`; o endpoint de leaderboard responde HTTP 200 com lista vazia. A tag comum `benchmark` não prova registro nativo. A documentação exige `eval.yaml`, um framework reconhecido e, na fase beta, inclusão pelo time HF na allow-list. O identificador proposto `ptbr-typed-decisions` não aparece no enum de frameworks consultado. [Registro e formato](https://huggingface.co/docs/hub/en/eval-results); [enum fixado](https://github.com/huggingface/huggingface.js/blob/234c367c120753f5e9df3ec30d9c57c687a5e407/packages/tasks/src/eval.ts).
 
 Preparar o registro do nosso avaliador, preservando o protocolo. Não declarar `inspect-ai`, `lm-eval` ou outro framework para contornar a validação. O [eval.yaml proposto](../../research/rounds/2026-10-21/eval.yaml.proposed) depende do registro do framework e de confirmação de como representar as sete tarefas, a média agregada e a escala da métrica; não foi enviado ao Hub. Usar IDs diferentes se a ponte exigir um protocolo semanticamente diferente.
 
@@ -98,11 +99,11 @@ A validação final da integração exige o dataset reconhecido como benchmark, 
 
 ## Próximas entregas
 
-1. Implementar e testar a ponte local comum; fixar runtimes e dependências após inspeção das interfaces upstream.
-2. Executar os 196 itens de smoke, registrar memória, contexto e tempo, e fechar a alocação de cada modelo.
-3. Executar os 14 conjuntos completos sequencialmente; recalcular métricas e publicar relatórios reproduzíveis antes de convidar autores a reproduzir.
-4. Registrar o framework e solicitar habilitação nativa ao HF com o protocolo e as evidências, após autorização do contato externo.
-5. Usar a classificação completa para selecionar os modelos do estudo de transferência a casos reais, preservando os testes reservados desse estudo.
+A ponte, os testes rápidos e os 14 conjuntos completos estão concluídos. Próximas frentes:
+
+1. Registrar o framework e solicitar habilitação nativa ao HF com o protocolo e as evidências, após autorização do contato externo. O Space publicado não prova registro nativo ou selo HF verified.
+2. Usar a classificação completa para selecionar os modelos do estudo de transferência a casos reais, preservando os testes reservados desse estudo.
+3. Recalcular referências supervisionadas em uma rodada identificada; as referências históricas preservadas no Space não foram incluídas entre estes 14.
 
 
 ## Execução iniciada em 21/10
@@ -112,3 +113,12 @@ A ponte local foi implementada com carregamento offline, limite de contexto, pra
 Os [relatórios desta rodada](../../research/rounds/2026-10-21/results/index.json) incluem Kev-0.8B em MLX bf16 (5.196 decisões, zero falhas, média 50,83%) e Laya em CPU float32, cap upstream de 48 tokens por opção declarado (5.196 decisões, zero falhas, média 39,18%). Saracura-v0 em CPU float32, com o mesmo cap upstream declarado, também completou 5.196 decisões com zero falhas e média 68,49%. Os três passaram pelo validador com dados públicos baixados novamente. São resultados da configuração identificada, sem substituir as linhas históricas. O [estado de execução](../../research/rounds/2026-10-21/results/execution-progress.json) é um snapshot intermediário, não o ranking completo dos 14.
 
 A GPU permanece ocupada pelo serviço existente. Runtimes de CPU foram isolados em um ambiente com PyTorch CPU, Transformers 5.20.2 e sem FLA/Triton, após uma tentativa no ambiente CUDA reutilizado selecionar kernels incompatíveis com CPU. Os processos de experimento usam limites de CPU/memória; nenhuma interrupção dos serviços atuais foi autorizada ou realizada. A tentativa de full Kev-4B em MLX bf16 e a preparação pós-merge para Q4 foram interrompidas por pressão de memória do Mac; não geram notas publicáveis. A alternativa é o runtime nativo em CPU.
+
+
+## Conclusão em 31/10/2026
+
+Os sete LLMs gerais foram avaliados no mesmo modo constrained-letter pré-registrado. Os sete modelos de decisão usaram seus runtimes nativos. Os relatórios fixam pesos e dados, registram o hardware e publicam previsões por item, métricas e intervalos de confiança. A configuração dos runtimes faz parte do resultado: não se infere equivalência numérica entre CPU, MLX e CUDA, nem comparação de velocidade entre hardwares. O limite upstream de 48 tokens por opção de Laya/Saracura v0 permanece declarado. As afirmações de qualidade ficam restritas às tarefas deste benchmark.
+
+Qwen2.5-7B e Granite concluíram no Runpod com zero falhas. A execução parcial anterior em CPU não foi mesclada aos relatórios GPU. O custo de computação estimado acumulado, incluindo a primeira preparação de Qwen interrompida, foi US$ 0,41; é uma estimativa por tempo e tarifa, exclui pequenas cobranças de disco efêmero e não substitui a fatura. Todos os pods criados nesta rodada foram excluídos.
+
+Artefatos finais: dataset `11d2412c85441d56ff5bf914c647a7a56d18b75a`, Space `10671dec363f5dbd92cba509bc232ca720549353`. Os relatórios intermediários e históricos permanecem preservados. O registro nativo do HF e a validação de transferência a casos reais continuam pendentes; a entrega concluída aqui é a rodada reproduzível dos 14 e sua publicação pública.

@@ -34,7 +34,7 @@ repository; the scripts that read it (`segmento.py`, `combo.py`, `agree_qwen.py`
 
 ## Benchmark
 
-[Rodada local de 14 modelos](../docs/action/comparable-round-2026-10-21.md): seleção e revisão dos resultados históricos, checkpoints e dados fixados, protocolo comparável e requisitos para integração ao ranking nativo do Hugging Face. Preparação concluída; execução completa pendente da ponte para LLMs e do preflight dos runtimes.
+[Rodada local de 14 modelos](../docs/action/comparable-round-2026-10-21.md): seleção e revisão dos resultados históricos, checkpoints e dados fixados, protocolo comparável e requisitos para integração ao ranking nativo do Hugging Face. Rodada concluída em 31/10/2026: 14 relatórios completos validados, 5.196 itens por modelo e zero falhas. [Ranking e relatórios públicos](https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/tree/11d2412c85441d56ff5bf914c647a7a56d18b75a/results/comparable-round-2026-10-21-complete); [índice final](rounds/2026-10-21/final-ranking.json). A integração nativa do Hugging Face permanece separada da publicação no Space.
 
 | Script | What it does |
 |---|---|
