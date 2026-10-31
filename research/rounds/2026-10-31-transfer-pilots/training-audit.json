@@ -47,5 +47,8 @@
     "research/combo.py": "5d6eda98ebb587bea4bac47784e83b8b9ab7795d700f4288931d1adda62e94d3",
     "research/kev_data.py": "6eed8b8dcc67edc942adeecc69b0e5259ae63aa1717fc0d14e62ecca7dbd495d",
     "research/private_tasks.json": "b7b61991d4daf2ccaa93ccfeb07eef5c157e73dda54c982f13d3b570a4807138"
-  }
+  },
+  "private_ads_source_recovered": true,
+  "private_ads_rows_checked": 24999,
+  "complete_materialized_training_inputs_available": false
 }

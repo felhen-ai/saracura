@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "two_development_samples_prepared_quarantined",
+  "status": "privacy_review_complete_inference_blocked_by_exclusion_and_gold",
   "resource_policy": {
     "vm151_access": false,
     "gpu_rental": false,
@@ -116,5 +116,8 @@
   },
   "stage_gate": "No inference until item-level nonoverlap, labels, permissions and operational context are recorded; incomplete provenance is quarantine, never pass",
   "legacy_email_schema_ref": "research/private_tasks.json#email",
-  "prepared_candidate_items": 100
+  "prepared_candidate_items": 100,
+  "privacy_reviewed_annotation_candidates": 84,
+  "privacy_withheld_items": 16,
+  "human_gold_labels": 0
 }

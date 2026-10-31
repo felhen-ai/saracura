@@ -1,0 +1,89 @@
+{
+  "reviewed_on": "2026-10-31",
+  "status": "privacy_review_complete_evaluation_not_released",
+  "privacy": {
+    "method": "All100 states semantically inspected by the assistant, followed by deterministic redaction. Not two-human annotation, not a certification of irreversible anonymization.",
+    "initial_items": 100,
+    "restricted_annotation_candidates": 84,
+    "withheld": 16,
+    "cohorts": {
+      "consumerbr": {
+        "initial": 50,
+        "reviewed_annotation_candidates": 47,
+        "withheld": 3,
+        "redaction_operations": {
+          "signature_tail": 3,
+          "address_block": 1,
+          "login": 1,
+          "long_reference": 2,
+          "plate": 1,
+          "reservation_code": 1,
+          "reservation_parentheses": 1
+        },
+        "context_review_pending": 0,
+        "reviewed_file_sha256": "529a6e82275d3a469bef901f9373f539b1df2f716c25d842328000f2751cf122"
+      },
+      "cgu_requests": {
+        "initial": 50,
+        "reviewed_annotation_candidates": 37,
+        "withheld": 13,
+        "redaction_operations": {
+          "long_reference": 31,
+          "self_identification": 2,
+          "signature_tail": 4,
+          "reservation_parentheses": 1,
+          "contact_url": 2,
+          "residual_phone": 3,
+          "professional_registration": 1
+        },
+        "context_review_pending": 1,
+        "reviewed_file_sha256": "26a3634e6c5ee2c80dedd43aada2a32c3b5433132bce8bb0f8371d7853fd70d1"
+      }
+    },
+    "context_review_pending": 1,
+    "human_gold_labels": 0,
+    "originals_preserved": true,
+    "raw_texts_publicly_redistributed": false
+  },
+  "overlap": {
+    "public_rows": 39295,
+    "private_ads_rows": 24999,
+    "translated_rows": 1200,
+    "records_checked_total": 65494,
+    "public_exact_matches": 0,
+    "additional_exact_matches": 0,
+    "additional_near_matches_jaccard08": 0,
+    "translated_revision_checked": "8c85a4d2017c12599857ad083f87536fa6424596",
+    "private_ads_file_sha256": "3d1c0758498869fb035c90ea138f8ce79c8cdb15b4c3b8677228223d714aada4",
+    "historical_materialized_run_membership_proven": false,
+    "generated_real_source_pools": "Code selects public benchmark and ads prefixes2500; these available sources were checked including2500 prefix, but original generated files not recovered",
+    "uncovered": [
+      "internal documents and their train splits",
+      "generated question/source records train.jsonl/train_or.jsonl/train_uc_train.jsonl",
+      "actual historical translated-source revision",
+      "calibration and model-selection exposure indexes",
+      "complete upstream training lineage"
+    ],
+    "verdict": "incomplete_not_contamination_free"
+  },
+  "gates": {
+    "privacy_review": true,
+    "complete_exclusion_index": false,
+    "two_independent_human_labels": false,
+    "context_policy_resolved": false,
+    "inference_released": false
+  },
+  "resource_use": {
+    "vm151": false,
+    "gpu_rental": false,
+    "model_inference": false,
+    "new_training": false
+  },
+  "private_artifacts": "projetos/felhen/saracura/.artifacts/transfer-pilots-research-20261031/privacy-reviewed-v2",
+  "next_required_inputs": [
+    "materialized internal document train files and source/version manifests",
+    "generated train.jsonl/train_or.jsonl/train_uc_train.jsonl and gen_uc/train_uc files actually used",
+    "historical calibration/model-selection exclusion identifiers",
+    "two independent human annotations with adjudication"
+  ]
+}
