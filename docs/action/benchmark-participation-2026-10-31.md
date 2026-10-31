@@ -47,6 +47,17 @@ VM work, paid compute, private pilot or new submission system is part of this ta
   (yes/no/unknown and a source). Known task-tuned results are displayed separately;
   an unknown history does not certify unseen data. Private tracks are not required.
 
+## Public Space correction
+
+The existing “Enviar um modelo” tab now links both submission routes, mentions
+LLMs through the local bridge, requests training-history disclosure and explicitly
+says that historical private tracks are not required. Space commit:
+`4b842dc6fe62c25d4feb4f124e4db1996d1b0f84`.
+Anonymous readback matches the published page. The original `results.json` is
+byte-identical (SHA256 `07158ba401b310524d3b482588cdf66ca7e5b2dcdb5b69ef6c45f11d74bb7c1f`).
+All fourteen reports and model scores are preserved. This is a correction to the
+existing participation instructions, not an outreach post.
+
 ## Distribution order
 
 1. Publish one Hugging Face community article linking the existing Space, frozen
