@@ -1,0 +1,874 @@
+{
+  "scoring_version": "ptbr-chance-corrected-v2",
+  "status": "official scoring V2; original reports and evaluation protocol unchanged",
+  "method": "For each task t: chance=1/K_t; score_t=max(0,(balanced_accuracy_t-chance)/(1-chance)); normalized=100*mean(score_t) across the original seven tasks. Signed adjusted BA is also retained without clipping.",
+  "precision": "Derived from original per-item predictions, not rounded task metrics; published original scores are retained unchanged. Rounding differences below 0.01 points can occur.",
+  "uncertainty": "No normalized confidence intervals computed; original raw-score intervals must not be reused.",
+  "no_model_execution": true,
+  "no_paid_services": true,
+  "dataset_revision": "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
+  "task_classes": {
+    "camara_tema": 24,
+    "factck_veracidade": 3,
+    "faquad_resposta": 2,
+    "juristcu_area": 10,
+    "olid_alvo": 3,
+    "olid_ofensivo": 2,
+    "scielo_area": 8
+  },
+  "task_sha256": {
+    "camara_tema": "3885484f11bac50dccba40725a036688098390f4a3af231f0e3fab1a1fa0a944",
+    "factck_veracidade": "db7a1b4b71178f4a8d0edbb479d0574e56772dbc09387e1c8ea076346a7c3d29",
+    "faquad_resposta": "c8bd55e0ee15075392b4035e6a7a60eb0f44445c38751b87073d537d505f1051",
+    "juristcu_area": "57e8035626b3597fe763fcd509f4ff232f2a85a71f531089ced46d179d2eb700",
+    "olid_alvo": "bc6b0aa1ef70758dd7a120f9425640d595befd38abad594d0d758e2c5623b898",
+    "olid_ofensivo": "b62dc8d50dfbee95befa3ed6177096ff5232963f2aef236b94c85b9b8eb4f777",
+    "scielo_area": "06cbaf837c183cb18f620cafa4b0634702563bbed2fddc4f25d390c169b01f54"
+  },
+  "sources": [
+    "https://huggingface.co/docs/leaderboards/open_llm_leaderboard/normalization",
+    "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.balanced_accuracy_score.html"
+  ],
+  "results": [
+    {
+      "model": "felhen-ai/saracura-ptbr-4b",
+      "tuned_on_benchmark_tasks": true,
+      "published_original_score": 72.91,
+      "exact_recomputed_ba": 72.90966936280181,
+      "adjusted_balanced_accuracy_points": 60.78180468983512,
+      "normalized_0_100_points": 60.78180468983512,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.6115796871884246,
+          "adjusted_signed": 0.5946918475009648,
+          "normalized_clipped": 0.5946918475009648
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.4574958632101489,
+          "adjusted_signed": 0.18624379481522335,
+          "normalized_clipped": 0.18624379481522335
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.9235994397759104,
+          "adjusted_signed": 0.8471988795518208,
+          "normalized_clipped": 0.8471988795518208
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.7667890561372841,
+          "adjusted_signed": 0.7408767290414268,
+          "normalized_clipped": 0.7408767290414268
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.7115423151740506,
+          "adjusted_signed": 0.5673134727610759,
+          "normalized_clipped": 0.5673134727610759
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6945745468405274,
+          "adjusted_signed": 0.3891490936810549,
+          "normalized_clipped": 0.3891490936810549
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.9380959470697805,
+          "adjusted_signed": 0.929252510936892,
+          "normalized_clipped": 0.929252510936892
+        }
+      },
+      "report_sha256": "a6061977312ffe24e95089dc790dca6649df68105d2d0d619987df28ffd9c5f0"
+    },
+    {
+      "model": "felhen-ai/saracura-ptbr-v0",
+      "tuned_on_benchmark_tasks": true,
+      "published_original_score": 68.49,
+      "exact_recomputed_ba": 68.48414270426653,
+      "adjusted_balanced_accuracy_points": 54.12222142478854,
+      "normalized_0_100_points": 54.12222142478854,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5925615406490212,
+          "adjusted_signed": 0.5748468250250657,
+          "normalized_clipped": 0.5748468250250657
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.448170619599191,
+          "adjusted_signed": 0.17225592939878653,
+          "normalized_clipped": 0.17225592939878653
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8988795518207283,
+          "adjusted_signed": 0.7977591036414566,
+          "normalized_clipped": 0.7977591036414566
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.6869078747983917,
+          "adjusted_signed": 0.6521198608871018,
+          "normalized_clipped": 0.6521198608871018
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.6366512784014494,
+          "adjusted_signed": 0.4549769176021741,
+          "normalized_clipped": 0.4549769176021741
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6184041750042146,
+          "adjusted_signed": 0.23680835000842926,
+          "normalized_clipped": 0.23680835000842926
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.9123149490256606,
+          "adjusted_signed": 0.8997885131721836,
+          "normalized_clipped": 0.8997885131721836
+        }
+      },
+      "report_sha256": "951c1c0727c81fe0ee1dc5b2e634f980481cc5ffb4d8bfdfe047d6179035cb2d"
+    },
+    {
+      "model": "Mapika/decider-4b",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 63.56,
+      "exact_recomputed_ba": 63.55632118216734,
+      "adjusted_balanced_accuracy_points": 49.225069342800275,
+      "normalized_0_100_points": 49.225069342800275,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5824421587773997,
+          "adjusted_signed": 0.564287470028591,
+          "normalized_clipped": 0.564287470028591
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3785695899981614,
+          "adjusted_signed": 0.06785438499724215,
+          "normalized_clipped": 0.06785438499724215
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8981792717086834,
+          "adjusted_signed": 0.7963585434173668,
+          "normalized_clipped": 0.7963585434173668
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5766335853065877,
+          "adjusted_signed": 0.5295928725628752,
+          "normalized_clipped": 0.5295928725628752
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.6613515152102014,
+          "adjusted_signed": 0.4920272728153021,
+          "normalized_clipped": 0.4920272728153021
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6925515462028424,
+          "adjusted_signed": 0.38510309240568485,
+          "normalized_clipped": 0.38510309240568485
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6592148155478375,
+          "adjusted_signed": 0.6105312177689571,
+          "normalized_clipped": 0.6105312177689571
+        }
+      },
+      "report_sha256": "fe9d8b90e9ab9484d32c0825272672cb31ded84453011d4f63c071e1a6be17bb"
+    },
+    {
+      "model": "interfaze-ai/lev",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 63.09,
+      "exact_recomputed_ba": 63.09480107676803,
+      "adjusted_balanced_accuracy_points": 48.29006434417827,
+      "normalized_0_100_points": 48.29006434417827,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5803815005711345,
+          "adjusted_signed": 0.5621372179872708,
+          "normalized_clipped": 0.5621372179872708
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3975877918735062,
+          "adjusted_signed": 0.09638168781025928,
+          "normalized_clipped": 0.09638168781025928
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8710084033613446,
+          "adjusted_signed": 0.7420168067226891,
+          "normalized_clipped": 0.7420168067226891
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5840948487606656,
+          "adjusted_signed": 0.5378831652896285,
+          "normalized_clipped": 0.5378831652896285
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.6422040051988183,
+          "adjusted_signed": 0.4633060077982274,
+          "normalized_clipped": 0.4633060077982274
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6865301874207475,
+          "adjusted_signed": 0.3730603748414949,
+          "normalized_clipped": 0.3730603748414949
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6548293381875452,
+          "adjusted_signed": 0.6055192436429088,
+          "normalized_clipped": 0.6055192436429088
+        }
+      },
+      "report_sha256": "409ebb66c86e3d967c2791ce1ecd68ba28025d3d19a809553547bc43391816d3"
+    },
+    {
+      "model": "jaredpalmer/kev-4b",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 62.11,
+      "exact_recomputed_ba": 62.10887028044005,
+      "adjusted_balanced_accuracy_points": 47.05025362121452,
+      "normalized_0_100_points": 47.05025362121452,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.572096996217094,
+          "adjusted_signed": 0.5534925177917502,
+          "normalized_clipped": 0.5534925177917502
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3481595881595882,
+          "adjusted_signed": 0.022239382239382318,
+          "normalized_clipped": 0.022239382239382318
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8766106442577031,
+          "adjusted_signed": 0.7532212885154062,
+          "normalized_clipped": 0.7532212885154062
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5631220702904146,
+          "adjusted_signed": 0.5145800781004607,
+          "normalized_clipped": 0.5145800781004607
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.6333392777602045,
+          "adjusted_signed": 0.45000891664030673,
+          "normalized_clipped": 0.45000891664030673
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.694248374636263,
+          "adjusted_signed": 0.388496749272526,
+          "normalized_clipped": 0.388496749272526
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6600439683095365,
+          "adjusted_signed": 0.6114788209251846,
+          "normalized_clipped": 0.6114788209251846
+        }
+      },
+      "report_sha256": "25f6203ef8f6785be20b2972e3418b59df69ba21b6cf5e1a89a2e8fc96a763d3"
+    },
+    {
+      "model": "Qwen/Qwen3.5-4B",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 58.91,
+      "exact_recomputed_ba": 58.91036775037364,
+      "adjusted_balanced_accuracy_points": 42.016442883956465,
+      "normalized_0_100_points": 42.02857746751962,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5608183054718676,
+          "adjusted_signed": 0.5417234491880358,
+          "normalized_clipped": 0.5417234491880358
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.33276705276705276,
+          "adjusted_signed": -0.0008494208494208287,
+          "normalized_clipped": 0.0
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8757002801120448,
+          "adjusted_signed": 0.7514005602240896,
+          "normalized_clipped": 0.7514005602240896
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5578182418173361,
+          "adjusted_signed": 0.5086869353525957,
+          "normalized_clipped": 0.5086869353525957
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.5501462167623155,
+          "adjusted_signed": 0.3252193251434732,
+          "normalized_clipped": 0.3252193251434732
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6221643174938247,
+          "adjusted_signed": 0.24432863498764945,
+          "normalized_clipped": 0.24432863498764945
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6243113281017133,
+          "adjusted_signed": 0.5706415178305295,
+          "normalized_clipped": 0.5706415178305295
+        }
+      },
+      "report_sha256": "1e224843f3f81f56b64c2c6f59a02e13d8166acd3437dbeb95d99c1fd7e3352f"
+    },
+    {
+      "model": "Qwen/Qwen3-4B-Instruct-2507",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 58.330000000000005,
+      "exact_recomputed_ba": 58.331406352250845,
+      "adjusted_balanced_accuracy_points": 41.22115240311794,
+      "normalized_0_100_points": 41.22115240311794,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5608772794052024,
+          "adjusted_signed": 0.5417849872054286,
+          "normalized_clipped": 0.5417849872054286
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.34767420481706196,
+          "adjusted_signed": 0.021511307225592965,
+          "normalized_clipped": 0.021511307225592965
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8635854341736695,
+          "adjusted_signed": 0.727170868347339,
+          "normalized_clipped": 0.727170868347339
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5533318048032665,
+          "adjusted_signed": 0.5037020053369627,
+          "normalized_clipped": 0.5037020053369627
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.5157008183404667,
+          "adjusted_signed": 0.2735512275107,
+          "normalized_clipped": 0.2735512275107
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6313484472004163,
+          "adjusted_signed": 0.26269689440083255,
+          "normalized_clipped": 0.26269689440083255
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6106804559174754,
+          "adjusted_signed": 0.5550633781914005,
+          "normalized_clipped": 0.5550633781914005
+        }
+      },
+      "report_sha256": "dee8c576b8e00c5fc52185b9244e97a106ee506f988fee81c5807a01c9f4da95"
+    },
+    {
+      "model": "ibm-granite/granite-3.3-8b-instruct",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 58.24,
+      "exact_recomputed_ba": 58.23619498205591,
+      "adjusted_balanced_accuracy_points": 41.185798483794414,
+      "normalized_0_100_points": 41.185798483794414,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.511987295630027,
+          "adjusted_signed": 0.49076935196176724,
+          "normalized_clipped": 0.49076935196176724
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.41259054973340686,
+          "adjusted_signed": 0.11888582460011031,
+          "normalized_clipped": 0.11888582460011031
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.7922268907563026,
+          "adjusted_signed": 0.5844537815126052,
+          "normalized_clipped": 0.5844537815126052
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5350164945971378,
+          "adjusted_signed": 0.4833516606634865,
+          "normalized_clipped": 0.4833516606634865
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.5725004222963886,
+          "adjusted_signed": 0.35875063344458297,
+          "normalized_clipped": 0.35875063344458297
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6516444209893646,
+          "adjusted_signed": 0.3032888419787292,
+          "normalized_clipped": 0.3032888419787292
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6005675747412869,
+          "adjusted_signed": 0.5435057997043279,
+          "normalized_clipped": 0.5435057997043279
+        }
+      },
+      "report_sha256": "bd02f35731f46e9e6f1ff71a376a9abea94c091cc2b4237955969a39202ed7da"
+    },
+    {
+      "model": "Qwen/Qwen3-8B",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 58.209999999999994,
+      "exact_recomputed_ba": 58.20641155107208,
+      "adjusted_balanced_accuracy_points": 41.34741303503967,
+      "normalized_0_100_points": 41.34741303503967,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5470242926304356,
+          "adjusted_signed": 0.5273296966578459,
+          "normalized_clipped": 0.5273296966578459
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3544033829748115,
+          "adjusted_signed": 0.03160507446221727,
+          "normalized_clipped": 0.03160507446221727
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8698879551820728,
+          "adjusted_signed": 0.7397759103641457,
+          "normalized_clipped": 0.7397759103641457
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5295814358442852,
+          "adjusted_signed": 0.4773127064936502,
+          "normalized_clipped": 0.4773127064936502
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.5284172519640817,
+          "adjusted_signed": 0.2926258779461226,
+          "normalized_clipped": 0.2926258779461226
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6364352676444504,
+          "adjusted_signed": 0.2728705352889007,
+          "normalized_clipped": 0.2728705352889007
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.6086992223349079,
+          "adjusted_signed": 0.5527991112398948,
+          "normalized_clipped": 0.5527991112398948
+        }
+      },
+      "report_sha256": "729c57eb22ce6c9250b064ec2bef174feb93d42091d040f4192116535f12dae9"
+    },
+    {
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 56.64,
+      "exact_recomputed_ba": 56.6371504233017,
+      "adjusted_balanced_accuracy_points": 39.08470749408401,
+      "normalized_0_100_points": 39.08470749408401,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.5322023575763746,
+          "adjusted_signed": 0.5118633296449125,
+          "normalized_clipped": 0.5118633296449125
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.37092112520683945,
+          "adjusted_signed": 0.0563816878102592,
+          "normalized_clipped": 0.0563816878102592
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.8445378151260504,
+          "adjusted_signed": 0.6890756302521008,
+          "normalized_clipped": 0.6890756302521008
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.487826734034804,
+          "adjusted_signed": 0.4309185933720044,
+          "normalized_clipped": 0.4309185933720044
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.5621600783050476,
+          "adjusted_signed": 0.3432401174575713,
+          "normalized_clipped": 0.3432401174575713
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.5992553012145334,
+          "adjusted_signed": 0.19851060242906682,
+          "normalized_clipped": 0.19851060242906682
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.5676971181674696,
+          "adjusted_signed": 0.5059395636199653,
+          "normalized_clipped": 0.5059395636199653
+        }
+      },
+      "report_sha256": "629ef724dac3503438c5ce71761c3dc36f07ab767c9781f7e34b0dbf5e7e2dce"
+    },
+    {
+      "model": "jaredpalmer/kev-0.8b",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 50.83,
+      "exact_recomputed_ba": 50.82836944706206,
+      "adjusted_balanced_accuracy_points": 28.44537547021456,
+      "normalized_0_100_points": 28.44537547021456,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.4778053706823022,
+          "adjusted_signed": 0.4551012563641414,
+          "normalized_clipped": 0.4551012563641414
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3823202794631366,
+          "adjusted_signed": 0.07348041919470495,
+          "normalized_clipped": 0.07348041919470495
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.5984593837535014,
+          "adjusted_signed": 0.19691876750700277,
+          "normalized_clipped": 0.19691876750700277
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.5002810445096996,
+          "adjusted_signed": 0.44475671612188844,
+          "normalized_clipped": 0.44475671612188844
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.4616373991061304,
+          "adjusted_signed": 0.19245609865919558,
+          "normalized_clipped": 0.19245609865919558
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.549897017540002,
+          "adjusted_signed": 0.09979403508000395,
+          "normalized_clipped": 0.09979403508000395
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.587585366239572,
+          "adjusted_signed": 0.5286689899880823,
+          "normalized_clipped": 0.5286689899880823
+        }
+      },
+      "report_sha256": "82762648d1c04c9cbb5439f0d5034852d7ab55940d4b22e9ac78a0f75ce93b93"
+    },
+    {
+      "model": "microsoft/Phi-4-mini-instruct",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 49.36,
+      "exact_recomputed_ba": 49.36187660018644,
+      "adjusted_balanced_accuracy_points": 28.36102314836027,
+      "normalized_0_100_points": 28.36102314836027,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.4604270790740947,
+          "adjusted_signed": 0.43696738685992487,
+          "normalized_clipped": 0.43696738685992487
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3432984004412576,
+          "adjusted_signed": 0.01494760066188641,
+          "normalized_clipped": 0.01494760066188641
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.7689775910364146,
+          "adjusted_signed": 0.5379551820728292,
+          "normalized_clipped": 0.5379551820728292
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.3758176827188637,
+          "adjusted_signed": 0.30646409190984847,
+          "normalized_clipped": 0.30646409190984847
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.4188519159883027,
+          "adjusted_signed": 0.12827787398245402,
+          "normalized_clipped": 0.12827787398245402
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.536824475375831,
+          "adjusted_signed": 0.073648950751662,
+          "normalized_clipped": 0.073648950751662
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.551134217378287,
+          "adjusted_signed": 0.48701053414661377,
+          "normalized_clipped": 0.48701053414661377
+        }
+      },
+      "report_sha256": "775da6224a4a11cc1c7a342e8bc98f199beebe1c18c42ae3683daff808ace656"
+    },
+    {
+      "model": "HuggingFaceTB/SmolLM3-3B",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 48.8,
+      "exact_recomputed_ba": 48.80122774520256,
+      "adjusted_balanced_accuracy_points": 25.607047155299277,
+      "normalized_0_100_points": 25.607047155299277,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.4821540499438248,
+          "adjusted_signed": 0.45963900863703455,
+          "normalized_clipped": 0.45963900863703455
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3522559293987866,
+          "adjusted_signed": 0.028383894098179898,
+          "normalized_clipped": 0.028383894098179898
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.5915966386554622,
+          "adjusted_signed": 0.18319327731092439,
+          "normalized_clipped": 0.18319327731092439
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.4509946253073309,
+          "adjusted_signed": 0.3899940281192566,
+          "normalized_clipped": 0.3899940281192566
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.4119778318604066,
+          "adjusted_signed": 0.11796674779060991,
+          "normalized_clipped": 0.11796674779060991
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.5460599130696103,
+          "adjusted_signed": 0.09211982613922065,
+          "normalized_clipped": 0.09211982613922065
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.5810469539287579,
+          "adjusted_signed": 0.5211965187757234,
+          "normalized_clipped": 0.5211965187757234
+        }
+      },
+      "report_sha256": "642deddcc0698426e00c87e321457a8697a12ccc0a456c5b63548ecc2ebe349a"
+    },
+    {
+      "model": "convaiinnovations/laya",
+      "tuned_on_benchmark_tasks": false,
+      "published_original_score": 39.18,
+      "exact_recomputed_ba": 39.18198166591805,
+      "adjusted_balanced_accuracy_points": 16.248214439896614,
+      "normalized_0_100_points": 16.248214439896614,
+      "tasks": {
+        "camara_tema": {
+          "classes": 24,
+          "chance": 0.041666666666666664,
+          "balanced_accuracy": 0.23507205967620304,
+          "adjusted_signed": 0.20181432314038578,
+          "normalized_clipped": 0.20181432314038578
+        },
+        "factck_veracidade": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.3419378562235705,
+          "adjusted_signed": 0.012906784335355746,
+          "normalized_clipped": 0.012906784335355746
+        },
+        "faquad_resposta": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.6565126050420168,
+          "adjusted_signed": 0.3130252100840336,
+          "normalized_clipped": 0.3130252100840336
+        },
+        "juristcu_area": {
+          "classes": 10,
+          "chance": 0.1,
+          "balanced_accuracy": 0.1753107788786368,
+          "adjusted_signed": 0.08367864319848532,
+          "normalized_clipped": 0.08367864319848532
+        },
+        "olid_alvo": {
+          "classes": 3,
+          "chance": 0.3333333333333333,
+          "balanced_accuracy": 0.44724832211154647,
+          "adjusted_signed": 0.1708724831673197,
+          "normalized_clipped": 0.1708724831673197
+        },
+        "olid_ofensivo": {
+          "classes": 2,
+          "chance": 0.5,
+          "balanced_accuracy": 0.565381035101993,
+          "adjusted_signed": 0.130762070203986,
+          "normalized_clipped": 0.130762070203986
+        },
+        "scielo_area": {
+          "classes": 8,
+          "chance": 0.125,
+          "balanced_accuracy": 0.3212760595802971,
+          "adjusted_signed": 0.22431549666319667,
+          "normalized_clipped": 0.22431549666319667
+        }
+      },
+      "report_sha256": "d303e0b19a4c80e26dacadbbb0aaeb0a4d757efef1359dd27c3817afbbe3e70d"
+    }
+  ]
+}

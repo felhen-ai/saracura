@@ -35,6 +35,12 @@ git clone https://github.com/felhen-ai/saracura.git
 cd saracura
 ```
 
+## Scoring V2 / Pontuação V2
+
+The main ranking now uses a chance-corrected score (0–100), computed from the existing per-item predictions. The evaluator and submission JSON remain unchanged: submit the same validated full report. No rerun is required. Original balanced accuracy and its original confidence intervals remain available. See [the formula and reproducible conversion](scoring-v2.md).
+
+O ranking principal usa a nota corrigida pelo acaso (0–100), calculada a partir das predições já registradas. O avaliador e o JSON de submissão permanecem iguais: envie o relatório completo validado. Não é necessário executar o modelo novamente. A acurácia balanceada e seus intervalos originais continuam disponíveis. Veja [a fórmula e a conversão reproduzível](scoring-v2.md).
+
 ## English
 
 For a chat/instruct LLM, start with the [local bridge](#chat-llms-through-the-local-bridge), then run the smoke, full evaluation and validation below. If your model already serves System One, start at step 1.
