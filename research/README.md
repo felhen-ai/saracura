@@ -116,3 +116,5 @@ loads the published checkpoint back and runs a prediction.
 - Teacher agreement is reported as agreement, never as accuracy.
 - Any checkpoint evaluated with a context different from its training context gets worse numbers; pass the same
   `max_len` and `head_max_len`.
+
+Pontuação do ranking: veja [Scoring V2](scoring-v2.md). Os relatórios do avaliador permanecem no protocolo original; a nota corrigida pelo acaso é derivada das predições sem nova execução do modelo.
