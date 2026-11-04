@@ -1,12 +1,12 @@
 name: Benchmark submission
-description: Submit a model result for manual review on the PT-BR typed-decisions benchmark
+description: Submit a model result for maintainer review on the PT-BR typed-decisions benchmark
 title: "Benchmark submission: <model>"
 labels: ["evaluation"]
 body:
   - type: markdown
     attributes:
       value: |
-        Follow the [evaluation guide](https://github.com/felhen-ai/saracura/blob/main/research/evaluation-guide.md). Maintainers review every submission by hand.
+        Follow the [evaluation guide](https://github.com/felhen-ai/saracura/blob/main/research/evaluation-guide.md). Submissions are reviewed before listing. V3 is the current protocol; V1/V2 results remain historical.
         Do not paste credentials, private prompts, private text or server addresses.
   - type: input
     id: model
@@ -23,13 +23,6 @@ body:
       description: Serving software and version, hardware, quantization, context settings, subfolder.
     validations:
       required: true
-  - type: input
-    id: dataset
-    attributes:
-      label: Dataset commit
-      description: The `revision` value in your report (40 hex).
-    validations:
-      required: true
   - type: textarea
     id: task-training
     attributes:
@@ -41,8 +34,8 @@ body:
   - type: textarea
     id: validation
     attributes:
-      label: Output of `validate_submission.py`
-      description: Paste the final lines (VALID or INVALID, plus warnings).
+      label: Validation output
+      description: "V3: paste the output of benchmark_v3.py validate. V1/V2: paste validate_submission.py output, including warnings."
       render: text
     validations:
       required: true
@@ -50,7 +43,7 @@ body:
     id: report
     attributes:
       label: Report
-      description: Attach the report JSON from `ptbr_bench.py`, or link a public copy. Mean balanced accuracy and 95% interval as printed.
+      description: "V3: attach the combined JSON, both replacement task reports and the original validated report, or public links. Dataset identities and scores are read from those files. V1/V2: attach the original ptbr_bench.py report."
     validations:
       required: true
   - type: checkboxes
@@ -58,7 +51,7 @@ body:
     attributes:
       label: Confirmation
       options:
-        - label: The model is public and was not tuned on the private tracks.
+        - label: The submitted checkpoint is publicly accessible.
           required: true
-        - label: The report is a full run, contains no private text, credentials, hostnames or paths.
+        - label: The submitted result is complete and includes no private text, credentials, private server addresses or local filesystem paths.
           required: true

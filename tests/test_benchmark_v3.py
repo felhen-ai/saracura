@@ -124,6 +124,8 @@ def test_fake_loopback_http_uses_shared_wire_and_strict_prediction() -> None:
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    binding = benchmark_v3._server_binding(f"http://127.0.0.1:{server.server_port}", None, {})
+    assert "endpoint" not in binding
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

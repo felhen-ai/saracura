@@ -39,7 +39,7 @@ cd saracura
 
 V3 offers all 32 official Câmara topics and accepts any topic assigned to a proposal in the frozen official snapshot. Legal evaluation uses the complete source text for all 893 cases. A complete index requires all seven tasks with no failed or truncated requests. V1/V2 reports remain available as historical results; the Laya CPU example below reproduces that earlier workflow and does not establish full-text V3 eligibility.
 
-The current migration workflow starts with a full, validated V1/V2 report from the commands below. It reuses only the five unchanged tasks, then replaces Câmara and the legal task with new evaluations. This also produces a historical comparison for a new model; the old versions of those two tasks do not enter its V3 score.
+The current migration workflow starts with a full, validated V1/V2 report from the commands below. If the exact checkpoint revision already has a published validated report, reuse it. It reuses only the five unchanged tasks, then replaces Câmara and the legal task with new evaluations. This also produces a historical comparison for a new model; the old versions of those two tasks do not enter its V3 score.
 
 Download the V3 release files. The release tag identifies the snapshot; the evaluator checks the data and source-manifest hashes before scoring.
 
@@ -269,6 +269,12 @@ uv run --no-project --python 3.12 research/validate_submission.py ./llm-full-con
 Keep a sidecar next to the report that links the report SHA256, the evidence SHA256 and the source commits, with the actual start arguments and private values redacted. Its readable metadata must use `ptbr-llm-bridge-constrained-letter` or `ptbr-llm-bridge-strict-generation` exactly, and the report name must include the same mode. Strict full runs are separate rows; native Q4 variants are separate rows too. Capture health before and after a full run: any nonzero failure counter means the full run is failed and unranked. Numbers from the bridge follow this protocol only; they are not mixed with `lm-evaluation-harness` numbers.
 
 ## Português do Brasil
+
+### V3: percurso atual
+
+A V3 oferece os 32 temas oficiais da Câmara e aceita qualquer tema atribuído à proposição no snapshot oficial. A tarefa jurídica usa os textos inteiros. Para avaliar e submeter seu modelo, siga os [comandos da V3](#benchmark-v3-official-topics-and-full-legal-text): eles reaproveitam cinco tarefas de um relatório V1/V2 validado e substituem Câmara e Jurídico por execuções novas. Se a mesma revisão do seu checkpoint já tem um relatório publicado, ele pode ser reaproveitado. A validação final recalcula a nota; a inclusão depende de revisão dos mantenedores.
+
+Os exemplos abaixo preservam o percurso histórico V1/V2. A receita leve do Laya verifica esse percurso antigo; sua configuração não comporta todos os textos integrais da V3. Um resultado parcial ou com falhas fica preservado para diagnóstico e não recebe índice completo V3. Não são necessários dados privados nem rotulagem manual.
 
 Para um LLM de chat/instruções, comece pela [ponte local](#llms-de-chat-pela-ponte-local), depois faça o teste rápido, a avaliação completa e a validação abaixo. Se seu modelo já atende System One, comece no passo 1.
 

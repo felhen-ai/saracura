@@ -199,13 +199,13 @@ def _server_binding(
 ) -> dict[str, Any]:
     base = diagnostic.loopback_url(base_url)
     if evidence_path is None:
-        return {"binding": "self-reported", "endpoint": base}
+        return {"binding": "self-reported"}
     try:
         evidence = diagnostic.load_server_evidence(evidence_path, dict(checkpoint))
         diagnostic.preflight(base, evidence)
     except (OSError, ValueError) as error:
         raise ReportError(f"strict server evidence/live binding failed: {error}") from error
-    return {"binding": "strict-live", "endpoint": base, "evidence_sha256": _sha(evidence)}
+    return {"binding": "strict-live", "evidence_sha256": _sha(evidence)}
 
 
 def _score_task(
