@@ -724,13 +724,14 @@ def combine(args: argparse.Namespace) -> int:
         "scoring_version": protocol["scoring_version"],
         "checkpoint": new_checkpoint,
         "protocol": protocol,
-        "source_digests": {"camara_tema": camara_digest, **hashes},
+        "source_digests": {**hashes, "camara_tema": camara_digest},
+        "legacy_source_digests": hashes,
         "tasks": tasks,
         "normalized_0_100_points": sum(value["normalized_0_100_points"] for value in tasks.values())
         / 7,
         "adjusted_signed_points": sum(value["adjusted_signed_points"] for value in tasks.values())
         / 7,
-        "inference_claim": "none; reused task evidence is explicitly provenance-labeled",
+        "inference_claim": "new Câmara and legal task runs; five unchanged task runs reused as labeled",
     }
     _exclusive(args.output, output)
     return 0

@@ -485,6 +485,8 @@ def test_combine_uses_actual_equal_seven_task_mean(
         == 0
     )
     combined = json.loads(output.read_text(encoding="utf-8"))
+    assert combined["source_digests"]["camara_tema"] == "c" * 64
+    assert combined["legacy_source_digests"]["camara_tema"] == hashes["camara_tema"]
     points = [value["normalized_0_100_points"] for value in combined["tasks"].values()]
     assert combined["normalized_0_100_points"] == sum(points) / 7
     weighted_by_rows = sum(
