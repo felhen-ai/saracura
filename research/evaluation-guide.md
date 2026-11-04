@@ -9,7 +9,7 @@ status: current
 canonical: research/evaluation-guide.md
 globalRef: qmd://saracura/research/evaluation-guide.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-31
+lastReviewedAt: 2026-11-03
 sourceRefs:
   - https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench
   - https://github.com/NandhaKishorM/laya
@@ -35,11 +35,57 @@ git clone https://github.com/felhen-ai/saracura.git
 cd saracura
 ```
 
+## Benchmark V3: official topics and full legal text
+
+V3 offers all 32 official Câmara topics and accepts any topic assigned to a proposal in the frozen official snapshot. Legal evaluation uses the complete source text for all 893 cases. A complete index requires all seven tasks with no failed or truncated requests. V1/V2 reports remain available as historical results; the Laya CPU example below reproduces that earlier workflow and does not establish full-text V3 eligibility.
+
+The current migration workflow starts with a full, validated V1/V2 report from the commands below. If the exact checkpoint revision already has a published validated report, reuse it. It reuses only the five unchanged tasks, then replaces Câmara and the legal task with new evaluations. This also produces a historical comparison for a new model; the old versions of those two tasks do not enter its V3 score.
+
+Download the V3 release files. The release tag identifies the snapshot; the evaluator checks the data and source-manifest hashes before scoring.
+
+```bash
+V3_URL="https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench/resolve/v3-2026-11-03/protocol-v3"
+mkdir -p benchmark-v3/camara
+for filename in camara_tema_v3.test.jsonl source-manifest.json source-audit.json; do
+  curl --fail --location "$V3_URL/camara/$filename" --output "benchmark-v3/camara/$filename"
+done
+curl --fail --location "$V3_URL/protocol.json" --output benchmark-v3/protocol.json
+```
+
+Keep the same checkpoint revision and declare the settings used for each task. A native System One server can serve both tasks on the same loopback endpoint if it supports 32 choices and the full legal inputs. For chat LLMs, use `llm_bridge_v3.py` for Câmara's 32 identifiers and the original `llm_bridge.py` for the legal task's ten choices. On CUDA, `llm_bridge_cuda.py` uses SDPA attention for full-text evaluation while preserving the original prompt and constrained-letter readout. Use the original bridge flags, pinned local weights, `--device cuda --context 32768 --dtype bfloat16 --readout constrained-letter`, and the model's declared chat-template settings. Keep the bridge’s `/health` evidence and the server configuration with your submission so the runtime can be checked. The CUDA launcher does not replace the historical bridge.
+
+The example variables below describe your server and checkpoint. `MODEL_BASE` is the checkpoint's base model, or its own ID for a standalone checkpoint. `LEGACY_CACHE` is populated by the full V1/V2 run. Choose a fresh journal and output for every attempt; files are never overwritten.
+
+```bash
+MODEL_ID="your-org/your-model"
+MODEL_REV="<40-hex checkpoint commit>"
+MODEL_BASE="$MODEL_ID"
+MODEL_ALIAS="$MODEL_ID"
+BASE_URL="http://127.0.0.1:18021"
+LEGACY_CACHE="$HOME/.cache/ptbr-typed-decisions-bench/00f5d6dcc6679751723289889b8b0b28b71cbcb9"
+
+# Serve the Câmara-compatible configuration first.
+uv run --no-project --python 3.12 research/benchmark_v3.py run-task   --task camara_tema --data benchmark-v3/camara --base-url "$BASE_URL"   --model "$MODEL_ALIAS" --checkpoint-id "$MODEL_ID"   --checkpoint-revision "$MODEL_REV" --checkpoint-base "$MODEL_BASE"   --journal camara-v3.jsonl --output camara-v3.json
+
+# Serve the full-text configuration, then evaluate every legal case.
+uv run --no-project --python 3.12 research/benchmark_v3.py run-task   --task juristcu_area --data "$LEGACY_CACHE" --base-url "$BASE_URL"   --legacy-revision 00f5d6dcc6679751723289889b8b0b28b71cbcb9   --model "$MODEL_ALIAS" --checkpoint-id "$MODEL_ID"   --checkpoint-revision "$MODEL_REV" --checkpoint-base "$MODEL_BASE"   --journal legal-v3.jsonl --output legal-v3.json
+
+uv run --no-project --python 3.12 research/benchmark_v3.py combine   --legacy-report my-model-v2.json --legacy-cache "$LEGACY_CACHE"   --camara-dir benchmark-v3/camara --camara-report camara-v3.json   --legal-report legal-v3.json --protocol benchmark-v3/protocol.json   --output my-model-v3.json
+
+uv run --no-project --python 3.12 research/benchmark_v3.py validate   --report my-model-v3.json --legacy-report my-model-v2.json   --legacy-cache "$LEGACY_CACHE" --camara-dir benchmark-v3/camara   --camara-report camara-v3.json --legal-report legal-v3.json   --protocol benchmark-v3/protocol.json
+```
+
+For a short setup check, add `--limit 2` and different output names to `run-task`. That partial report cannot be combined or submitted as a complete evaluation. If a request fails, fix the cause and start a new attempt; preserve the partial journal. Do not shorten, summarize or split a legal text to make it fit. A model that cannot process the complete inputs receives no complete V3 index in that configuration, rather than a score assembled from missing cases.
+
+Submit the combined report, both replacement task reports, the original validated report, validator output, checkpoint revision and runtime settings through the participation channels below. Declare task-specific training as **yes, no or unknown**, with a source. Without optional strict server evidence, a report is labeled self-reported. Validation checks data, format and score consistency; independent reproduction is separate. Maintainer review is required before a result enters the ranking. No private data, manual labels or paid evaluation service are required by the benchmark.
+
+The [V3 protocol](v3_spec.md) explains the valid-topic score, chance baseline, source snapshots and the full-text diagnostic. V3 scores and V2 scores use different Câmara inputs and acceptance rules; they are not interchangeable. Original confidence intervals do not transfer to V3.
+
 ## Scoring V2 / Pontuação V2
 
-The main ranking now uses a chance-corrected score (0–100), computed from the existing per-item predictions. The evaluator and submission JSON remain unchanged: submit the same validated full report. No rerun is required. Original balanced accuracy and its original confidence intervals remain available. See [the formula and reproducible conversion](scoring-v2.md).
+The historical V2 ranking uses a chance-corrected score (0–100), computed from the existing per-item predictions. The evaluator and submission JSON remain unchanged: submit the same validated full report. No rerun is required. Original balanced accuracy and its original confidence intervals remain available. See [the formula and reproducible conversion](scoring-v2.md).
 
-O ranking principal usa a nota corrigida pelo acaso (0–100), calculada a partir das predições já registradas. O avaliador e o JSON de submissão permanecem iguais: envie o relatório completo validado. Não é necessário executar o modelo novamente. A acurácia balanceada e seus intervalos originais continuam disponíveis. Veja [a fórmula e a conversão reproduzível](scoring-v2.md).
+O ranking histórico V2 usa a nota corrigida pelo acaso (0–100), calculada a partir das predições já registradas. O avaliador e o JSON de submissão permanecem iguais: envie o relatório completo validado. Não é necessário executar o modelo novamente. A acurácia balanceada e seus intervalos originais continuam disponíveis. Veja [a fórmula e a conversão reproduzível](scoring-v2.md).
 
 ## English
 
@@ -223,6 +269,12 @@ uv run --no-project --python 3.12 research/validate_submission.py ./llm-full-con
 Keep a sidecar next to the report that links the report SHA256, the evidence SHA256 and the source commits, with the actual start arguments and private values redacted. Its readable metadata must use `ptbr-llm-bridge-constrained-letter` or `ptbr-llm-bridge-strict-generation` exactly, and the report name must include the same mode. Strict full runs are separate rows; native Q4 variants are separate rows too. Capture health before and after a full run: any nonzero failure counter means the full run is failed and unranked. Numbers from the bridge follow this protocol only; they are not mixed with `lm-evaluation-harness` numbers.
 
 ## Português do Brasil
+
+### V3: percurso atual
+
+A V3 oferece os 32 temas oficiais da Câmara e aceita qualquer tema atribuído à proposição no snapshot oficial. A tarefa jurídica usa os textos inteiros. Para avaliar e submeter seu modelo, siga os [comandos da V3](#benchmark-v3-official-topics-and-full-legal-text): eles reaproveitam cinco tarefas de um relatório V1/V2 validado e substituem Câmara e Jurídico por execuções novas. Se a mesma revisão do seu checkpoint já tem um relatório publicado, ele pode ser reaproveitado. A validação final recalcula a nota; a inclusão depende de revisão dos mantenedores.
+
+Os exemplos abaixo preservam o percurso histórico V1/V2. A receita leve do Laya verifica esse percurso antigo; sua configuração não comporta todos os textos integrais da V3. Um resultado parcial ou com falhas fica preservado para diagnóstico e não recebe índice completo V3. Não são necessários dados privados nem rotulagem manual.
 
 Para um LLM de chat/instruções, comece pela [ponte local](#llms-de-chat-pela-ponte-local), depois faça o teste rápido, a avaliação completa e a validação abaixo. Se seu modelo já atende System One, comece no passo 1.
 
