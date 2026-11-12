@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,21 @@ def item(mod: Any, number: int = 0, *, task: str = "factck_veracidade", gold: st
         "a" * 64,
         payload,
         mod._sha(payload),
+        "b" * 64,
+    )
+
+
+def noul_item(mod: Any, number: int = 0) -> Any:
+    return mod.PlanItem(
+        f"factck_veracidade:{number}",
+        "factck_veracidade",
+        number,
+        "texto",
+        {"type": "noul", "instructions": "instrução", "criteria": {}},
+        False,
+        "a" * 64,
+        b"{}",
+        mod._sha(b"{}"),
         "b" * 64,
     )
 
@@ -713,6 +729,57 @@ def test_import_seed_is_fifo_compatible_only_and_reusable(mod: Any) -> None:
     seed["records"][0]["prediction"] = "bad"
     with pytest.raises(mod.DiagnosticError):
         mod._seed_records(plan, seed)
+
+
+def test_import_seed_rejects_boolean_choice_position(mod: Any) -> None:
+    plan = [item(mod)]
+    report = {
+        "revision": "a" * 40,
+        "run": {"mode": "full", "partial": False},
+        "timing": {
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "finished_at": "2026-01-01T01:00:00+00:00",
+        },
+        "dataset_files": {"factck_veracidade": {"sha256": plan[0].source_sha256}},
+        "items": {"factck_veracidade": [["a", "b"]]},
+    }
+    rows = [
+        {
+            "timestamp_utc": "2026-01-01T00:30:00+00:00",
+            "status": "ok",
+            "original_request_sha256": plan[0].source_wire_sha256,
+            "translated_request_sha256": plan[0].provider_payload_sha256,
+            "answer": [{"winner_position": True}],
+        }
+    ]
+    with pytest.raises(mod.DiagnosticError, match="legacy_journal_prediction_mismatch"):
+        mod.import_legacy_seed(plan, report, rows, "a" * 40)
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -0.01, 1.01])
+def test_import_seed_rejects_nonfinite_or_out_of_range_noul(mod: Any, value: float) -> None:
+    plan = [noul_item(mod)]
+    report = {
+        "revision": "a" * 40,
+        "run": {"mode": "full", "partial": False},
+        "timing": {
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "finished_at": "2026-01-01T01:00:00+00:00",
+        },
+        "dataset_files": {"factck_veracidade": {"sha256": plan[0].source_sha256}},
+        "items": {"factck_veracidade": [[False, False]]},
+    }
+    rows = [
+        {
+            "timestamp_utc": "2026-01-01T00:30:00+00:00",
+            "status": "ok",
+            "original_request_sha256": plan[0].source_wire_sha256,
+            "translated_request_sha256": plan[0].provider_payload_sha256,
+            "answer": [{"noul": value}],
+        }
+    ]
+    with pytest.raises(mod.DiagnosticError, match="legacy_journal_prediction_mismatch"):
+        mod.import_legacy_seed(plan, report, rows, "a" * 40)
 
 
 def test_incomplete_report_does_not_score_unattempted_as_wrong(mod: Any) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import sys
@@ -693,13 +694,24 @@ def import_legacy_seed(
             position = answer.get("winner_position")
             keys = list(item.question["criteria"])
             decoded: str | bool | None = (
-                keys[position] if isinstance(position, int) and 0 <= position < len(keys) else None
+                keys[position]
+                if (
+                    isinstance(position, int)
+                    and not isinstance(position, bool)
+                    and 0 <= position < len(keys)
+                )
+                else None
             )
         else:
             value = answer.get("noul")
             decoded = (
                 value >= 0.5
-                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    and 0 <= value <= 1
+                )
                 else None
             )
         if decoded != prediction:
