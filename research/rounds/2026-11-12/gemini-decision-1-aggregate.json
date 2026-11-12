@@ -1,0 +1,125 @@
+{
+  "schema": "ptbr-v3-hosted-comparator-aggregate-v1",
+  "model": "gemini-decision-1",
+  "display_name": "Gemini Decision 1",
+  "provider": "Google",
+  "evaluation_date": "2026-11-12",
+  "serving": "hosted-api",
+  "revision": "unknown",
+  "immutable_checkpoint": false,
+  "aggregate_only": true,
+  "benchmark_specific_finetuning_by_maintainers": false,
+  "upstream_training_exposure": "unknown",
+  "scoring_version": "ptbr-official-topics-v3",
+  "planned": 5196,
+  "answered": 5116,
+  "refused": 80,
+  "operational": 0,
+  "coverage": 0.9846035411855273,
+  "score": 62.458541338514955,
+  "score_without_refusals": 63.61942339151356,
+  "tasks": {
+    "camara_tema": {
+      "planned": 599,
+      "answered": 599,
+      "refused": 0,
+      "correct": 556,
+      "balanced_accuracy": 0.9372919937353549,
+      "chance": 0.09195508644288475,
+      "normalized": 93.09417350084624,
+      "coverage": 1.0,
+      "balanced_accuracy_without_refusals": 0.9372919937353549,
+      "normalized_without_refusals": 93.09417350084624
+    },
+    "factck_veracidade": {
+      "planned": 259,
+      "answered": 257,
+      "refused": 2,
+      "correct": 168,
+      "balanced_accuracy": 0.5222136422136422,
+      "chance": 0.3333333333333333,
+      "normalized": 28.33204633204633,
+      "coverage": 0.9922779922779923,
+      "balanced_accuracy_without_refusals": 0.5250689565443664,
+      "normalized_without_refusals": 28.760343481654953
+    },
+    "faquad_resposta": {
+      "planned": 650,
+      "answered": 650,
+      "refused": 0,
+      "correct": 597,
+      "balanced_accuracy": 0.9169467787114846,
+      "chance": 0.5,
+      "normalized": 83.38935574229691,
+      "coverage": 1.0,
+      "balanced_accuracy_without_refusals": 0.9169467787114846,
+      "normalized_without_refusals": 83.38935574229691
+    },
+    "juristcu_area": {
+      "planned": 893,
+      "answered": 893,
+      "refused": 0,
+      "correct": 598,
+      "balanced_accuracy": 0.6687744023445089,
+      "chance": 0.1,
+      "normalized": 63.19715581605655,
+      "coverage": 1.0,
+      "balanced_accuracy_without_refusals": 0.6687744023445089,
+      "normalized_without_refusals": 63.19715581605655
+    },
+    "olid_alvo": {
+      "planned": 995,
+      "answered": 953,
+      "refused": 42,
+      "correct": 765,
+      "balanced_accuracy": 0.7170722460357936,
+      "chance": 0.3333333333333333,
+      "normalized": 57.56083690536903,
+      "coverage": 0.9577889447236181,
+      "balanced_accuracy_without_refusals": 0.7439098160664456,
+      "normalized_without_refusals": 61.58647240996683
+    },
+    "olid_ofensivo": {
+      "planned": 1000,
+      "answered": 964,
+      "refused": 36,
+      "correct": 654,
+      "balanced_accuracy": 0.7414370634240018,
+      "chance": 0.5,
+      "normalized": 48.287412684800366,
+      "coverage": 0.964,
+      "balanced_accuracy_without_refusals": 0.7597982720079206,
+      "normalized_without_refusals": 51.95965440158412
+    },
+    "scielo_area": {
+      "planned": 800,
+      "answered": 800,
+      "refused": 0,
+      "correct": 558,
+      "balanced_accuracy": 0.679302073396656,
+      "chance": 0.125,
+      "normalized": 63.34880838818926,
+      "coverage": 1.0,
+      "balanced_accuracy_without_refusals": 0.679302073396656,
+      "normalized_without_refusals": 63.34880838818926
+    }
+  },
+  "refusal_sensitivity": {
+    "lower": 62.458541338514955,
+    "upper": 64.04600360067933,
+    "confidence_interval": false,
+    "meaning": "Lower: all refused items wrong. Upper: all refused items correct. Conditional score excludes refusals within each task/class. Extrapolating it assumes comparable accuracy in those strata; refusals may be selective. Sampling uncertainty is separate."
+  },
+  "refusal_policy": "Content refusals count as incorrect in effective score. Operational failures are separate and prevent complete aggregate.",
+  "refusal_reasons": {
+    "prohibited_content": 80
+  },
+  "source_provenance": {
+    "legacy_dataset_revision": "00f5d6dcc6679751723289889b8b0b28b71cbcb9",
+    "public_v3_dataset_revision": "f4028c3712f2eae307bfd9e605746000ce1f1fa3",
+    "compatible_legacy_answers_reused": 116,
+    "new_api_calls": 5080,
+    "mutable_api_alias": true,
+    "item_level_evidence": "Retained privately; no hosted item predictions, probabilities, prompts, raw errors, credentials or private paths are published."
+  }
+}
