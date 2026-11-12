@@ -617,6 +617,13 @@ def _seed_records(plan: Sequence[PlanItem], seed: Mapping[str, Any]) -> list[dic
     return result
 
 
+def _valid_legacy_report_prediction(item: PlanItem, prediction: Any) -> bool:
+    """Accept only the native report prediction type for this frozen item."""
+    if item.question.get("type") == "noul":
+        return isinstance(prediction, bool)
+    return isinstance(prediction, str) and prediction in item.question.get("criteria", {})
+
+
 def import_legacy_seed(
     plan: Sequence[PlanItem],
     report: Mapping[str, Any],
@@ -678,6 +685,8 @@ def import_legacy_seed(
         prediction = pair[1]
         if prediction is None:
             continue
+        if not _valid_legacy_report_prediction(item, prediction):
+            raise DiagnosticError("legacy_report_prediction_invalid")
         candidates = queues[item.source_wire_sha256]
         while (
             candidates
@@ -778,6 +787,7 @@ def run_plan(
     # A resumed hosted-alias attempt must retain its previously declared
     # identity pin.  Unknown remains unknown; it never becomes a revision.
     pacer, pinned = Pacer(clock, sleep), _prior_model_identity(prior)
+    resume_cooldown_pending = bool(prior)
     for item in plan:
         if item.item_id in completed:
             continue
@@ -787,6 +797,11 @@ def run_plan(
             records.append(record)
             completed.add(item.item_id)
             continue
+        if resume_cooldown_pending:
+            # The process-local rolling window is unavailable after a restart.
+            # Wait only if an outbound request remains, never for reused rows.
+            sleep(WINDOW_SECONDS)
+            resume_cooldown_pending = False
         pacer.admit(item.reservation)
         started = clock()
         try:

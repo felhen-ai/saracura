@@ -359,6 +359,7 @@ def test_cli_resume_preserves_identity_without_repeating_completed_call(
         return success(mod, winner=1)
 
     monkeypatch.setattr(mod.gemini_bridge, "https_transport", lambda _key: transport)
+    monkeypatch.setattr(mod, "WINDOW_SECONDS", 0.0)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     assert (
         mod.main(
@@ -419,6 +420,58 @@ def test_cli_resume_empty_manifest_and_completed_attempt_are_safe(
     assert json.loads((tmp_path / "manifest.json").read_text())["run_id"] == run_id
     assert mod.main(arguments) == 0
     assert len(calls) == 1
+
+
+def test_cli_resume_terminal_operational_stops_without_transport_or_mutation(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = [item(mod)]
+    plan_manifest = {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}
+    run_id = "725b4521-590d-4c64-9a66-0dd94aa5566c"
+    manifest = mod._execution_manifest(plan_manifest, run_id) | {
+        "imported_bindings": [],
+        "imported_records": [],
+        "imported_records_sha256": mod._sha([]),
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    terminal = mod._safe_record(
+        plan[0],
+        outcome="operational",
+        prediction=None,
+        usage="unknown",
+        latency_ms=0,
+        identity=None,
+        reason="http_status",
+        run_id=run_id,
+    )
+    journal_path = tmp_path / "journal.jsonl"
+    journal_path.write_bytes(json.dumps(terminal).encode() + b"\n")
+    original = journal_path.read_bytes()
+    monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, plan_manifest))
+    calls: list[bytes] = []
+    monkeypatch.setattr(
+        mod.gemini_bridge,
+        "https_transport",
+        lambda _key: lambda payload, _timeout: calls.append(payload),
+    )
+    assert (
+        mod.main(
+            [
+                "resume",
+                "--legacy-cache",
+                "cache",
+                "--legacy-revision",
+                "revision",
+                "--camara-dir",
+                "camara",
+                "--output",
+                str(tmp_path),
+            ]
+        )
+        == 2
+    )
+    assert calls == []
+    assert journal_path.read_bytes() == original
 
 
 def test_cli_report_validates_actual_terminal_and_answer_evidence(
@@ -565,10 +618,85 @@ def test_pacer_preflight_and_no_repeated_completed_calls(mod: Any, tmp_path: Pat
             journal,
             transport,
             prior=[first],
+            sleep=lambda _delay: None,
         )
     finally:
         journal.close()
     assert len(called) == 1 and len(records) == 2
+
+
+def test_resume_cools_down_before_first_outbound_request_only(mod: Any, tmp_path: Path) -> None:
+    prior_item = item(mod, 0)
+    outbound = item(mod, 1)
+    outbound = mod.PlanItem(
+        outbound.item_id,
+        outbound.task,
+        outbound.index,
+        outbound.text,
+        outbound.question,
+        outbound.gold,
+        outbound.source_wire_sha256,
+        b"x" * (mod.TOKEN_LIMIT - mod.RESERVE_OVERHEAD),
+        mod._sha(b"x" * (mod.TOKEN_LIMIT - mod.RESERVE_OVERHEAD)),
+        outbound.source_sha256,
+    )
+    plan = [prior_item, outbound]
+    prior = [
+        mod._safe_record(
+            prior_item,
+            outcome="answered",
+            prediction="a",
+            usage={"total_input_tokens": mod.TOKEN_LIMIT},
+            latency_ms=0,
+            identity=None,
+        )
+    ]
+    now = [0.0]
+    waits: list[float] = []
+    calls: list[bytes] = []
+
+    def sleep(delay: float) -> None:
+        waits.append(delay)
+        now[0] += delay
+
+    def transport(payload: bytes, _timeout: float) -> Any:
+        calls.append(payload)
+        return success(mod)
+
+    journal = mod.AppendJournal(tmp_path / "journal.jsonl")
+    try:
+        mod.run_plan(plan, journal, transport, prior=prior, clock=lambda: now[0], sleep=sleep)
+    finally:
+        journal.close()
+    assert waits == [mod.WINDOW_SECONDS]
+    assert calls == [outbound.provider_payload]
+
+
+def test_resume_fully_resolved_does_not_cool_down(mod: Any, tmp_path: Path) -> None:
+    plan = [item(mod)]
+    prior = [
+        mod._safe_record(
+            plan[0],
+            outcome="answered",
+            prediction="a",
+            usage="unknown",
+            latency_ms=0,
+            identity=None,
+        )
+    ]
+    waits: list[float] = []
+    journal = mod.AppendJournal(tmp_path / "journal.jsonl")
+    try:
+        mod.run_plan(
+            plan,
+            journal,
+            lambda *_args: pytest.fail("called"),
+            prior=prior,
+            sleep=waits.append,
+        )
+    finally:
+        journal.close()
+    assert waits == []
 
 
 def test_resume_retains_prior_model_identity_pin(mod: Any, tmp_path: Path) -> None:
@@ -591,6 +719,7 @@ def test_resume_retains_prior_model_identity_pin(mod: Any, tmp_path: Path) -> No
                 journal,
                 lambda _payload, _timeout: success(mod, identity="gemini-decision-1@new"),
                 prior=prior,
+                sleep=lambda _delay: None,
             )
     finally:
         journal.close()
@@ -611,7 +740,13 @@ def test_resume_model_identity_accepts_same_and_unknown(mod: Any, tmp_path: Path
     )
     journal = mod.AppendJournal(tmp_path / "same.jsonl")
     try:
-        records = mod.run_plan(plan, journal, lambda _payload, _timeout: success(mod), prior=[same])
+        records = mod.run_plan(
+            plan,
+            journal,
+            lambda _payload, _timeout: success(mod),
+            prior=[same],
+            sleep=lambda _delay: None,
+        )
         assert records[-1]["model_identity"] == "gemini-decision-1@v1"
     finally:
         journal.close()
@@ -631,6 +766,7 @@ def test_resume_model_identity_accepts_same_and_unknown(mod: Any, tmp_path: Path
                 journal,
                 lambda _payload, _timeout: success(mod, identity=None),
                 prior=[unknown],
+                sleep=lambda _delay: None,
             )[-1]["model_identity"]
             == "unknown"
         )
@@ -753,6 +889,34 @@ def test_import_seed_rejects_boolean_choice_position(mod: Any) -> None:
         }
     ]
     with pytest.raises(mod.DiagnosticError, match="legacy_journal_prediction_mismatch"):
+        mod.import_legacy_seed(plan, report, rows, "a" * 40)
+
+
+@pytest.mark.parametrize(("prediction", "noul"), [(1, 1.0), (0, 0.0)])
+def test_import_seed_rejects_integer_noul_report_prediction(
+    mod: Any, prediction: int, noul: float
+) -> None:
+    plan = [noul_item(mod)]
+    report = {
+        "revision": "a" * 40,
+        "run": {"mode": "full", "partial": False},
+        "timing": {
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "finished_at": "2026-01-01T01:00:00+00:00",
+        },
+        "dataset_files": {"factck_veracidade": {"sha256": plan[0].source_sha256}},
+        "items": {"factck_veracidade": [[False, prediction]]},
+    }
+    rows = [
+        {
+            "timestamp_utc": "2026-01-01T00:30:00+00:00",
+            "status": "ok",
+            "original_request_sha256": plan[0].source_wire_sha256,
+            "translated_request_sha256": plan[0].provider_payload_sha256,
+            "answer": [{"noul": noul}],
+        }
+    ]
+    with pytest.raises(mod.DiagnosticError, match="legacy_report_prediction_invalid"):
         mod.import_legacy_seed(plan, report, rows, "a" * 40)
 
 
