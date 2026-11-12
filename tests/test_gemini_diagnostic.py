@@ -106,6 +106,40 @@ def test_refusal_continues_and_is_wrong_in_denominator(mod: Any, tmp_path: Path)
     assert "message" not in (tmp_path / "journal.jsonl").read_text()
 
 
+def test_run_identity_binds_fresh_rows_refusals_and_operational_evidence(
+    mod: Any, tmp_path: Path
+) -> None:
+    run_id = "9b04ec5f-ddcd-43d1-ab7e-237d7ef2b6e5"
+    plan = [item(mod), item(mod, 1, gold="b")]
+    journal = mod.AppendJournal(tmp_path / "refusal.jsonl")
+    try:
+        rows = mod.run_plan(
+            plan,
+            journal,
+            lambda _payload, _timeout: mod.gemini_bridge.TransportResponse(
+                400, b'{"error":{"code":"safety"}}'
+            ),
+            run_id=run_id,
+        )
+    finally:
+        journal.close()
+    assert rows[0]["run_id"] == run_id
+    assert mod.report(plan, rows, run_id=run_id)["run_id"] == run_id
+
+    journal = mod.AppendJournal(tmp_path / "operational.jsonl")
+    try:
+        with pytest.raises(mod.DiagnosticError, match="operational_http"):
+            mod.run_plan(
+                plan,
+                journal,
+                lambda _payload, _timeout: mod.gemini_bridge.TransportResponse(401, b"{}"),
+                run_id=run_id,
+            )
+    finally:
+        journal.close()
+    assert json.loads((tmp_path / "operational.jsonl").read_text())["run_id"] == run_id
+
+
 @pytest.mark.parametrize(
     "reply",
     [
@@ -163,6 +197,191 @@ def test_resume_rejects_duplicate_order_hash_and_refusal_binding(mod: Any) -> No
     mutated = dict(row, provider_payload_sha256="0" * 64)
     with pytest.raises(mod.DiagnosticError):
         mod.validate_resume(plan, manifest, [mutated])
+
+
+def test_execution_identity_resume_rejects_missing_and_mixed_rows(mod: Any) -> None:
+    plan = [item(mod, 0), item(mod, 1)]
+    run_id = "1fcdb369-6e9c-4165-bbb3-4c93f45983ba"
+    manifest = mod._execution_manifest(
+        {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}, run_id
+    )
+    row = mod._safe_record(
+        plan[0],
+        outcome="answered",
+        prediction="a",
+        usage="unknown",
+        latency_ms=0,
+        identity=None,
+        run_id=run_id,
+    )
+    assert mod.validate_resume(plan, manifest, [row], require_run_id=True) == {plan[0].item_id}
+    with pytest.raises(mod.DiagnosticError, match="resume_run_id_mismatch"):
+        mod.validate_resume(plan, manifest, [dict(row, run_id="unknown")], require_run_id=True)
+    with pytest.raises(mod.DiagnosticError, match="manifest_run_id_missing"):
+        mod.validate_resume(
+            plan, {"plan_sha256": manifest["plan_sha256"]}, [row], require_run_id=True
+        )
+
+
+def test_run_plan_retains_prior_identity_and_rebinds_imported_rows(
+    mod: Any, tmp_path: Path
+) -> None:
+    run_id = "9d0d00e6-ee3b-4f99-9953-a7b9f6756166"
+    plan = [item(mod, 0), item(mod, 1)]
+    prior = [
+        mod._safe_record(
+            plan[0],
+            outcome="answered",
+            prediction="a",
+            usage="unknown",
+            latency_ms=0,
+            identity=None,
+            run_id=run_id,
+        )
+    ]
+    reused = [
+        mod._safe_record(
+            plan[1],
+            outcome="answered",
+            prediction="a",
+            usage="unknown",
+            latency_ms=0,
+            identity=None,
+            provenance="legacy-import",
+        )
+        | {"import_provenance": {"timestamp_utc": "2026-01-01T00:00:00+00:00"}}
+    ]
+    journal = mod.AppendJournal(tmp_path / "journal.jsonl")
+    try:
+        rows = mod.run_plan(
+            plan, journal, lambda *_args: pytest.fail("called"), prior=prior, reused=reused
+        )
+    finally:
+        journal.close()
+    assert {row["run_id"] for row in rows} == {run_id}
+    mismatch_journal = mod.AppendJournal(tmp_path / "mismatch.jsonl")
+    with pytest.raises(mod.DiagnosticError, match="prior_run_id_mismatch"):
+        mod.run_plan(
+            plan,
+            mismatch_journal,
+            lambda *_args: success(mod),
+            prior=prior,
+            run_id="53b1a34d-dda9-421d-8d5a-3f61e8724560",
+        )
+    mismatch_journal.close()
+
+
+def test_cli_run_binds_manifest_journal_and_report_identity(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = [item(mod), item(mod, 1, gold="b")]
+    manifest = {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}
+    run_id = "5ce6ed34-52f2-4bd1-b5a6-ae4b3bdc7268"
+    monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, manifest))
+    monkeypatch.setattr(mod.uuid, "uuid4", lambda: mod.uuid.UUID(run_id))
+    monkeypatch.setattr(
+        mod.gemini_bridge, "https_transport", lambda _key: lambda *_args: success(mod)
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    arguments = [
+        "run",
+        "--legacy-cache",
+        "cache",
+        "--legacy-revision",
+        "revision",
+        "--camara-dir",
+        "camara",
+        "--output",
+        str(tmp_path),
+    ]
+    assert mod.main(arguments) == 0
+    assert json.loads((tmp_path / "manifest.json").read_text())["run_id"] == run_id
+    journal_rows = [
+        json.loads(line) for line in (tmp_path / "journal.jsonl").read_text().splitlines()
+    ]
+    assert {row["run_id"] for row in journal_rows} == {run_id}
+    assert json.loads((tmp_path / "report.json").read_text())["run_id"] == run_id
+
+
+def test_cli_resume_preserves_identity_without_repeating_completed_call(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = [item(mod), item(mod, 1, gold="b")]
+    plan_manifest = {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}
+    run_id = "78e3806a-8a3f-4f22-983b-35b5bf9cfe34"
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(mod._execution_manifest(plan_manifest, run_id)), encoding="utf-8"
+    )
+    completed = mod._safe_record(
+        plan[0],
+        outcome="answered",
+        prediction="a",
+        usage="unknown",
+        latency_ms=0,
+        identity=None,
+        run_id=run_id,
+    )
+    (tmp_path / "journal.jsonl").write_text(json.dumps(completed) + "\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, plan_manifest))
+    called: list[bytes] = []
+
+    def transport(payload: bytes, _timeout: float) -> Any:
+        called.append(payload)
+        return success(mod, winner=1)
+
+    monkeypatch.setattr(mod.gemini_bridge, "https_transport", lambda _key: transport)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    assert (
+        mod.main(
+            [
+                "resume",
+                "--legacy-cache",
+                "cache",
+                "--legacy-revision",
+                "revision",
+                "--camara-dir",
+                "camara",
+                "--output",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    rows = [json.loads(line) for line in (tmp_path / "journal.jsonl").read_text().splitlines()]
+    assert len(called) == 1
+    assert {row["run_id"] for row in rows} == {run_id}
+
+
+def test_cli_report_requires_execution_identity_and_rejects_tampering(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = [item(mod)]
+    manifest = {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}
+    monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, manifest))
+    arguments = [
+        "report",
+        "--legacy-cache",
+        "cache",
+        "--legacy-revision",
+        "revision",
+        "--camara-dir",
+        "camara",
+        "--output",
+        str(tmp_path),
+    ]
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "journal.jsonl").write_text("", encoding="utf-8")
+    assert mod.main(arguments) == 2
+
+    run_id = "2e8f0956-929b-4ed9-8fd7-9ebc0e45a450"
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(mod._execution_manifest(manifest, run_id)), encoding="utf-8"
+    )
+    tampered = mod._safe_record(
+        plan[0], outcome="answered", prediction="a", usage="unknown", latency_ms=0, identity=None
+    )
+    (tmp_path / "journal.jsonl").write_text(json.dumps(tampered) + "\n", encoding="utf-8")
+    assert mod.main(arguments) == 2
 
 
 def test_pacer_preflight_and_no_repeated_completed_calls(mod: Any, tmp_path: Path) -> None:

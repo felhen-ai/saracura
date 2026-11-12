@@ -16,6 +16,7 @@ import random
 import sys
 import tempfile
 import time
+import uuid
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -72,6 +73,29 @@ def _sha(value: bytes | Any) -> str:
 
 def _utc() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _valid_run_id(value: Any) -> str | None:
+    """Return a canonical UUID execution identity, or ``None`` when invalid."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError):
+        return None
+    return str(parsed) if str(parsed) == value else None
+
+
+def _require_run_id(value: Any) -> str:
+    run_id = _valid_run_id(value)
+    if run_id is None:
+        raise DiagnosticError("run_id_invalid")
+    return run_id
+
+
+def _execution_manifest(plan_manifest: Mapping[str, Any], run_id: str) -> dict[str, Any]:
+    """Bind the deterministic plan to one immutable execution attempt."""
+    return dict(plan_manifest) | {"run_id": _require_run_id(run_id)}
 
 
 def _exclusive(path: Path, value: Any) -> None:
@@ -321,6 +345,7 @@ def _safe_record(
     reason: str | None = None,
     answers: list[dict[str, Any]] | None = None,
     provenance: str = "new",
+    run_id: str = "unknown",
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
         "timestamp_utc": _utc(),
@@ -339,6 +364,7 @@ def _safe_record(
         "upstream_latency_ms": latency_ms,
         "model_identity": identity or "unknown",
         "provenance": provenance,
+        "run_id": run_id,
     }
     if answers is not None:
         record["answers"] = answers
@@ -373,10 +399,23 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def validate_resume(
-    plan: Sequence[PlanItem], manifest: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+    plan: Sequence[PlanItem],
+    manifest: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    require_run_id: bool = False,
 ) -> set[str]:
     if manifest.get("plan_sha256") != _sha([_plan_row(item) for item in plan]):
         raise DiagnosticError("manifest_plan_mismatch")
+    manifest_run_id = _valid_run_id(manifest.get("run_id"))
+    if require_run_id and manifest_run_id is None:
+        raise DiagnosticError("manifest_run_id_missing")
+    if manifest_run_id is not None:
+        for row in rows:
+            if row.get("run_id") != manifest_run_id:
+                raise DiagnosticError("resume_run_id_mismatch")
+    elif require_run_id:
+        raise DiagnosticError("manifest_run_id_missing")
     completed: set[str] = set()
     for expected, row in zip(plan, rows, strict=False):
         if row.get("id") != expected.item_id or row.get("outcome") not in {"answered", "refusal"}:
@@ -571,8 +610,25 @@ def run_plan(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     timeout: float = gemini_bridge.UPSTREAM_TIMEOUT,
+    run_id: str | None = None,
+    require_prior_run_id: bool = False,
 ) -> list[dict[str, Any]]:
     """Sequentially run unresolved items. Operational failures are journaled then raised."""
+    prior_run_ids = {_valid_run_id(row.get("run_id")) for row in prior}
+    prior_run_ids.discard(None)
+    if len(prior_run_ids) > 1:
+        raise DiagnosticError("prior_run_id_mismatch")
+    prior_run_id = next(iter(prior_run_ids), None)
+    if require_prior_run_id and (
+        prior_run_id is None or any(row.get("run_id") != prior_run_id for row in prior)
+    ):
+        raise DiagnosticError("prior_run_id_missing")
+    if run_id is not None:
+        execution_run_id = _require_run_id(run_id)
+        if prior_run_id is not None and execution_run_id != prior_run_id:
+            raise DiagnosticError("prior_run_id_mismatch")
+    else:
+        execution_run_id = prior_run_id or str(uuid.uuid4())
     completed = {str(row["id"]) for row in prior if row.get("outcome") in {"answered", "refusal"}}
     records = [dict(row) for row in prior]
     reuse_by_id = {str(row["id"]): dict(row) for row in reused}
@@ -583,7 +639,7 @@ def run_plan(
         if item.item_id in completed:
             continue
         if item.item_id in reuse_by_id:
-            record = reuse_by_id[item.item_id]
+            record = reuse_by_id[item.item_id] | {"run_id": execution_run_id}
             journal.append(record)
             records.append(record)
             completed.add(item.item_id)
@@ -603,6 +659,7 @@ def run_plan(
                     latency_ms=int((clock() - started) * 1000),
                     identity=None,
                     reason="transport",
+                    run_id=execution_run_id,
                 )
             )
             raise DiagnosticError("transport") from error
@@ -617,6 +674,7 @@ def run_plan(
                 latency_ms=latency,
                 identity=None,
                 reason=refused,
+                run_id=execution_run_id,
             )
             journal.append(record)
             records.append(record)
@@ -631,6 +689,7 @@ def run_plan(
                     latency_ms=latency,
                     identity=None,
                     reason="http_status",
+                    run_id=execution_run_id,
                 )
             )
             raise DiagnosticError("operational_http")
@@ -663,6 +722,7 @@ def run_plan(
                     latency_ms=latency,
                     identity=None,
                     reason="invalid_response",
+                    run_id=execution_run_id,
                 )
             )
             raise DiagnosticError("invalid_response") from error
@@ -676,6 +736,7 @@ def run_plan(
                     latency_ms=latency,
                     identity=identity,
                     reason="model_drift",
+                    run_id=execution_run_id,
                 )
             )
             raise DiagnosticError("model_drift")
@@ -690,6 +751,7 @@ def run_plan(
             latency_ms=latency,
             identity=identity,
             answers=evidence,
+            run_id=execution_run_id,
         )
         journal.append(record)
         records.append(record)
@@ -725,7 +787,38 @@ def _camara_score(
     }
 
 
-def report(plan: Sequence[PlanItem], records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _time_range(rows: Sequence[Mapping[str, Any]], *, imported: bool) -> dict[str, str | None]:
+    timestamps: list[str] = []
+    for row in rows:
+        if (row.get("provenance") == "legacy-import") != imported:
+            continue
+        source = row.get("import_provenance") if imported else row
+        timestamp = source.get("timestamp_utc") if isinstance(source, dict) else None
+        if isinstance(timestamp, str):
+            timestamps.append(timestamp)
+    return {
+        "started_at": min(timestamps) if timestamps else None,
+        "finished_at": max(timestamps) if timestamps else None,
+    }
+
+
+def _report_run_id(records: Sequence[Mapping[str, Any]], required_run_id: str | None) -> str:
+    if required_run_id is not None:
+        run_id = _require_run_id(required_run_id)
+        if any(row.get("run_id") != run_id for row in records):
+            raise DiagnosticError("report_run_id_mismatch")
+        return run_id
+    run_ids = {_valid_run_id(row.get("run_id")) for row in records}
+    run_ids.discard(None)
+    if len(run_ids) > 1:
+        raise DiagnosticError("report_run_id_mismatch")
+    return next(iter(run_ids), "unknown")
+
+
+def report(
+    plan: Sequence[PlanItem], records: Sequence[Mapping[str, Any]], *, run_id: str | None = None
+) -> dict[str, Any]:
+    execution_run_id = _report_run_id(records, run_id)
     by_id = {
         str(row.get("id")): row for row in records if row.get("outcome") in {"answered", "refusal"}
     }
@@ -791,6 +884,11 @@ def report(plan: Sequence[PlanItem], records: Sequence[Mapping[str, Any]]) -> di
         "schema": "gemini-refusal-diagnostic-report-v1",
         "official_submission_eligible": False,
         "model_revision": "unknown",
+        "run_id": execution_run_id,
+        "time_ranges_utc": {
+            "current_attempt": _time_range(records, imported=False),
+            "imported_evidence": _time_range(records, imported=True),
+        },
         "complete": complete and not operational,
         "tasks": tasks,
         "planned": len(plan),
@@ -844,7 +942,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "report":
-            _exclusive(report_path, report(plan, _read_jsonl(journal_path)))
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise DiagnosticError("manifest_invalid")
+            validate_resume(plan, loaded, [], require_run_id=True)
+            run_id = _require_run_id(loaded.get("run_id"))
+            rows = _read_jsonl(journal_path)
+            if any(row.get("run_id") != run_id for row in rows):
+                raise DiagnosticError("report_run_id_mismatch")
+            _exclusive(report_path, report(plan, rows, run_id=run_id))
             return 0
         if args.command == "import-legacy":
             source_report = json.loads(args.legacy_report.read_text(encoding="utf-8"))
@@ -864,24 +970,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise DiagnosticError("seed_schema_invalid")
             seed_rows = _seed_records(plan, loaded_seed)
         if args.command == "run":
-            _exclusive(manifest_path, manifest)
+            run_id = str(uuid.uuid4())
+            _exclusive(manifest_path, _execution_manifest(manifest, run_id))
             prior = []
             journal = AppendJournal(journal_path)
         else:
             loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise DiagnosticError("manifest_invalid")
             prior = _read_jsonl(journal_path)
-            validate_resume(plan, loaded, prior)
+            validate_resume(plan, loaded, prior, require_run_id=True)
+            run_id = _require_run_id(loaded.get("run_id"))
             journal = AppendJournal(journal_path, resume=True)
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             raise DiagnosticError("GEMINI_API_KEY_required")
         try:
             records = run_plan(
-                plan, journal, gemini_bridge.https_transport(key), prior=prior, reused=seed_rows
+                plan,
+                journal,
+                gemini_bridge.https_transport(key),
+                prior=prior,
+                reused=seed_rows,
+                run_id=run_id,
+                require_prior_run_id=args.command == "resume",
             )
         finally:
             journal.close()
-        _exclusive(report_path, report(plan, records))
+        _exclusive(report_path, report(plan, records, run_id=run_id))
         return 0
     except (DiagnosticError, OSError, json.JSONDecodeError) as error:
         print(f"gemini_diagnostic: {error}", file=sys.stderr)

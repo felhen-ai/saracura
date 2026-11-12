@@ -62,6 +62,8 @@ For an internal refusal diagnostic, use `research/gemini_diagnostic.py` instead 
 
 The runner always requires the same frozen legacy cache, immutable revision and validated Câmara V3 directory. `plan` performs the full quota preflight before any network request. `import-legacy` additionally takes a frozen full-mode legacy report and its sanitized bridge journal and writes a new immutable seed; only exact, compatible answered payloads are reusable. `run --seed SEED --seed-sha256 DIGEST` materializes those rows in the new journal in plan order; `resume` validates the existing manifest and ordered journal prefix before it continues. `report` is intentionally a separate, exclusive write.
 
+Each live execution binds a UUID `run_id` in its immutable manifest, journal rows and report. CLI resume and report require that identity to match; imported evidence retains its source timestamp separately from the current attempt.
+
 In a diagnostic report, `attempted` and `new` count every outbound journal event, including a terminal operational failure; `reused` counts imported legacy evidence that made no new API call. `processed` counts all journal records, while `resolved` counts unique answered or refused plan items.
 
 For Câmara, `balanced_accuracy` and `chance` remain fractions in the diagnostic report's common task schema. The Câmara-specific `macro_valid_topic` and `uniform_random_chance` fields are the corresponding official 0--100 point values; `normalized` is also a point value. These fields remain internal, refusal-inclusive diagnostic evidence rather than submission results.
