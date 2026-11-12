@@ -9,7 +9,7 @@ status: current
 canonical: research/evaluation-guide.md
 globalRef: qmd://saracura/research/evaluation-guide.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-11-03
+lastReviewedAt: 2026-11-12
 sourceRefs:
   - https://huggingface.co/datasets/felhen-ai/ptbr-typed-decisions-bench
   - https://github.com/NandhaKishorM/laya
@@ -40,6 +40,25 @@ cd saracura
 V3 offers all 32 official Câmara topics and accepts any topic assigned to a proposal in the frozen official snapshot. Legal evaluation uses the complete source text for all 893 cases. A complete index requires all seven tasks with no failed or truncated requests. V1/V2 reports remain available as historical results; the Laya CPU example below reproduces that earlier workflow and does not establish full-text V3 eligibility.
 
 The current migration workflow starts with a full, validated V1/V2 report from the commands below. If the exact checkpoint revision already has a published validated report, reuse it. It reuses only the five unchanged tasks, then replaces Câmara and the legal task with new evaluations. This also produces a historical comparison for a new model; the old versions of those two tasks do not enter its V3 score.
+
+### Hosted Gemini Decision 1 comparator
+
+`research/gemini_bridge.py` is an explicit remote research adapter, not a local checkpoint server. It only binds loopback `POST /v1/systemone` and makes a single HTTPS request per admitted item to the fixed Google Decisions endpoint using `GEMINI_API_KEY` from its process environment. It neither downloads weights nor retries, follows redirects, falls back, or exposes provider error text. Keep the key out of shell history, files and Git; inject it from the authorized credential workflow only for the bridge process.
+
+Start every attempt with a new private journal path. The bridge refuses an existing journal, writes one sanitized record per outbound attempt, serializes requests, accepts only one in flight, and latches outbound access after an upstream or journal failure. Raw hosted per-item journals must remain outside public Git. They contain no request text or credential, but still are operational telemetry. Only aggregate results may be considered for commit after applicable provider-terms review.
+
+```bash
+# The credential is injected by the authorized environment; do not paste it here.
+GEMINI_API_KEY="${GEMINI_API_KEY:?inject from the authorized credential workflow}" \
+  uv run --no-project python research/gemini_bridge.py --port 18041 \
+  --journal /private/path/gemini-decision-1-preflight.jsonl --minimum-interval 1
+```
+
+Before a benchmark run, the orchestrator must verify the account's current limits and choose a pacing interval accordingly, then send only synthetic preflight requests covering `noul`, 32 shuffled choice positions, and a full-size legal-equivalent text. Use evaluator `--timeout 120` or greater; bridge upstream timeout is at most 30 seconds and its pacing wait is capped at 60 seconds. A preflight is not a benchmark result and must not be tuned against benchmark answers.
+
+The bridge preserves input and instructions verbatim and never shortens a legal text. For choices it uses fixed-width positional provider IDs so the provider's UTF-8 sort retains the evaluator's shuffled order, then maps the winner and complete probability vector back to the original keys. It rejects malformed responses, non-finite/out-of-range values, missing keys, a probability sum farther than `1e-6` from one, or a winner below the maximum probability (ties are allowed).
+
+For the hosted comparator, declare `--model gemini-decision-1`, checkpoint id/base `gemini-decision-1`, and revision `unknown` consistently in the historical and V3 commands. The bridge health endpoint reports remote serving, unknown/unpinned revision, and absence of strict local-weights evidence; it pins a provider-supplied identity for the process if one is returned and fails closed on drift. The hosted mutable alias is not eligible for an historical immutable-checkpoint submission: run the existing historical validator honestly and retain its expected immutable-revision failure. V3 `combine`/`validate` can still check score consistency without asserting submission eligibility. Never claim a hosted run succeeded until the orchestrator has completed and preserved the relevant evidence.
 
 Download the V3 release files. The release tag identifies the snapshot; the evaluator checks the data and source-manifest hashes before scoring.
 
