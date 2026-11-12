@@ -9,7 +9,7 @@ status: current
 canonical: research/README.md
 globalRef: qmd://saracura/research/README.md
 reviewCadenceDays: 60
-lastReviewedAt: 2026-10-21
+lastReviewedAt: 2026-11-12
 sourceRefs:
   - https://github.com/NandhaKishorM/laya
   - https://github.com/jaredpalmer/kev
@@ -78,6 +78,7 @@ Runtime preprocessing and quantization are explicit configurations: Laya 0.3.20 
 | `native_server_v3.py` | Optional CUDA launcher with upstream native runtimes, full-input preflight and live evidence binding. External native servers do not need this launcher to submit a self-reported result. |
 | `llm_bridge_v3.py` | The separate 32-identifier Câmara bridge; preserves the historical bridge for the other tasks. |
 | `llm_bridge_cuda.py` | CUDA-only SDPA launcher for full legal inputs; records actual attention and launcher/base source hashes without changing the legacy prompt or constrained-letter readout. |
+| `gemini_bridge.py` | Explicit opt-in localhost bridge for the hosted Gemini Decision 1 API. Standard library only; fixed HTTPS endpoint, no retry, fallback, downloads, or local ML runtime. It writes a fresh, sanitized private attempt journal and latches outbound access closed after any failed attempt. See the evaluation guide; it is a remote comparator, not a reproducible checkpoint. |
 | `validate_submission.py` | Checks a `ptbr_bench.py` report before submission: re-downloads the public data at the report's commit, verifies gold labels, counts and predictions, recomputes scores and interval. Read-only. See the [evaluation guide](evaluation-guide.md). |
 | `eval_http.py` | Runs any System One-compatible server (`POST /v1/systemone`) on the benchmark and on the Central Bank FAQ task, same protocol as `bench.py` (shuffled option order, `BENCH_MAX_CHARS=3500`). Accepts `noul` answers as `noul` or `probability`. |
 | `board_pyserve.py` | Minimal `/v1/systemone` wrapper for models that only ship a Python class (Intern-Decision, Jet). |
