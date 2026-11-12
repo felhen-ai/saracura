@@ -271,7 +271,7 @@ def test_run_plan_retains_prior_identity_and_rebinds_imported_rows(
     mismatch_journal.close()
 
 
-def test_cli_run_binds_manifest_journal_and_report_identity(
+def test_cli_plan_run_and_report_bind_distinct_artifacts(
     mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plan = [item(mod), item(mod, 1, gold="b")]
@@ -283,7 +283,7 @@ def test_cli_run_binds_manifest_journal_and_report_identity(
         mod.gemini_bridge, "https_transport", lambda _key: lambda *_args: success(mod)
     )
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    arguments = [
+    run_arguments = [
         "run",
         "--legacy-cache",
         "cache",
@@ -294,12 +294,17 @@ def test_cli_run_binds_manifest_journal_and_report_identity(
         "--output",
         str(tmp_path),
     ]
-    assert mod.main(arguments) == 0
+    plan_arguments = ["plan", *run_arguments[1:]]
+    assert mod.main(plan_arguments) == 0
+    assert (tmp_path / "plan.json").exists()
+    assert mod.main(run_arguments) == 0
     assert json.loads((tmp_path / "manifest.json").read_text())["run_id"] == run_id
     journal_rows = [
         json.loads(line) for line in (tmp_path / "journal.jsonl").read_text().splitlines()
     ]
     assert {row["run_id"] for row in journal_rows} == {run_id}
+    assert not (tmp_path / "report.json").exists()
+    assert mod.main(["report", *run_arguments[1:]]) == 0
     assert json.loads((tmp_path / "report.json").read_text())["run_id"] == run_id
 
 
@@ -320,6 +325,14 @@ def test_cli_resume_preserves_identity_without_repeating_completed_call(
         latency_ms=0,
         identity=None,
         run_id=run_id,
+        answers=[
+            {
+                "type": "choice",
+                "winner_position": 0,
+                "probabilities": [1.0, 0.0],
+                "confidence": 1.0,
+            }
+        ],
     )
     (tmp_path / "journal.jsonl").write_text(json.dumps(completed) + "\n", encoding="utf-8")
     monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, plan_manifest))
@@ -350,6 +363,125 @@ def test_cli_resume_preserves_identity_without_repeating_completed_call(
     rows = [json.loads(line) for line in (tmp_path / "journal.jsonl").read_text().splitlines()]
     assert len(called) == 1
     assert {row["run_id"] for row in rows} == {run_id}
+
+
+def test_cli_resume_empty_manifest_and_completed_attempt_are_safe(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = [item(mod)]
+    plan_manifest = {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}
+    run_id = "4a3ec9ad-4c25-46f5-a1e4-3152dbfbd8ce"
+    manifest = mod._execution_manifest(plan_manifest, run_id)
+    manifest |= {
+        "imported_bindings": [],
+        "imported_records": [],
+        "imported_records_sha256": mod._sha([]),
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "journal.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, plan_manifest))
+    calls: list[bytes] = []
+
+    def transport(payload: bytes, _timeout: float) -> Any:
+        calls.append(payload)
+        return success(mod)
+
+    monkeypatch.setattr(mod.gemini_bridge, "https_transport", lambda _key: transport)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    arguments = [
+        "resume",
+        "--legacy-cache",
+        "cache",
+        "--legacy-revision",
+        "revision",
+        "--camara-dir",
+        "camara",
+        "--output",
+        str(tmp_path),
+    ]
+    assert mod.main(arguments) == 0
+    assert json.loads((tmp_path / "manifest.json").read_text())["run_id"] == run_id
+    assert mod.main(arguments) == 0
+    assert len(calls) == 1
+
+
+def test_cli_report_validates_actual_terminal_and_answer_evidence(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = [item(mod)]
+    plan_manifest = {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}
+    run_id = "2e8f0956-929b-4ed9-8fd7-9ebc0e45a450"
+    manifest = mod._execution_manifest(plan_manifest, run_id)
+    manifest |= {
+        "imported_bindings": [],
+        "imported_records": [],
+        "imported_records_sha256": mod._sha([]),
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    operational = mod._safe_record(
+        plan[0],
+        outcome="operational",
+        prediction=None,
+        usage="unknown",
+        latency_ms=0,
+        identity=None,
+        reason="transport",
+        run_id=run_id,
+    )
+    (tmp_path / "journal.jsonl").write_text(json.dumps(operational) + "\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "build_plan", lambda *_args: (plan, plan_manifest))
+    arguments = [
+        "report",
+        "--legacy-cache",
+        "cache",
+        "--legacy-revision",
+        "revision",
+        "--camara-dir",
+        "camara",
+        "--output",
+        str(tmp_path),
+    ]
+    assert mod.main(arguments) == 0
+    assert json.loads((tmp_path / "report.json").read_text())["complete"] is False
+
+    (tmp_path / "report.json").unlink()
+    answered = mod._safe_record(
+        plan[0],
+        outcome="answered",
+        prediction="b",
+        usage="unknown",
+        latency_ms=0,
+        identity=None,
+        run_id=run_id,
+        answers=[{"type": "choice", "winner_position": 0, "probabilities": [1.0, 0.0]}],
+    )
+    (tmp_path / "journal.jsonl").write_text(json.dumps(answered) + "\n", encoding="utf-8")
+    assert mod.main(arguments) == 2
+
+
+def test_journal_rejects_mutated_imported_prediction_binding(mod: Any) -> None:
+    plan = [item(mod)]
+    run_id = "3320d19b-08d1-4fcb-906e-aee1cd2c3b31"
+    imported = mod._safe_record(
+        plan[0],
+        outcome="answered",
+        prediction="a",
+        usage="unknown",
+        latency_ms=0,
+        identity=None,
+        provenance="legacy-import",
+    ) | {"import_provenance": {"timestamp_utc": "2026-01-01T00:00:00+00:00"}}
+    manifest = mod._execution_manifest(
+        {"plan_sha256": mod._sha([mod._plan_row(value) for value in plan])}, run_id
+    )
+    manifest |= {
+        "imported_bindings": mod._import_bindings([imported]),
+        "imported_records": [imported],
+        "imported_records_sha256": mod._sha([imported]),
+    }
+    mutated = dict(imported, prediction="b", run_id=run_id)
+    with pytest.raises(mod.DiagnosticError, match="journal_import_binding_mismatch"):
+        mod.validate_journal(plan, manifest, [mutated], require_answer_evidence=True)
 
 
 def test_cli_report_requires_execution_identity_and_rejects_tampering(

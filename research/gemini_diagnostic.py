@@ -98,6 +98,42 @@ def _execution_manifest(plan_manifest: Mapping[str, Any], run_id: str) -> dict[s
     return dict(plan_manifest) | {"run_id": _require_run_id(run_id)}
 
 
+def _import_bindings(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return immutable, minimal bindings for imported predictions.
+
+    This is consistency evidence, not a cryptographic defence against a party
+    rewriting every local artifact coherently.  The upstream collector remains
+    the custody boundary for the original response evidence.
+    """
+    result: list[dict[str, Any]] = []
+    for row in records:
+        if not isinstance(row, Mapping):
+            raise DiagnosticError("manifest_import_bindings_invalid")
+        try:
+            result.append(
+                {
+                    "id": row["id"],
+                    "prediction": row["prediction"],
+                    "source_wire_sha256": row["source_wire_sha256"],
+                    "provider_payload_sha256": row["provider_payload_sha256"],
+                }
+            )
+        except KeyError as error:
+            raise DiagnosticError("manifest_import_bindings_invalid") from error
+    return result
+
+
+def _manifest_imported_rows(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    records = manifest.get("imported_records", [])
+    if not isinstance(records, list) or manifest.get(
+        "imported_records_sha256", _sha(records)
+    ) != _sha(records):
+        raise DiagnosticError("manifest_import_bindings_invalid")
+    if _import_bindings(records) != manifest.get("imported_bindings", []):
+        raise DiagnosticError("manifest_import_bindings_invalid")
+    return [dict(record) for record in records]
+
+
 def _exclusive(path: Path, value: Any) -> None:
     """Atomically create a 0600 JSON artifact, never replacing an attempt."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -443,6 +479,99 @@ def validate_resume(
     return completed
 
 
+def _answer_evidence_matches(item: PlanItem, row: Mapping[str, Any]) -> bool:
+    answers = row.get("answers")
+    if not isinstance(answers, list) or len(answers) != 1 or not isinstance(answers[0], dict):
+        return False
+    answer = answers[0]
+    if item.question.get("type") == "choice":
+        position = answer.get("winner_position")
+        keys = list(item.question.get("criteria", {}))
+        return (
+            isinstance(position, int)
+            and not isinstance(position, bool)
+            and (0 <= position < len(keys) and row.get("prediction") == keys[position])
+        )
+    value = answer.get("noul")
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and row.get("prediction") == (value >= 0.5)
+    )
+
+
+def validate_journal(
+    plan: Sequence[PlanItem],
+    manifest: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    require_answer_evidence: bool = False,
+) -> set[str]:
+    """Validate an actual execution journal, including one terminal failure.
+
+    Low-level callers can opt out of answer-evidence checking for historical
+    synthetic collector snapshots.  The CLI never opts out for new answers.
+    """
+    validate_resume(plan, manifest, [], require_run_id=True)
+    run_id = _require_run_id(manifest.get("run_id"))
+    bindings = manifest.get("imported_bindings", [])
+    if not isinstance(bindings, list):
+        raise DiagnosticError("manifest_import_bindings_invalid")
+    binding_by_id: dict[str, Mapping[str, Any]] = {}
+    for binding in bindings:
+        if not isinstance(binding, dict) or not isinstance(binding.get("id"), str):
+            raise DiagnosticError("manifest_import_bindings_invalid")
+        if binding["id"] in binding_by_id:
+            raise DiagnosticError("manifest_import_bindings_invalid")
+        binding_by_id[binding["id"]] = binding
+    _manifest_imported_rows(manifest)
+
+    completed: set[str] = set()
+    terminal_seen = False
+    for position, row in enumerate(rows):
+        if not isinstance(row, Mapping) or position >= len(plan):
+            raise DiagnosticError("journal_extra_or_invalid")
+        expected = plan[position]
+        if (
+            row.get("run_id") != run_id
+            or row.get("id") != expected.item_id
+            or row.get("task") != expected.task
+            or row.get("index") != expected.index
+            or row.get("source_wire_sha256") != expected.source_wire_sha256
+            or row.get("provider_payload_sha256") != expected.provider_payload_sha256
+            or row.get("source_sha256") != expected.source_sha256
+            or expected.item_id in completed
+        ):
+            raise DiagnosticError("journal_order_or_hash_mismatch")
+        outcome = row.get("outcome")
+        if terminal_seen or outcome not in {"answered", "refusal", "operational"}:
+            raise DiagnosticError("journal_outcome_invalid")
+        if outcome == "answered":
+            prediction = row.get("prediction")
+            valid_prediction = prediction in expected.question.get("criteria", {}) or (
+                expected.question.get("type") == "noul" and isinstance(prediction, bool)
+            )
+            if not valid_prediction:
+                raise DiagnosticError("journal_prediction_invalid")
+            if row.get("provenance") == "legacy-import":
+                binding = binding_by_id.get(expected.item_id)
+                if binding is None or any(row.get(key) != value for key, value in binding.items()):
+                    raise DiagnosticError("journal_import_binding_mismatch")
+            elif require_answer_evidence and not _answer_evidence_matches(expected, row):
+                raise DiagnosticError("journal_answer_evidence_mismatch")
+            completed.add(expected.item_id)
+            continue
+        if outcome == "refusal":
+            if row.get("prediction") is not None or row.get("refusal_code") not in REFUSAL_CODES:
+                raise DiagnosticError("journal_refusal_invalid")
+            completed.add(expected.item_id)
+            continue
+        if row.get("prediction") is not None or not isinstance(row.get("refusal_code"), str):
+            raise DiagnosticError("journal_operational_invalid")
+        terminal_seen = True
+    return completed
+
+
 def _seed_records(plan: Sequence[PlanItem], seed: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Validate immutable import evidence and return only compatible answered rows."""
     if seed.get("schema") != "gemini-refusal-diagnostic-seed-v1":
@@ -619,8 +748,10 @@ def run_plan(
     if len(prior_run_ids) > 1:
         raise DiagnosticError("prior_run_id_mismatch")
     prior_run_id = next(iter(prior_run_ids), None)
-    if require_prior_run_id and (
-        prior_run_id is None or any(row.get("run_id") != prior_run_id for row in prior)
+    if (
+        require_prior_run_id
+        and prior
+        and (prior_run_id is None or any(row.get("run_id") != prior_run_id for row in prior))
     ):
         raise DiagnosticError("prior_run_id_missing")
     if run_id is not None:
@@ -907,9 +1038,29 @@ def report(
     }
 
 
-def _paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+def _paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
     root = args.output
-    return root / "manifest.json", root / "journal.jsonl", root / "report.json"
+    return (
+        root / "plan.json",
+        root / "manifest.json",
+        root / "journal.jsonl",
+        root / "report.json",
+    )
+
+
+def _read_object(path: Path, error_code: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise DiagnosticError(error_code) from error
+    if not isinstance(loaded, dict):
+        raise DiagnosticError(error_code)
+    return loaded
+
+
+def _validate_plan_artifact(path: Path, manifest: Mapping[str, Any]) -> None:
+    if path.exists() and _read_object(path, "plan_artifact_invalid") != dict(manifest):
+        raise DiagnosticError("plan_artifact_mismatch")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -934,22 +1085,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         plan, manifest = build_plan(args.legacy_cache, args.legacy_revision, args.camara_dir)
-        manifest_path, journal_path, report_path = _paths(args)
+        plan_path, manifest_path, journal_path, report_path = _paths(args)
         if args.command == "plan":
-            _exclusive(manifest_path, manifest)
+            _exclusive(plan_path, manifest)
             print(
-                json.dumps({"planned": len(plan), "max_reservation": manifest["max_reservation"]})
+                json.dumps(
+                    {
+                        "planned": len(plan),
+                        "max_reservation": manifest.get(
+                            "max_reservation", max(item.reservation for item in plan)
+                        ),
+                    }
+                )
             )
             return 0
         if args.command == "report":
-            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, dict):
-                raise DiagnosticError("manifest_invalid")
-            validate_resume(plan, loaded, [], require_run_id=True)
+            _validate_plan_artifact(plan_path, manifest)
+            loaded = _read_object(manifest_path, "manifest_invalid")
             run_id = _require_run_id(loaded.get("run_id"))
             rows = _read_jsonl(journal_path)
-            if any(row.get("run_id") != run_id for row in rows):
-                raise DiagnosticError("report_run_id_mismatch")
+            validate_journal(plan, loaded, rows, require_answer_evidence=True)
             _exclusive(report_path, report(plan, rows, run_id=run_id))
             return 0
         if args.command == "import-legacy":
@@ -971,22 +1126,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed_rows = _seed_records(plan, loaded_seed)
         if args.command == "run":
             run_id = str(uuid.uuid4())
-            _exclusive(manifest_path, _execution_manifest(manifest, run_id))
+            _validate_plan_artifact(plan_path, manifest)
+            execution_manifest = _execution_manifest(manifest, run_id)
+            execution_manifest["imported_bindings"] = _import_bindings(seed_rows)
+            execution_manifest["imported_records"] = seed_rows
+            execution_manifest["imported_records_sha256"] = _sha(seed_rows)
+            _exclusive(manifest_path, execution_manifest)
             prior = []
             journal = AppendJournal(journal_path)
         else:
-            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, dict):
-                raise DiagnosticError("manifest_invalid")
+            _validate_plan_artifact(plan_path, manifest)
+            loaded = _read_object(manifest_path, "manifest_invalid")
             prior = _read_jsonl(journal_path)
+            validate_journal(plan, loaded, prior, require_answer_evidence=True)
             validate_resume(plan, loaded, prior, require_run_id=True)
             run_id = _require_run_id(loaded.get("run_id"))
+            imported_rows = _manifest_imported_rows(loaded)
+            if seed_rows and _import_bindings(seed_rows) != _import_bindings(imported_rows):
+                raise DiagnosticError("seed_manifest_binding_mismatch")
+            seed_rows = imported_rows
             journal = AppendJournal(journal_path, resume=True)
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             raise DiagnosticError("GEMINI_API_KEY_required")
         try:
-            records = run_plan(
+            run_plan(
                 plan,
                 journal,
                 gemini_bridge.https_transport(key),
@@ -997,7 +1161,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         finally:
             journal.close()
-        _exclusive(report_path, report(plan, records, run_id=run_id))
+        # A report is a separate exclusive artifact.  Validate the bytes just
+        # persisted, rather than trusting in-memory records, before allowing a
+        # later report command to score them.
+        validate_journal(
+            plan,
+            _read_object(manifest_path, "manifest_invalid"),
+            _read_jsonl(journal_path),
+            require_answer_evidence=True,
+        )
         return 0
     except (DiagnosticError, OSError, json.JSONDecodeError) as error:
         print(f"gemini_diagnostic: {error}", file=sys.stderr)
